@@ -1,0 +1,13 @@
+# golangci-lint configuration (v2 schema). Standard set plus misspell.
+# Writes to stdout and stderr are not checked; a CLI cannot do anything useful on failure.
+version: "2"
+
+linters:
+  enable:
+    - misspell
+  settings:
+    errcheck:
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
