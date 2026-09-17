@@ -1,0 +1,206 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+var errDown = errors.New("down")
+
+func TestNextRunAt(t *testing.T) {
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	got := nextRunAt(now, 0, 5)
+	want := time.Date(2026, 9, 16, 0, 5, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Errorf("got %v want %v", got, want)
+	}
+	early := time.Date(2026, 9, 15, 0, 1, 0, 0, time.UTC)
+	if got := nextRunAt(early, 0, 5); !got.Equal(time.Date(2026, 9, 15, 0, 5, 0, 0, time.UTC)) {
+		t.Errorf("got %v", got)
+	}
+}
+
+func TestMuxGamesAndHealth(t *testing.T) {
+	mux := newMux(muxDeps{
+		games:   []string{"magic", "pokemon"},
+		healthy: func(context.Context) error { return nil },
+		gateway: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(299) }),
+	})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/games.json", nil))
+	var games []string
+	if err := json.Unmarshal(rec.Body.Bytes(), &games); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != 200 || len(games) != 2 || games[0] != "magic" {
+		t.Errorf("games: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/games.json", nil))
+	if rec.Code != 405 || rec.Header().Get("Content-Type") != "application/json" {
+		t.Errorf("games post: %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	if rec.Code != 200 {
+		t.Errorf("healthz %d", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/magic/mtgban/retail.json", nil))
+	if rec.Code != 299 {
+		t.Errorf("gateway not reached: %d", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/somewhere", nil))
+	if rec.Code != 404 || rec.Header().Get("Content-Type") != "application/json" {
+		t.Errorf("fallthrough %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+}
+
+func TestHealthzUnhealthy(t *testing.T) {
+	mux := newMux(muxDeps{games: []string{"magic"}, healthy: func(context.Context) error { return errDown }, gateway: http.NotFoundHandler()})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	if rec.Code != 503 {
+		t.Errorf("healthz %d", rec.Code)
+	}
+}
+
+// TestServeWaitsForShutdown covers the drain that keeps cleanup from cutting
+// off in-flight requests when the serve context is cancelled.
+func TestServeWaitsForShutdown(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var handlerDone atomic.Bool
+	srv := &http.Server{
+		ReadHeaderTimeout: 10 * time.Second,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			time.Sleep(300 * time.Millisecond)
+			handlerDone.Store(true)
+			w.WriteHeader(http.StatusOK)
+		}),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	type result struct {
+		code int
+		err  error
+	}
+	got := make(chan result, 1)
+	go func() {
+		resp, err := http.Get("http://" + ln.Addr().String() + "/slow")
+		if err != nil {
+			got <- result{err: err}
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		got <- result{code: resp.StatusCode}
+	}()
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	if err := serveUntilDone(ctx, srv, ln, 5*time.Second); err != nil {
+		t.Fatalf("serveUntilDone: %v", err)
+	}
+	if !handlerDone.Load() {
+		t.Error("serveUntilDone returned before the handler finished")
+	}
+	select {
+	case r := <-got:
+		if r.err != nil {
+			t.Fatalf("request: %v", r.err)
+		}
+		if r.code != http.StatusOK {
+			t.Errorf("request got %d want 200", r.code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("request never completed")
+	}
+}
+
+// TestServeUntilDoneReturnsServeError checks a listen failure is reported and
+// does not park the shutdown goroutine forever.
+func TestServeUntilDoneReturnsServeError(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{ReadHeaderTimeout: 10 * time.Second, Handler: http.NotFoundHandler()}
+	if err := serveUntilDone(context.Background(), srv, ln, 5*time.Second); err == nil {
+		t.Error("want an error from a closed listener")
+	}
+}
+
+func TestMuxRecoversPanic(t *testing.T) {
+	mux := newMux(muxDeps{
+		games:   []string{"magic"},
+		healthy: func(context.Context) error { return nil },
+		gateway: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { panic("boom") }),
+	})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/magic/mtgban/retail.json", nil))
+	if rec.Code != 500 || rec.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("status %d headers %v", rec.Code, rec.Header())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["error"] != "internal error" {
+		t.Errorf("body %v", body)
+	}
+}
+
+func TestMuxPropagatesAbortHandler(t *testing.T) {
+	mux := newMux(muxDeps{
+		games:   []string{"magic"},
+		healthy: func(context.Context) error { return nil },
+		gateway: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { panic(http.ErrAbortHandler) }),
+	})
+	defer func() {
+		if p := recover(); p != http.ErrAbortHandler {
+			t.Errorf("recovered %v, want http.ErrAbortHandler", p)
+		}
+	}()
+	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/v1/magic/mtgban/retail.json", nil))
+	t.Error("the panic did not propagate")
+}
+
+func TestHealthzPingTimeout(t *testing.T) {
+	mux := newMux(muxDeps{
+		games: []string{"magic"},
+		healthy: func(ctx context.Context) error {
+			if _, ok := ctx.Deadline(); !ok {
+				return errors.New("no deadline on the health check")
+			}
+			return nil
+		},
+		gateway: http.NotFoundHandler(),
+	})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	if rec.Code != 200 {
+		t.Errorf("healthz %d %s", rec.Code, rec.Body.String())
+	}
+}
