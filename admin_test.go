@@ -166,7 +166,7 @@ func TestAdminGrants(t *testing.T) {
 	s := &memStore{}
 	admin(t, s, "account", "add", "-email", "ck@example.com")
 	code, out, errb := admin(t, s, "grant", "add", "-email", "ck@example.com", "-games", "magic, pokemon",
-		"-stores", "ck,tcg", "-modes", "buylist,retail", "-until", "2027-01-01", "-note", "annual")
+		"-stores", "CK,TCG", "-modes", "buylist,retail", "-until", "2027-01-01", "-note", "annual")
 	if code != 0 {
 		t.Fatalf("add: %d %q %q", code, out, errb)
 	}

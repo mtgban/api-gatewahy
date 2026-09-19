@@ -11,19 +11,44 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"runtime/debug"
 	"sync"
 	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
+	"github.com/mtgban/api-gatewahy/billing"
 	"github.com/mtgban/api-gatewahy/config"
 	"github.com/mtgban/api-gatewahy/discord"
 	"github.com/mtgban/api-gatewahy/gateway"
+	"github.com/mtgban/mtgban-website/apiproductlist"
 	"github.com/mtgban/mtgban-website/observability"
 )
 
 func init() {
 	commands["serve"] = command{usage: "run the gateway", run: serve}
+}
+
+// stripeDeps is what serve needs when STRIPE_SECRET_KEY is set.
+type stripeDeps struct {
+	api           billing.API
+	webhookSecret string
+}
+
+// stripeDepsFromEnv reads the two Stripe secrets. Neither set means billing is off.
+func stripeDepsFromEnv() (*stripeDeps, error) {
+	if os.Getenv("STRIPE_SECRET_KEY") == "" {
+		return nil, nil
+	}
+	api, err := stripeFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	secret := os.Getenv("STRIPE_WEBHOOK_SECRET")
+	if secret == "" {
+		return nil, errors.New("STRIPE_WEBHOOK_SECRET is required when STRIPE_SECRET_KEY is set")
+	}
+	return &stripeDeps{api: api, webhookSecret: secret}, nil
 }
 
 func serve(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -46,6 +71,7 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer func() { _ = store.Close() }()
+	store.SetKnownStores(cfg.KnownStores)
 
 	var events gateway.EventSink
 	if cfg.Observability != nil {
@@ -61,7 +87,16 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	srv, cleanup, err := newServer(cfg, store, events, discord.New(cfg.DiscordHook))
+	sd, err := stripeDepsFromEnv()
+	if err != nil {
+		fmt.Fprintln(stderr, "api-gatewahy:", err)
+		return 1
+	}
+	if sd == nil {
+		log.Println("stripe disabled: STRIPE_SECRET_KEY not set")
+	}
+
+	srv, cleanup, err := newServer(cfg, store, events, discord.New(cfg.DiscordHook), sd)
 	if err != nil {
 		fmt.Fprintln(stderr, "api-gatewahy:", err)
 		return 1
@@ -112,7 +147,7 @@ func serveUntilDone(ctx context.Context, srv *http.Server, ln net.Listener, grac
 }
 
 // newServer wires the handler, listener, jobs, and mux. cleanup stops them.
-func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.EventSink, poster *discord.Poster) (*http.Server, func(), error) {
+func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.EventSink, poster *discord.Poster, sd *stripeDeps) (*http.Server, func(), error) {
 	games := map[string]gateway.Upstream{}
 	for name, g := range cfg.Games {
 		u, err := url.Parse(g.Upstream)
@@ -168,10 +203,39 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 		})
 	}()
 
+	var webhook http.Handler
+	if sd != nil {
+		cat := apiproductlist.MustLoad()
+		if err := checkCatalogStores(cat, cfg.KnownStores); err != nil {
+			stopJobs()
+			jobs.Wait()
+			_ = listener.Close()
+			_ = meter.Close()
+			return nil, nil, err
+		}
+		rec := newReconciler(store, sd.api, cfg, cat, alert)
+		webhook = &billing.Webhook{Secret: sd.webhookSecret, Ledger: store, Reconcile: rec.Subscription}
+		jobs.Add(1)
+		go func() {
+			defer jobs.Done()
+			runDaily(jobsCtx, 3, 0, func(ctx context.Context, _ time.Time) {
+				res, err := rec.All(ctx)
+				if err != nil {
+					alert("api-gatewahy: stripe reconcile failed: " + err.Error())
+					return
+				}
+				alert(res.Summary())
+			})
+		}()
+	}
+
 	mux := newMux(muxDeps{
-		games:   handler.GameNames(),
-		healthy: store.PingContext,
-		gateway: handler,
+		games:       handler.GameNames(),
+		healthy:     store.PingContext,
+		gateway:     handler,
+		webhook:     webhook,
+		successPath: cfg.Stripe.SuccessPath,
+		cancelPath:  cfg.Stripe.CancelPath,
 	})
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
@@ -188,10 +252,33 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 	return srv, cleanup, nil
 }
 
+// checkCatalogStores fails startup if known_stores would silently drop a
+// catalog shorthand from every future store-scope grant.
+func checkCatalogStores(cat *apiproductlist.ProductList, known []string) error {
+	if len(known) == 0 {
+		return nil
+	}
+	knownSet := map[string]bool{}
+	for _, s := range known {
+		knownSet[s] = true
+	}
+	for _, st := range cat.Stores {
+		for _, sh := range st.Shorthands {
+			if !knownSet[sh] {
+				return fmt.Errorf("known_stores is missing catalog shorthand %q; add it or clear known_stores", sh)
+			}
+		}
+	}
+	return nil
+}
+
 type muxDeps struct {
-	games   []string
-	healthy func(context.Context) error
-	gateway http.Handler
+	games       []string
+	healthy     func(context.Context) error
+	gateway     http.Handler
+	webhook     http.Handler
+	successPath string
+	cancelPath  string
 }
 
 func newMux(d muxDeps) http.Handler {
@@ -215,6 +302,11 @@ func newMux(d muxDeps) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(d.games)
 	})
+	if d.webhook != nil {
+		mux.Handle("/stripe/webhook", d.webhook)
+		mux.HandleFunc(d.successPath, plainPage("Payment received. Your access is being set up and your key will work within a minute. You can close this page."))
+		mux.HandleFunc(d.cancelPath, plainPage("Checkout cancelled. Nothing was charged. You can close this page."))
+	}
 	mux.Handle("/v1/", d.gateway)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -222,6 +314,18 @@ func newMux(d muxDeps) http.Handler {
 		_, _ = w.Write([]byte(`{"error": "not found"}`))
 	})
 	return recoverPanics(mux)
+}
+
+// plainPage serves one sentence as text/plain to a GET.
+func plainPage(text string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(text + "\n"))
+	}
 }
 
 // wroteWriter remembers whether the handler sent anything yet.
