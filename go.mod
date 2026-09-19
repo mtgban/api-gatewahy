@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/lib/pq v1.11.1
-	github.com/mtgban/mtgban-website v0.0.0-20260915183724-e8091dca3c9e
+	github.com/mtgban/mtgban-website v0.0.0-20260919101725-29a3aaf18f24
 	github.com/mtgban/simplecloud v0.0.13
 	github.com/stripe/stripe-go/v84 v84.4.1
 	golang.org/x/time v0.15.0
@@ -82,5 +82,3 @@ require (
 	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
-
-replace github.com/mtgban/mtgban-website => github.com/the-muppet2/mtgban-website v0.0.0-20260919045454-431d8a4029d3
