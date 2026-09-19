@@ -54,6 +54,23 @@ var schemaStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_usage_account_ts ON usage (account_id, ts)`,
 	// Appended so an existing database picks it up on the next start.
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_live_prefix ON api_keys (prefix) WHERE revoked_at IS NULL`,
+	// Phase 2: Stripe.
+	`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stripe_customer_id text UNIQUE`,
+	`CREATE TABLE IF NOT EXISTS invites (
+    token_hash   text PRIMARY KEY,
+    interval_key text NOT NULL,
+    email        text NOT NULL DEFAULT '',
+    expires_at   timestamptz NOT NULL,
+    used_at      timestamptz,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    note         text NOT NULL DEFAULT ''
+)`,
+	`CREATE TABLE IF NOT EXISTS stripe_events (
+    id           text PRIMARY KEY,
+    type         text NOT NULL,
+    received_at  timestamptz NOT NULL DEFAULT now(),
+    processed_at timestamptz
+)`,
 }
 
 func ensureSchema(db *sql.DB) error {
