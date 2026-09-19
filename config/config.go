@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/mtgban/mtgban-website/timeseries"
 	"github.com/mtgban/simplecloud"
@@ -25,12 +26,20 @@ type Game struct {
 	Secret   string `json:"secret"`
 }
 
+// StripeConfig tunes billing. Secrets come from the environment.
+type StripeConfig struct {
+	GraceDays   int    `json:"grace_days"`
+	SuccessPath string `json:"success_path"`
+	CancelPath  string `json:"cancel_path"`
+}
+
 // Config is the whole configuration file.
 type Config struct {
 	Port                   string                `json:"port"`
 	InstanceName           string                `json:"instance_name"`
 	Link                   string                `json:"link"`
 	ClientIPHeader         string                `json:"client_ip_header"`
+	PublicURL              string                `json:"public_url"`
 	GatewayEmail           string                `json:"gateway_email"`
 	APIAccess              *timeseries.SQLConfig `json:"apiaccess_config"`
 	Observability          *timeseries.SQLConfig `json:"observability_config"`
@@ -44,11 +53,15 @@ type Config struct {
 	UpstreamTimeoutSeconds int                   `json:"upstream_timeout_seconds"`
 	ShutdownGraceSeconds   int                   `json:"shutdown_grace_seconds"`
 	UsageRetentionDays     int                   `json:"usage_retention_days"`
+	Stripe                 StripeConfig          `json:"stripe"`
 }
 
 // DefaultClientIPHeader is the header DigitalOcean App Platform's ingress
 // sets to the real client address.
 const DefaultClientIPHeader = "DO-Connecting-IP"
+
+// DefaultPublicURL is where the gateway is reachable, for Stripe redirects.
+const DefaultPublicURL = "https://api.mtgban.com"
 
 // Load reads the config from path, or from $BAN_CONFIG_PATH when path is empty.
 func Load(ctx context.Context, path string) (*Config, error) {
@@ -84,16 +97,19 @@ func Parse(r io.Reader) (*Config, error) {
 	// An explicit empty client_ip_header means trust only the peer address.
 	var given struct {
 		ClientIPHeader *string `json:"client_ip_header"`
+		Stripe         *struct {
+			GraceDays *int `json:"grace_days"`
+		} `json:"stripe"`
 	}
 	_ = json.Unmarshal(data, &given)
-	c.applyDefaults(given.ClientIPHeader == nil)
+	c.applyDefaults(given.ClientIPHeader == nil, given.Stripe == nil || given.Stripe.GraceDays == nil)
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
 	return &c, nil
 }
 
-func (c *Config) applyDefaults(defaultClientIPHeader bool) {
+func (c *Config) applyDefaults(defaultClientIPHeader, defaultGraceDays bool) {
 	if defaultClientIPHeader {
 		c.ClientIPHeader = DefaultClientIPHeader
 	}
@@ -127,6 +143,18 @@ func (c *Config) applyDefaults(defaultClientIPHeader bool) {
 	if c.UsageRetentionDays <= 0 {
 		c.UsageRetentionDays = 395
 	}
+	if c.PublicURL == "" {
+		c.PublicURL = DefaultPublicURL
+	}
+	if defaultGraceDays {
+		c.Stripe.GraceDays = 10
+	}
+	if c.Stripe.SuccessPath == "" {
+		c.Stripe.SuccessPath = "/checkout/success"
+	}
+	if c.Stripe.CancelPath == "" {
+		c.Stripe.CancelPath = "/checkout/cancel"
+	}
 }
 
 // Validate reports the first configuration error, games in name order.
@@ -136,6 +164,32 @@ func (c *Config) Validate() error {
 	}
 	if c.APIAccess == nil {
 		return errors.New("apiaccess_config is required")
+	}
+	if u, err := url.Parse(c.PublicURL); err != nil || u.Scheme == "" || u.Host == "" {
+		return errors.New("public_url must be an absolute URL")
+	}
+	if c.Stripe.GraceDays < 0 {
+		return errors.New("stripe.grace_days must not be negative")
+	}
+	if !strings.HasPrefix(c.Stripe.SuccessPath, "/") {
+		return errors.New("stripe.success_path must start with /")
+	}
+	if !strings.HasPrefix(c.Stripe.CancelPath, "/") {
+		return errors.New("stripe.cancel_path must start with /")
+	}
+	if c.Stripe.SuccessPath == c.Stripe.CancelPath {
+		return errors.New("stripe.success_path and stripe.cancel_path must differ")
+	}
+	for _, sp := range []struct{ name, path string }{
+		{"success_path", c.Stripe.SuccessPath},
+		{"cancel_path", c.Stripe.CancelPath},
+	} {
+		if strings.ContainsAny(sp.path, "{}") {
+			return fmt.Errorf("stripe.%s must not contain braces", sp.name)
+		}
+		if sp.path == "/" || sp.path == "/healthz" || sp.path == "/stripe/webhook" || strings.HasPrefix(sp.path, "/v1/") {
+			return fmt.Errorf("stripe.%s must not use a reserved path", sp.name)
+		}
 	}
 	if len(c.Games) == 0 {
 		return errors.New("no games configured")
@@ -170,4 +224,10 @@ func (c *Config) GameNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// CheckoutURLs are the absolute success and cancel URLs for Checkout Sessions.
+func (c *Config) CheckoutURLs() (success, cancel string) {
+	base := strings.TrimRight(c.PublicURL, "/")
+	return base + c.Stripe.SuccessPath, base + c.Stripe.CancelPath
 }
