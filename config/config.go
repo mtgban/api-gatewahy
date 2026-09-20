@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/mail"
 	"net/url"
 	"os"
 	"regexp"
@@ -33,6 +34,11 @@ type StripeConfig struct {
 	CancelPath  string `json:"cancel_path"`
 }
 
+// MailConfig is the sender identity; SMTP settings come from the environment.
+type MailConfig struct {
+	From string `json:"from"`
+}
+
 // Config is the whole configuration file.
 type Config struct {
 	Port                   string                `json:"port"`
@@ -54,6 +60,11 @@ type Config struct {
 	ShutdownGraceSeconds   int                   `json:"shutdown_grace_seconds"`
 	UsageRetentionDays     int                   `json:"usage_retention_days"`
 	Stripe                 StripeConfig          `json:"stripe"`
+	PricingURL             string                `json:"pricing_url"`
+	AdminEmails            []string              `json:"admin_emails"`
+	Mail                   MailConfig            `json:"mail"`
+	TrialDays              int                   `json:"trial_days"`
+	LoginLinksPerHour      int                   `json:"login_links_per_hour"`
 }
 
 // DefaultClientIPHeader is the header DigitalOcean App Platform's ingress
@@ -155,6 +166,21 @@ func (c *Config) applyDefaults(defaultClientIPHeader, defaultGraceDays bool) {
 	if c.Stripe.CancelPath == "" {
 		c.Stripe.CancelPath = "/checkout/cancel"
 	}
+	if c.PricingURL == "" {
+		c.PricingURL = "https://mtgban.com/api-plans"
+	}
+	if c.Mail.From == "" {
+		c.Mail.From = "MTGBAN <no-reply@mtgban.com>"
+	}
+	if c.TrialDays == 0 {
+		c.TrialDays = 15
+	}
+	if c.LoginLinksPerHour == 0 {
+		c.LoginLinksPerHour = 5
+	}
+	for i, e := range c.AdminEmails {
+		c.AdminEmails[i] = strings.ToLower(strings.TrimSpace(e))
+	}
 }
 
 // Validate reports the first configuration error, games in name order.
@@ -167,6 +193,18 @@ func (c *Config) Validate() error {
 	}
 	if u, err := url.Parse(c.PublicURL); err != nil || u.Scheme == "" || u.Host == "" {
 		return errors.New("public_url must be an absolute URL")
+	}
+	if u, err := url.Parse(c.PricingURL); err != nil || u.Scheme == "" || u.Host == "" {
+		return errors.New("pricing_url must be an absolute URL")
+	}
+	if c.TrialDays < 0 {
+		return errors.New("trial_days must not be negative")
+	}
+	if c.LoginLinksPerHour < 0 {
+		return errors.New("login_links_per_hour must not be negative")
+	}
+	if _, err := mail.ParseAddress(c.Mail.From); err != nil {
+		return fmt.Errorf("mail.from: %w", err)
 	}
 	if c.Stripe.GraceDays < 0 {
 		return errors.New("stripe.grace_days must not be negative")

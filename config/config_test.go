@@ -99,6 +99,27 @@ func TestCheckoutURLsTrimSlash(t *testing.T) {
 	}
 }
 
+func TestPortalConfigDefaultsAndValidation(t *testing.T) {
+	c, err := Parse(strings.NewReader(goodJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.PricingURL != "https://mtgban.com/api-plans" || c.Mail.From != "MTGBAN <no-reply@mtgban.com>" || c.TrialDays != 15 || c.LoginLinksPerHour != 5 {
+		t.Errorf("defaults %+v %+v", c.PricingURL, c.Mail)
+	}
+	withAdmins := strings.Replace(goodJSON, `"gateway_email"`, `"admin_emails": [" Ops@MTGBAN.com "], "trial_days": 7, "gateway_email"`, 1)
+	c, err = Parse(strings.NewReader(withAdmins))
+	if err != nil || len(c.AdminEmails) != 1 || c.AdminEmails[0] != "ops@mtgban.com" || c.TrialDays != 7 {
+		t.Errorf("%+v %v", c, err)
+	}
+	for _, bad := range []string{`"pricing_url": "not a url"`, `"trial_days": -1`, `"login_links_per_hour": -2`, `"mail": {"from": "nobody"}`} {
+		src := strings.Replace(goodJSON, `"gateway_email"`, bad+`, "gateway_email"`, 1)
+		if _, err := Parse(strings.NewReader(src)); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+}
+
 func TestValidateRejectsStripeFields(t *testing.T) {
 	cases := []struct {
 		name, extra, want string
