@@ -43,7 +43,8 @@ jobs:
       - name: Build
         run: go build ./...
       - name: Test
-        run: go test -race ./...
+        # DB tests in apiaccess and billing share one scratch database, so packages run one at a time.
+        run: go test -race -p 1 ./...
         env:
           APIACCESS_TEST_DSN: postgres://postgres:postgres@localhost:5432/apiaccess_test?sslmode=disable
 

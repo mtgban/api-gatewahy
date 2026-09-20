@@ -52,6 +52,7 @@ func ValidateStoreScope(scope string, knownStores []string) (string, error) {
 }
 
 // canonicalStoreScope canonicalizes scope; checkKnown false accepts any store token.
+// Presets are case-insensitive; explicit tokens are backend shorthands and keep their case.
 func canonicalStoreScope(scope string, knownStores []string, checkKnown bool) (string, error) {
 	scope = strings.TrimSpace(scope)
 	switch strings.ToUpper(scope) {
@@ -62,11 +63,11 @@ func canonicalStoreScope(scope string, knownStores []string, checkKnown bool) (s
 	}
 	known := map[string]bool{}
 	for _, s := range knownStores {
-		known[strings.ToUpper(s)] = true
+		known[s] = true
 	}
 	var out []string
 	for _, part := range strings.Split(scope, ",") {
-		s := strings.ToUpper(strings.TrimSpace(part))
+		s := strings.TrimSpace(part)
 		if s == "" {
 			continue
 		}
@@ -127,17 +128,16 @@ func scanEntitlement(row scanner) (Entitlement, error) {
 	return e, err
 }
 
-// AddEntitlement canonicalizes and validates e, then inserts it. Every writer
-// goes through here, so no caller can store a scope or mode the gateway rejects.
-func (c *Client) AddEntitlement(ctx context.Context, e Entitlement) (Entitlement, error) {
+// prepare canonicalizes and validates e and returns the nullable columns.
+func (c *Client) prepare(e Entitlement) (Entitlement, sql.NullTime, sql.NullString, error) {
 	scope, err := canonicalStoreScope(e.StoreScope, c.KnownStores, len(c.KnownStores) > 0)
 	if err != nil {
-		return Entitlement{}, err
+		return Entitlement{}, sql.NullTime{}, sql.NullString{}, err
 	}
 	e.StoreScope = scope
 	modes, err := ValidateModes(e.Modes)
 	if err != nil {
-		return Entitlement{}, err
+		return Entitlement{}, sql.NullTime{}, sql.NullString{}, err
 	}
 	e.Modes = modes
 	if e.Status == "" {
@@ -157,11 +157,62 @@ func (c *Client) AddEntitlement(ctx context.Context, e Entitlement) (Entitlement
 	if e.ExternalRef != "" {
 		ext = sql.NullString{String: e.ExternalRef, Valid: true}
 	}
+	return e, until, ext, nil
+}
+
+// AddEntitlement canonicalizes and validates e, then inserts it. Every writer
+// goes through here, so no caller can store a scope or mode the gateway rejects.
+func (c *Client) AddEntitlement(ctx context.Context, e Entitlement) (Entitlement, error) {
+	e, until, ext, err := c.prepare(e)
+	if err != nil {
+		return Entitlement{}, err
+	}
 	return scanEntitlement(c.db.QueryRowContext(ctx,
 		`INSERT INTO entitlements (account_id, source, games, store_scope, modes, addons, status, valid_from, valid_until, external_ref, note)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING `+entitlementCols,
 		e.AccountID, e.Source, pq.Array(e.Games), e.StoreScope, pq.Array(e.Modes), pq.Array(e.Addons),
 		e.Status, e.ValidFrom, until, ext, e.Note))
+}
+
+// UpsertStripeEntitlement inserts or updates the one row for e.ExternalRef.
+// valid_from is kept from the first insert; everything else follows e.
+func (c *Client) UpsertStripeEntitlement(ctx context.Context, e Entitlement) (Entitlement, error) {
+	if e.ExternalRef == "" {
+		return Entitlement{}, errors.New("apiaccess: external_ref is required")
+	}
+	e, until, ext, err := c.prepare(e)
+	if err != nil {
+		return Entitlement{}, err
+	}
+	return scanEntitlement(c.db.QueryRowContext(ctx,
+		`INSERT INTO entitlements (account_id, source, games, store_scope, modes, addons, status, valid_from, valid_until, external_ref, note)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		 ON CONFLICT (external_ref) WHERE external_ref IS NOT NULL DO UPDATE SET
+		   account_id = EXCLUDED.account_id, source = EXCLUDED.source, games = EXCLUDED.games,
+		   store_scope = EXCLUDED.store_scope, modes = EXCLUDED.modes, addons = EXCLUDED.addons,
+		   status = EXCLUDED.status, valid_until = EXCLUDED.valid_until, note = EXCLUDED.note
+		 RETURNING `+entitlementCols,
+		e.AccountID, e.Source, pq.Array(e.Games), e.StoreScope, pq.Array(e.Modes), pq.Array(e.Addons),
+		e.Status, e.ValidFrom, until, ext, e.Note))
+}
+
+// ListActiveStripeRefs returns the subscription ids of every active stripe row.
+func (c *Client) ListActiveStripeRefs(ctx context.Context) ([]string, error) {
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT external_ref FROM entitlements WHERE source = 'stripe' AND status = 'active' AND external_ref IS NOT NULL ORDER BY external_ref`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var ref string
+		if err := rows.Scan(&ref); err != nil {
+			return nil, err
+		}
+		out = append(out, ref)
+	}
+	return out, rows.Err()
 }
 
 // EndEntitlement marks the row ended as of at.

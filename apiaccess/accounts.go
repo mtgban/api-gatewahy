@@ -10,11 +10,12 @@ import (
 
 // Account is one customer.
 type Account struct {
-	ID        int64
-	Email     string
-	Status    string
-	CreatedAt time.Time
-	Note      string
+	ID               int64
+	Email            string
+	Status           string
+	CreatedAt        time.Time
+	Note             string
+	StripeCustomerID string
 }
 
 // NormalizeEmail lowercases and trims, which is how emails are stored and looked up.
@@ -22,13 +23,13 @@ func NormalizeEmail(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
-const accountCols = "id, email, status, created_at, note"
+const accountCols = "id, email, status, created_at, note, coalesce(stripe_customer_id, '')"
 
 type scanner interface{ Scan(dest ...any) error }
 
 func scanAccount(row scanner) (Account, error) {
 	var a Account
-	err := row.Scan(&a.ID, &a.Email, &a.Status, &a.CreatedAt, &a.Note)
+	err := row.Scan(&a.ID, &a.Email, &a.Status, &a.CreatedAt, &a.Note, &a.StripeCustomerID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Account{}, ErrNotFound
 	}
@@ -67,6 +68,24 @@ func (c *Client) SetAccountStatus(ctx context.Context, id int64, status string) 
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SetStripeCustomerID records the customer once; a later call returns the first id.
+func (c *Client) SetStripeCustomerID(ctx context.Context, accountID int64, customerID string) (string, error) {
+	var got string
+	err := c.db.QueryRowContext(ctx,
+		`UPDATE accounts SET stripe_customer_id = coalesce(stripe_customer_id, $2) WHERE id = $1 RETURNING stripe_customer_id`,
+		accountID, customerID).Scan(&got)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return got, err
+}
+
+// GetAccountByStripeCustomer returns the account that owns the customer id.
+func (c *Client) GetAccountByStripeCustomer(ctx context.Context, customerID string) (Account, error) {
+	return scanAccount(c.db.QueryRowContext(ctx,
+		`SELECT `+accountCols+` FROM accounts WHERE stripe_customer_id = $1`, customerID))
 }
 
 // ListAccounts returns every account, oldest first.

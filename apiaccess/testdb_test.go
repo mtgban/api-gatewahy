@@ -20,7 +20,7 @@ func testClient(t *testing.T) *Client {
 	}
 	t.Cleanup(func() {
 		ctx := context.Background()
-		for _, table := range []string{"usage", "entitlements", "api_keys", "accounts"} {
+		for _, table := range []string{"usage", "entitlements", "api_keys", "invites", "stripe_events", "accounts"} {
 			if _, err := c.db.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 				t.Errorf("cleanup %s: %v", table, err)
 			}

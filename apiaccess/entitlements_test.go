@@ -15,7 +15,7 @@ func TestValidateStoreScope(t *testing.T) {
 		{"ALL_ACCESS", "ALL_ACCESS", false},
 		{"BASE_ACCESS", "BASE_ACCESS", false},
 		{"DEV_ACCESS", "", true},
-		{"ck, tcg,CK", "CK,TCG", false},
+		{"CK, TCG,CK", "CK,TCG", false},
 		{"TCG,XYZ", "", true},
 		{"", "", true},
 		{" , ", "", true},
@@ -101,7 +101,7 @@ func TestAddEntitlementValidates(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
 	a, _ := c.CreateAccount(ctx, "v@example.com", "")
-	base := Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "tcg", Modes: []string{"retail"}}
+	base := Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "TCGLow", Modes: []string{"retail"}}
 
 	dev := base
 	dev.StoreScope = "DEV_ACCESS"
@@ -120,14 +120,112 @@ func TestAddEntitlementValidates(t *testing.T) {
 	}
 
 	e, err := c.AddEntitlement(ctx, base)
-	if err != nil || e.StoreScope != "TCG" {
+	if err != nil || e.StoreScope != "TCGLow" {
 		t.Fatalf("good grant: %+v %v", e, err)
 	}
 
-	c.SetKnownStores([]string{"TCG"})
+	c.SetKnownStores([]string{"TCGLow", "CK"})
 	unknown := base
 	unknown.StoreScope = "XYZ"
 	if _, err := c.AddEntitlement(ctx, unknown); err == nil {
 		t.Error("unknown store was stored")
+	}
+	wrongCase := base
+	wrongCase.StoreScope = "tcglow"
+	if _, err := c.AddEntitlement(ctx, wrongCase); err == nil {
+		t.Error("wrong-case store was stored")
+	}
+}
+
+func TestUpsertStripeEntitlement(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	a, _ := c.CreateAccount(ctx, "up@example.com", "")
+
+	if _, err := c.UpsertStripeEntitlement(ctx, Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}}); err == nil {
+		t.Error("upsert without external_ref accepted")
+	}
+
+	first, err := c.UpsertStripeEntitlement(ctx, Entitlement{
+		AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "BASE_ACCESS",
+		Modes: []string{"retail", "buylist"}, ExternalRef: "sub_1", Note: "v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().Add(48 * time.Hour).Truncate(time.Second)
+	second, err := c.UpsertStripeEntitlement(ctx, Entitlement{
+		AccountID: a.ID, Source: "stripe", Games: []string{"magic", "pokemon"}, StoreScope: "ALL_ACCESS",
+		Modes: []string{"retail", "buylist", "sealed"}, Addons: []string{"extra_game:1"}, Status: "active",
+		ValidUntil: &until, ExternalRef: "sub_1", Note: "v2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID {
+		t.Errorf("upsert created a second row: %d then %d", first.ID, second.ID)
+	}
+	if !second.ValidFrom.Equal(first.ValidFrom) {
+		t.Errorf("valid_from moved from %v to %v", first.ValidFrom, second.ValidFrom)
+	}
+	if len(second.Games) != 2 || second.StoreScope != "ALL_ACCESS" || len(second.Modes) != 3 || second.Note != "v2" ||
+		second.ValidUntil == nil || !second.ValidUntil.Equal(until) || len(second.Addons) != 1 {
+		t.Errorf("updated row wrong: %+v", second)
+	}
+	all, _ := c.ListEntitlements(ctx, a.ID)
+	if len(all) != 1 {
+		t.Errorf("rows: %d", len(all))
+	}
+
+	ended, err := c.UpsertStripeEntitlement(ctx, Entitlement{
+		AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "ALL_ACCESS",
+		Modes: []string{"retail"}, Status: "ended", ExternalRef: "sub_1",
+	})
+	if err != nil || ended.Status != "ended" {
+		t.Errorf("ended: %+v %v", ended, err)
+	}
+	if _, err := c.UpsertStripeEntitlement(ctx, Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "DEV_ACCESS", Modes: []string{"retail"}, ExternalRef: "sub_2"}); err == nil {
+		t.Error("DEV_ACCESS accepted by upsert")
+	}
+}
+
+func TestListActiveStripeRefs(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	a, _ := c.CreateAccount(ctx, "refs@example.com", "")
+	base := Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}}
+	live := base
+	live.ExternalRef = "sub_live"
+	gone := base
+	gone.ExternalRef = "sub_gone"
+	gone.Status = "ended"
+	manual := base
+	manual.Source = "manual"
+	for _, e := range []Entitlement{manual} {
+		if _, err := c.AddEntitlement(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, e := range []Entitlement{live, gone} {
+		if _, err := c.UpsertStripeEntitlement(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refs, err := c.ListActiveStripeRefs(ctx)
+	if err != nil || len(refs) != 1 || refs[0] != "sub_live" {
+		t.Errorf("refs %v %v", refs, err)
+	}
+}
+
+func TestCanonicalStoreScopeKeepsCase(t *testing.T) {
+	got, err := canonicalStoreScope(" ck , TCGLow,CK ", nil, false)
+	if err != nil || got != "CK,TCGLow,ck" {
+		t.Errorf("got %q %v", got, err)
+	}
+	if got, _ := canonicalStoreScope("base_access", nil, false); got != "BASE_ACCESS" {
+		t.Errorf("preset %q", got)
+	}
+	if _, err := canonicalStoreScope("tcglow", []string{"TCGLow"}, true); err == nil {
+		t.Error("wrong-case shorthand accepted against known stores")
 	}
 }

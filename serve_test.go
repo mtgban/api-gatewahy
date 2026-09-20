@@ -8,9 +8,12 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/mtgban/mtgban-website/apiproductlist"
 )
 
 var errDown = errors.New("down")
@@ -202,5 +205,79 @@ func TestHealthzPingTimeout(t *testing.T) {
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 	if rec.Code != 200 {
 		t.Errorf("healthz %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMuxWebhookAndCheckoutPages(t *testing.T) {
+	webhookHit := false
+	mux := newMux(muxDeps{
+		games:       []string{"magic"},
+		healthy:     func(context.Context) error { return nil },
+		gateway:     http.NotFoundHandler(),
+		webhook:     http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { webhookHit = true; w.WriteHeader(http.StatusOK) }),
+		successPath: "/checkout/success",
+		cancelPath:  "/checkout/cancel",
+	})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/stripe/webhook", nil))
+	if rec.Code != 200 || !webhookHit {
+		t.Errorf("webhook not reached: %d", rec.Code)
+	}
+	for _, path := range []string{"/checkout/success", "/checkout/cancel"} {
+		rec = httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		if rec.Code != 200 || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") || rec.Body.Len() == 0 {
+			t.Errorf("%s: %d %q", path, rec.Code, rec.Header().Get("Content-Type"))
+		}
+		rec = httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("POST", path, nil))
+		if rec.Code != 405 {
+			t.Errorf("%s POST: %d", path, rec.Code)
+		}
+	}
+}
+
+func TestMuxWithoutBilling(t *testing.T) {
+	mux := newMux(muxDeps{games: []string{"magic"}, healthy: func(context.Context) error { return nil }, gateway: http.NotFoundHandler()})
+	for _, path := range []string{"/stripe/webhook", "/checkout/success"} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("POST", path, nil))
+		if rec.Code != 404 || rec.Header().Get("Content-Type") != "application/json" {
+			t.Errorf("%s without billing: %d %q", path, rec.Code, rec.Header().Get("Content-Type"))
+		}
+	}
+}
+
+func TestCheckCatalogStores(t *testing.T) {
+	cat := &apiproductlist.ProductList{Stores: []apiproductlist.Store{
+		{Key: "CK", Shorthands: []string{"CK"}},
+		{Key: "SCG", Shorthands: []string{"SCG", "StarCityGames"}},
+	}}
+	if err := checkCatalogStores(cat, nil); err != nil {
+		t.Errorf("empty known: %v", err)
+	}
+	if err := checkCatalogStores(cat, []string{"CK", "SCG", "StarCityGames"}); err != nil {
+		t.Errorf("every shorthand known: %v", err)
+	}
+	err := checkCatalogStores(cat, []string{"CK", "SCG"})
+	if err == nil || !strings.Contains(err.Error(), `"StarCityGames"`) {
+		t.Errorf("missing shorthand: %v", err)
+	}
+}
+
+func TestStripeDepsFromEnv(t *testing.T) {
+	t.Setenv("STRIPE_SECRET_KEY", "")
+	t.Setenv("STRIPE_WEBHOOK_SECRET", "")
+	if sd, err := stripeDepsFromEnv(); sd != nil || err != nil {
+		t.Errorf("unset: %v %v", sd, err)
+	}
+	t.Setenv("STRIPE_SECRET_KEY", "sk_test_x")
+	if _, err := stripeDepsFromEnv(); err == nil || !strings.Contains(err.Error(), "STRIPE_WEBHOOK_SECRET") {
+		t.Errorf("missing webhook secret: %v", err)
+	}
+	t.Setenv("STRIPE_WEBHOOK_SECRET", "whsec_x")
+	sd, err := stripeDepsFromEnv()
+	if err != nil || sd == nil || sd.api == nil || sd.webhookSecret != "whsec_x" {
+		t.Errorf("both set: %+v %v", sd, err)
 	}
 }
