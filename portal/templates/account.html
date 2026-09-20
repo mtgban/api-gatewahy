@@ -1,0 +1,66 @@
+{{template "header" .}}
+<h1>Your API account</h1>
+{{with .Data}}
+<p class="dim">{{.Account.Email}}</p>
+
+{{if .NewKey}}
+<div class="card">
+  <h2 style="margin-top:0">Your new key</h2>
+  <div class="key-box">{{.NewKey}}</div>
+  <p class="msg msg-error" style="margin-top:0.8em">Copy it now. It is shown once and cannot be recovered; create a new key if you lose it.</p>
+  <p class="dim">Use it as <code>Authorization: Bearer {{.NewKey}}</code> against <code>{{$.PricingURL}}</code>'s API host, see the guide linked from the plans page.</p>
+</div>
+{{end}}
+
+<h2>Access</h2>
+{{if .Entitlements}}
+<table>
+  <thead><tr><th>Package</th><th>Games</th><th>Stores</th><th>Modes</th><th>Source</th><th>Until</th></tr></thead>
+  <tbody>
+  {{range .Entitlements}}<tr><td>{{.Package}}</td><td>{{.Games}}</td><td>{{.Stores}}</td><td>{{.Modes}}</td><td>{{.Source}}</td><td>{{if .Until}}{{.Until}}{{else}}renews{{end}}</td></tr>{{end}}
+  </tbody>
+</table>
+{{if .TrialEnds}}<p>Your trial ends on <strong>{{.TrialEnds}}</strong>. Nothing is charged automatically; <a href="{{$.PricingURL}}">pick a plan</a> to keep access.</p>{{end}}
+{{else}}
+<div class="card"><p>No active access. <a href="{{$.PricingURL}}">Pick a plan</a> to get started.</p></div>
+{{end}}
+<p>
+  {{if .HasStripe}}<a class="btn" href="/portal">Manage billing</a>{{end}}
+  {{if .ChangeURL}} <a class="btn" href="{{.ChangeURL}}">Change plan</a>{{end}}
+</p>
+
+<h2>Keys</h2>
+{{if .Keys}}
+<table>
+  <thead><tr><th>Key</th><th>Label</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+  <tbody>
+  {{range .Keys}}<tr>
+    <td><code>{{.Prefix}}&hellip;</code></td><td>{{.Label}}</td><td>{{.Created}}</td><td>{{.LastUsed}}</td>
+    <td><form method="POST" action="/account/keys/{{.ID}}/revoke" class="inline" onsubmit="return confirm('Revoke this key? Anything using it stops working within a minute.')"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="btn btn-danger btn-small">Revoke</button></form></td>
+  </tr>{{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="dim">No keys yet.</p>
+{{end}}
+<div class="card">
+  <form method="POST" action="/account/keys">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <label for="label">New key label (optional)</label>
+    <input id="label" type="text" name="label" maxlength="64" placeholder="laptop, spreadsheet, prod">
+    <p><button type="submit" class="btn">Create key</button></p>
+  </form>
+  <p class="dim">Refreshing this page after creating a key creates another one.</p>
+</div>
+
+<h2>Usage in {{.Month}}</h2>
+{{if .Usage}}
+<table>
+  <thead><tr><th>Game</th><th>Requests</th><th>Bytes</th><th>Errors</th></tr></thead>
+  <tbody>{{range .Usage}}<tr><td>{{.Game}}</td><td>{{.Requests}}</td><td>{{.Bytes}}</td><td>{{.Errors}}</td></tr>{{end}}</tbody>
+</table>
+{{else}}
+<p class="dim">No requests yet this month.</p>
+{{end}}
+{{end}}
+{{template "footer" .}}

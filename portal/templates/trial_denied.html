@@ -1,0 +1,5 @@
+{{template "header" .}}
+<h1>Trial already used</h1>
+{{with .Data}}<p>This Patreon account already had an API trial. The next one becomes available on <strong>{{.Next}}</strong>.</p>{{end}}
+<p>Your existing account still works: <a href="/login">sign in</a> to manage keys, or <a href="{{.PricingURL}}">pick a plan</a> to keep going now.</p>
+{{template "footer" .}}

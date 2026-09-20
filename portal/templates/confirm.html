@@ -1,0 +1,25 @@
+{{template "header" .}}
+<h1>{{.Title}}</h1>
+{{with .Data}}
+<div class="card">
+  <table>
+    <tr><th>Package</th><td>{{.Package}}</td></tr>
+    <tr><th>Games</th><td>{{.Games}}</td></tr>
+    {{if .Stores}}<tr><th>Stores</th><td>{{.Stores}}</td></tr>{{end}}
+    <tr><th>Billing</th><td>{{.Interval}}{{if .Change}} (unchanged){{end}}</td></tr>
+    <tr><th>Total</th><td class="total">{{.Total}} {{.Interval}}</td></tr>
+  </table>
+  {{if .Change}}
+  <p class="dim">The difference is prorated on your next invoice. Your key keeps working throughout.</p>
+  {{else}}
+  <p class="dim">Promotion codes can be entered on the next page. You can cancel any time from your account.</p>
+  {{end}}
+  <form method="POST" action="{{.Action}}">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    {{range $k, $vs := .Fields}}{{range $vs}}<input type="hidden" name="{{$k}}" value="{{.}}">{{end}}{{end}}
+    <button type="submit" class="btn">{{if .Change}}Change plan{{else}}Continue to payment{{end}}</button>
+    <a href="{{.ReturnTo}}" class="dim" style="margin-left:1em">Change selection</a>
+  </form>
+</div>
+{{end}}
+{{template "footer" .}}

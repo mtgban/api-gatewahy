@@ -1,0 +1,15 @@
+{{template "header" .}}
+<h1>Sign in</h1>
+{{with .Data}}
+{{if .PlanText}}<div class="card"><strong>Your plan:</strong> {{.PlanText}}<br><span class="dim">Sign in or create an account to continue to checkout.</span></div>{{end}}
+<div class="card">
+  <form method="POST" action="/login">
+    <label for="email">Email address</label>
+    <input id="email" type="email" name="email" required autocomplete="email" autofocus>
+    <p class="dim">We email you a one-time link. No password.</p>
+    <button type="submit" class="btn">Email me a sign-in link</button>
+  </form>
+</div>
+<p>Have a Patreon pledge? <a href="{{.PatreonURL}}">Sign in with Patreon</a> instead.</p>
+{{end}}
+{{template "footer" .}}

@@ -1,0 +1,17 @@
+{{template "header" .}}
+<h1>Admin</h1>
+{{with .Data}}
+<form method="GET" action="/admin" class="card">
+  <label for="q">Find an account</label>
+  <input id="q" type="text" name="q" value="{{.Query}}" placeholder="part of an email">
+  <p><button type="submit" class="btn">Search</button> <a href="/admin/usage" class="btn">Usage</a></p>
+</form>
+{{if .HasStripe}}<form method="POST" action="/admin/reconcile" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="btn">Reconcile Stripe now</button></form>{{end}}
+<table>
+  <thead><tr><th>Email</th><th>Status</th><th>Created</th><th>Note</th></tr></thead>
+  <tbody>
+  {{range .Accounts}}<tr><td><a href="/admin/accounts/{{.ID}}">{{.Email}}</a></td><td>{{.Status}}</td><td>{{date .CreatedAt}}</td><td>{{.Note}}</td></tr>{{end}}
+  </tbody>
+</table>
+{{end}}
+{{template "footer" .}}

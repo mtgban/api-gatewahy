@@ -1,0 +1,26 @@
+{{define "header"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} - MTGBAN API</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;600;700&display=optional">
+<link rel="stylesheet" href="/static/portal.css">
+</head>
+<body>
+<nav class="bar">
+  <a class="brand" href="{{.PricingURL}}">MTG<span>BAN</span> API</a>
+  <span class="bar-links">
+    {{if .Session}}
+    <a href="/account">Account</a>
+    <form method="POST" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit" class="link">Sign out</button></form>
+    {{else}}
+    <a href="/login">Sign in</a>
+    {{end}}
+  </span>
+</nav>
+<main class="page">
+{{if .Error}}<div class="msg msg-error">{{.Error}}</div>{{end}}
+{{if .Notice}}<div class="msg">{{.Notice}}</div>{{end}}
+{{end}}

@@ -1,0 +1,9 @@
+{{template "header" .}}
+<h1>Sign in with Patreon</h1>
+{{with .Data}}
+<div class="card">
+  <p>Sign in to the MTGBAN API as <strong>{{.Email}}</strong>.</p>
+  <form method="POST" action="/session"><input type="hidden" name="t" value="{{.Token}}"><button type="submit" class="btn">Sign in</button></form>
+</div>
+{{end}}
+{{template "footer" .}}

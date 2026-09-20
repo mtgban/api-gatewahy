@@ -1,0 +1,75 @@
+{{template "header" .}}
+<p><a href="/admin">&larr; All accounts</a></p>
+<h1>{{.Data.Account.Email}}</h1>
+{{with .Data}}
+<div class="card">
+  <p>Status <strong>{{.Account.Status}}</strong> &middot; created {{date .Account.CreatedAt}}
+  {{if .StripeURL}} &middot; <a href="{{.StripeURL}}" target="_blank" rel="noopener">Open in Stripe</a>{{end}}</p>
+  <form method="POST" action="/admin/accounts/{{.Account.ID}}/status" class="inline">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    {{if eq .Account.Status "active"}}<input type="hidden" name="status" value="suspended"><button type="submit" class="btn btn-danger btn-small">Suspend</button>
+    {{else}}<input type="hidden" name="status" value="active"><button type="submit" class="btn btn-small">Reinstate</button>{{end}}
+  </form>
+  <form method="POST" action="/admin/accounts/{{.Account.ID}}/note">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <label for="note">Note</label>
+    <input id="note" type="text" name="note" value="{{.Account.Note}}">
+    <p><button type="submit" class="btn btn-small">Save note</button></p>
+  </form>
+</div>
+
+{{if .NewInvite}}<div class="card"><h2 style="margin-top:0">Invite token</h2><div class="key-box">{{.NewInvite}}</div><p class="dim">Give it to the customer; it is not shown again. They add <code>?invite=TOKEN</code> to the pricing page URL.</p></div>{{end}}
+
+<h2>Keys</h2>
+<table>
+  <thead><tr><th>Prefix</th><th>Label</th><th>Created</th><th>Last used</th><th>Revoked</th><th></th></tr></thead>
+  <tbody>
+  {{range .Keys}}<tr><td><code>{{.Prefix}}</code></td><td>{{.Label}}</td><td>{{date .CreatedAt}}</td><td>{{if .LastUsedAt}}{{date .LastUsedAt}}{{else}}-{{end}}</td><td>{{if .RevokedAt}}{{date .RevokedAt}}{{else}}-{{end}}</td>
+    <td>{{if not .RevokedAt}}<form method="POST" action="/admin/accounts/{{$.Data.Account.ID}}/keys/{{.ID}}/revoke" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="btn btn-danger btn-small">Revoke</button></form>{{end}}</td></tr>{{end}}
+  </tbody>
+</table>
+
+<h2>Entitlements</h2>
+<table>
+  <thead><tr><th>ID</th><th>Source</th><th>Status</th><th>Games</th><th>Stores</th><th>Modes</th><th>From</th><th>Until</th><th>Note</th><th></th></tr></thead>
+  <tbody>
+  {{range .Entitlements}}<tr><td>{{.ID}}</td><td>{{.Source}}</td><td>{{.Status}}</td><td>{{join .Games ","}}</td><td title="{{.StoreScope}}">{{.View.Stores}}</td><td>{{join .Modes ","}}</td><td>{{date .ValidFrom}}</td><td>{{if .ValidUntil}}{{date .ValidUntil}}{{else}}-{{end}}</td><td>{{.Note}}</td>
+    <td>{{if eq .Status "active"}}<form method="POST" action="/admin/accounts/{{$.Data.Account.ID}}/entitlements/{{.ID}}/end" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="btn btn-danger btn-small">End</button></form>{{end}}</td></tr>{{end}}
+  </tbody>
+</table>
+
+<div class="card">
+  <h2 style="margin-top:0">Add a manual entitlement</h2>
+  <form method="POST" action="/admin/accounts/{{.Account.ID}}/entitlements">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <label>Games</label>
+    {{range .Games}}<label class="choice"><input type="checkbox" name="games" value="{{.}}"> {{.}}</label>{{end}}
+    <label for="stores">Stores</label>
+    <input id="stores" type="text" name="stores" placeholder="ALL_ACCESS, BASE_ACCESS, or TCGLow,CK,SCG" required>
+    <label>Modes</label>
+    {{range .Modes}}<label class="choice"><input type="checkbox" name="modes" value="{{.}}"> {{.}}</label>{{end}}
+    <label for="until">Until (optional, exclusive)</label>
+    <input id="until" type="date" name="until">
+    <label for="gnote">Note</label>
+    <input id="gnote" type="text" name="note">
+    <p><button type="submit" class="btn">Add entitlement</button></p>
+  </form>
+</div>
+
+{{if .Intervals}}
+<div class="card">
+  <h2 style="margin-top:0">Create an invite</h2>
+  <form method="POST" action="/admin/accounts/{{.Account.ID}}/invites">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <label for="interval">Interval</label>
+    <select id="interval" name="interval">{{range .Intervals}}<option value="{{.Key}}">{{.Key}}</option>{{end}}</select>
+    <label for="days">Valid for (days)</label>
+    <input id="days" type="number" name="days" value="14" min="1">
+    <label for="inote">Note</label>
+    <input id="inote" type="text" name="note">
+    <p><button type="submit" class="btn">Create invite</button></p>
+  </form>
+</div>
+{{end}}
+{{end}}
+{{template "footer" .}}

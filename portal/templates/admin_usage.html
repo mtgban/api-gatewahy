@@ -1,0 +1,17 @@
+{{template "header" .}}
+<p><a href="/admin">&larr; Admin</a></p>
+<h1>Usage</h1>
+{{with .Data}}
+<form method="GET" action="/admin/usage" class="card">
+  <label for="since">Since</label><input id="since" type="date" name="since" value="{{.Since}}">
+  <label for="until">Until (exclusive)</label><input id="until" type="date" name="until" value="{{.Until}}">
+  <label for="email">Account email</label><input id="email" type="text" name="email" value="{{.Email}}">
+  <label for="game">Game</label><input id="game" type="text" name="game" value="{{.Game}}">
+  <p><button type="submit" class="btn">Filter</button></p>
+</form>
+<table>
+  <thead><tr><th>Email</th><th>Game</th><th>Requests</th><th>Bytes</th><th>Errors</th></tr></thead>
+  <tbody>{{range .Rows}}<tr><td>{{.Email}}</td><td>{{.Game}}</td><td>{{.Requests}}</td><td>{{.Bytes}}</td><td>{{.Errors}}</td></tr>{{end}}</tbody>
+</table>
+{{end}}
+{{template "footer" .}}
