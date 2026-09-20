@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
@@ -69,23 +68,6 @@ func newCheckout(store billing.Store, api billing.API, cfg *config.Config, cat *
 
 func newReconciler(store billing.Store, api billing.API, cfg *config.Config, cat *apiproductlist.ProductList, alert func(string)) *billing.Reconciler {
 	return &billing.Reconciler{Store: store, API: api, Catalog: cat, Grace: time.Duration(cfg.Stripe.GraceDays) * 24 * time.Hour, Alert: alert}
-}
-
-// stripeSubscriptionFor picks the account's one active stripe subscription.
-func stripeSubscriptionFor(ents []apiaccess.Entitlement) (string, error) {
-	var refs []string
-	for _, e := range ents {
-		if e.Source == "stripe" && e.Status == "active" && e.ExternalRef != "" {
-			refs = append(refs, e.ExternalRef)
-		}
-	}
-	switch len(refs) {
-	case 0:
-		return "", errors.New("account has no active Stripe subscription")
-	case 1:
-		return refs[0], nil
-	}
-	return "", fmt.Errorf("account has %d active Stripe subscriptions (%s); name one with -sub", len(refs), strings.Join(refs, ", "))
 }
 
 // runBilling dispatches one billing verb. Exit codes: 0 ok, 1 error, 2 usage.
@@ -247,7 +229,7 @@ func runBilling(ctx context.Context, d billingDeps, cmd string, args []string, s
 			if err != nil {
 				return fail(err)
 			}
-			if subID, err = stripeSubscriptionFor(ents); err != nil {
+			if subID, err = billing.SubscriptionFor(ents); err != nil {
 				return fail(err)
 			}
 		}
