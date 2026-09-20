@@ -1,0 +1,5 @@
+{{template "header" .}}
+<h1>{{.Title}}</h1>
+<p>That link is not valid any more. Links from the game sites work for five minutes; please try again from the game site while signed in with Patreon.</p>
+{{with .Data}}<p><a class="btn" href="{{.BackURL}}">{{.BackText}}</a></p>{{end}}
+{{template "footer" .}}

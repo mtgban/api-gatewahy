@@ -1,0 +1,66 @@
+:root {
+    --normal: #000000;
+    --background: #f8f8f8;
+    --surface-1: #ffffff;
+    --surface-2: #f0f0f2;
+    --border-subtle: rgba(0,0,0,0.06);
+    --border-moderate: rgba(0,0,0,0.12);
+    --text-dim: #6b7280;
+    --activetext: #4b5786;
+    --ainfo: dodgerblue;
+    --adanger: red;
+    --asuccess: green;
+    --accent-muted: rgba(85,158,255,0.08);
+    --accent-border: rgba(85,158,255,0.2);
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --row-odd: #f7f7fa;
+}
+@media (prefers-color-scheme: dark) {
+    :root {
+        --normal: #dddddd;
+        --background: #161616;
+        --surface-1: #181b20;
+        --surface-2: #1f2328;
+        --border-subtle: rgba(255,255,255,0.06);
+        --border-moderate: rgba(255,255,255,0.12);
+        --text-dim: #8b929e;
+        --activetext: #eeeeee;
+        --ainfo: #f2f2ff;
+        --accent-muted: rgba(91,141,239,0.12);
+        --accent-border: rgba(91,141,239,0.25);
+        --row-odd: #181b20;
+    }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: 'Geist', system-ui, sans-serif; color: var(--normal); background: var(--background); line-height: 1.5; }
+a { color: var(--ainfo); }
+.bar { display: flex; justify-content: space-between; align-items: center; padding: 0.8em 4vw; background: var(--surface-1); border-bottom: 1px solid var(--border-subtle); }
+.brand { font-weight: 700; text-decoration: none; color: var(--normal); }
+.brand span { color: var(--adanger); }
+.bar-links { display: flex; gap: 1em; align-items: center; }
+.inline { display: inline; }
+button.link { background: none; border: none; color: var(--ainfo); cursor: pointer; font: inherit; padding: 0; }
+.page { max-width: 46em; margin: 0 auto; padding: 2em 4vw 4em; }
+.foot { text-align: center; color: var(--text-dim); font-size: 0.85em; padding: 2em 4vw; }
+h1 { font-size: 1.7em; letter-spacing: -0.02em; margin: 0 0 0.6em; }
+h2 { font-size: 1.2em; margin: 2em 0 0.6em; }
+p { color: var(--activetext); }
+.msg { padding: 0.7em 1em; border-radius: var(--radius-sm); background: var(--accent-muted); border: 1px solid var(--accent-border); margin-bottom: 1em; }
+.msg-error { background: rgba(255,66,77,0.1); border-color: rgba(255,66,77,0.25); color: var(--adanger); }
+.card { background: var(--surface-1); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.2em 1.4em; margin-bottom: 1.2em; }
+.btn { display: inline-block; padding: 0.6em 1.2em; border-radius: var(--radius-md); border: 1px solid var(--accent-border); background: var(--accent-muted); color: var(--ainfo); font: inherit; font-weight: 600; text-decoration: none; cursor: pointer; }
+.btn-danger { color: var(--adanger); border-color: rgba(255,66,77,0.25); background: rgba(255,66,77,0.06); }
+.btn-small { padding: 0.3em 0.7em; font-size: 0.85em; }
+label { display: block; margin: 0.6em 0 0.2em; font-weight: 600; }
+input[type=text], input[type=email], input[type=date], input[type=number], select, textarea { width: 100%; padding: 0.6em; border: 1px solid var(--border-moderate); border-radius: var(--radius-sm); background: var(--surface-1); color: var(--normal); font: inherit; }
+.choice { display: block; font-weight: 400; margin: 0.2em 0; }
+table { width: 100%; border-collapse: collapse; font-size: 0.95em; }
+th { text-align: left; font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); padding: 0.5em 0.7em; border-bottom: 2px solid var(--border-subtle); background: var(--surface-2); }
+td { padding: 0.5em 0.7em; border-bottom: 1px solid var(--border-subtle); vertical-align: middle; }
+tbody tr:nth-child(odd) { background: var(--row-odd); }
+.total { font-size: 1.4em; font-weight: 700; }
+.key-box { font-family: ui-monospace, monospace; font-size: 1.05em; padding: 0.8em 1em; background: var(--surface-2); border: 1px solid var(--border-moderate); border-radius: var(--radius-sm); word-break: break-all; user-select: all; }
+.dim { color: var(--text-dim); font-size: 0.9em; }
+@media (max-width: 640px) { .page { padding: 1.2em 16px 3em; } table { display: block; overflow-x: auto; } }

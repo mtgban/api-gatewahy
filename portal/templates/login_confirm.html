@@ -1,0 +1,9 @@
+{{template "header" .}}
+<h1>Finish signing in</h1>
+{{with .Data}}
+<div class="card">
+  <p>Click below to sign in to your MTGBAN API account.</p>
+  <form method="POST" action="/login/{{.Token}}"><button type="submit" class="btn">Sign in</button></form>
+</div>
+{{end}}
+{{template "footer" .}}

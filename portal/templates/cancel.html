@@ -1,0 +1,5 @@
+{{template "header" .}}
+<h1>Checkout cancelled</h1>
+<p>Nothing was charged. Your selection is kept for an hour if you want to <a href="/checkout">pick up where you left off</a>.</p>
+{{with .Data}}<p><a class="btn" href="{{.BackURL}}">{{.BackText}}</a></p>{{end}}
+{{template "footer" .}}

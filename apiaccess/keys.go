@@ -126,6 +126,14 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pqErr) && pqErr.Code == "23505"
 }
 
+// RevokeKey revokes key id. accountID 0 means any account; otherwise the key must belong to it.
+func (c *Client) RevokeKey(ctx context.Context, id, accountID int64) (Key, error) {
+	return scanKey(c.db.QueryRowContext(ctx,
+		`UPDATE api_keys SET revoked_at = now()
+		  WHERE id = $1 AND revoked_at IS NULL AND ($2 = 0 OR account_id = $2)
+		  RETURNING `+keyCols, id, accountID))
+}
+
 // LookupKey returns the key, its account, and the account's active entitlements.
 func (c *Client) LookupKey(ctx context.Context, hash string) (Lookup, error) {
 	var lk Lookup

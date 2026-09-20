@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
+	"github.com/mtgban/api-gatewahy/billing"
 	"github.com/mtgban/mtgban-website/apiproductlist"
 )
 
@@ -43,15 +44,15 @@ func TestStripeSubscriptionFor(t *testing.T) {
 	stripeActive := apiaccess.Entitlement{Source: "stripe", Status: "active", ExternalRef: "sub_1"}
 	stripeEnded := apiaccess.Entitlement{Source: "stripe", Status: "ended", ExternalRef: "sub_0"}
 	manual := apiaccess.Entitlement{Source: "manual", Status: "active"}
-	if id, err := stripeSubscriptionFor([]apiaccess.Entitlement{manual, stripeEnded, stripeActive}); err != nil || id != "sub_1" {
+	if id, err := billing.SubscriptionFor([]apiaccess.Entitlement{manual, stripeEnded, stripeActive}); err != nil || id != "sub_1" {
 		t.Errorf("one live: %q %v", id, err)
 	}
-	if _, err := stripeSubscriptionFor([]apiaccess.Entitlement{manual, stripeEnded}); err == nil {
+	if _, err := billing.SubscriptionFor([]apiaccess.Entitlement{manual, stripeEnded}); err == nil {
 		t.Error("none live accepted")
 	}
 	other := stripeActive
 	other.ExternalRef = "sub_2"
-	if _, err := stripeSubscriptionFor([]apiaccess.Entitlement{stripeActive, other}); err == nil || !strings.Contains(err.Error(), "-sub") {
+	if _, err := billing.SubscriptionFor([]apiaccess.Entitlement{stripeActive, other}); err == nil || !strings.Contains(err.Error(), "-sub") {
 		t.Errorf("two live: %v", err)
 	}
 }

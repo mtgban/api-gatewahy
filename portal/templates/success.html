@@ -1,0 +1,23 @@
+{{template "header" .}}
+<h1>Payment received</h1>
+{{with .Data}}
+{{if .Entitlements}}
+<div class="card">
+  <h2 style="margin-top:0">Your access</h2>
+  {{range .Entitlements}}<p><strong>{{.Package}}</strong>: {{.Games}}, {{.Stores}}, {{.Modes}}.</p>{{end}}
+</div>
+{{else}}
+<div class="card"><p>Your access is being set up and will be active within a minute. This page does not need to stay open.</p></div>
+{{end}}
+<div class="card">
+  <h2 style="margin-top:0">{{if .HasKeys}}Create another key{{else}}Create your first key{{end}}</h2>
+  <form method="POST" action="/account/keys">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <label for="label">Label (optional)</label>
+    <input id="label" type="text" name="label" maxlength="64" placeholder="laptop, spreadsheet, prod">
+    <p><button type="submit" class="btn">Create key</button></p>
+  </form>
+</div>
+<p><a href="/account">Go to your account</a> &middot; <a href="{{.ReturnTo}}">Back to the site</a></p>
+{{end}}
+{{template "footer" .}}

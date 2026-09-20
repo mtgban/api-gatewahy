@@ -1,0 +1,4 @@
+{{template "header" .}}
+<h1>{{.Title}}</h1>
+{{with .Data}}<p><a class="btn" href="{{.BackURL}}">{{.BackText}}</a></p>{{end}}
+{{template "footer" .}}

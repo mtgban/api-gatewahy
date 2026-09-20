@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +22,9 @@ import (
 	"github.com/mtgban/api-gatewahy/config"
 	"github.com/mtgban/api-gatewahy/discord"
 	"github.com/mtgban/api-gatewahy/gateway"
+	"github.com/mtgban/api-gatewahy/mailer"
+	"github.com/mtgban/api-gatewahy/portal"
+	"github.com/mtgban/api-gatewahy/session"
 	"github.com/mtgban/mtgban-website/apiproductlist"
 	"github.com/mtgban/mtgban-website/observability"
 )
@@ -49,6 +53,40 @@ func stripeDepsFromEnv() (*stripeDeps, error) {
 		return nil, errors.New("STRIPE_WEBHOOK_SECRET is required when STRIPE_SECRET_KEY is set")
 	}
 	return &stripeDeps{api: api, webhookSecret: secret}, nil
+}
+
+// portalDeps is what serve needs when GATEWAY_SESSION_SECRET is set.
+type portalDeps struct {
+	sessionSecret []byte
+	trialSecret   []byte
+	mail          mailer.Mailer
+}
+
+// portalDepsFromEnv reads the portal secrets. No session secret means the portal is off.
+func portalDepsFromEnv(cfg *config.Config, stderr io.Writer) (*portalDeps, error) {
+	secret := os.Getenv("GATEWAY_SESSION_SECRET")
+	if secret == "" {
+		return nil, nil
+	}
+	if len(secret) < 32 {
+		return nil, errors.New("GATEWAY_SESSION_SECRET must be at least 32 characters")
+	}
+	trial := os.Getenv("TRIAL_SECRET")
+	if trial == "" {
+		return nil, errors.New("TRIAL_SECRET is required when GATEWAY_SESSION_SECRET is set")
+	}
+	d := &portalDeps{sessionSecret: []byte(secret), trialSecret: []byte(trial)}
+	smtp, err := mailer.FromEnv(cfg.Mail.From)
+	if err != nil {
+		return nil, err
+	}
+	if smtp == nil {
+		log.Println("MAIL_SMTP_HOST not set: mail goes to the log, sign-in links included")
+		d.mail = &mailer.Log{Out: stderr}
+	} else {
+		d.mail = smtp
+	}
+	return d, nil
 }
 
 func serve(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -96,7 +134,15 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		log.Println("stripe disabled: STRIPE_SECRET_KEY not set")
 	}
 
-	srv, cleanup, err := newServer(cfg, store, events, discord.New(cfg.DiscordHook), sd)
+	pd, err := portalDepsFromEnv(cfg, stderr)
+	if err != nil {
+		fmt.Fprintln(stderr, "api-gatewahy:", err)
+		return 1
+	}
+	if pd == nil {
+		log.Println("portal disabled: GATEWAY_SESSION_SECRET not set")
+	}
+	srv, cleanup, err := newServer(cfg, store, events, discord.New(cfg.DiscordHook), sd, pd)
 	if err != nil {
 		fmt.Fprintln(stderr, "api-gatewahy:", err)
 		return 1
@@ -147,7 +193,7 @@ func serveUntilDone(ctx context.Context, srv *http.Server, ln net.Listener, grac
 }
 
 // newServer wires the handler, listener, jobs, and mux. cleanup stops them.
-func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.EventSink, poster *discord.Poster, sd *stripeDeps) (*http.Server, func(), error) {
+func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.EventSink, poster *discord.Poster, sd *stripeDeps, pd *portalDeps) (*http.Server, func(), error) {
 	games := map[string]gateway.Upstream{}
 	for name, g := range cfg.Games {
 		u, err := url.Parse(g.Upstream)
@@ -203,9 +249,14 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 		})
 	}()
 
-	var webhook http.Handler
-	if sd != nil {
-		cat := apiproductlist.MustLoad()
+	var (
+		cat     *apiproductlist.ProductList
+		rec     *billing.Reconciler
+		webhook http.Handler
+		web     *portal.Server
+	)
+	if sd != nil || pd != nil {
+		cat = apiproductlist.MustLoad()
 		if err := checkCatalogStores(cat, cfg.KnownStores); err != nil {
 			stopJobs()
 			jobs.Wait()
@@ -213,7 +264,9 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 			_ = meter.Close()
 			return nil, nil, err
 		}
-		rec := newReconciler(store, sd.api, cfg, cat, alert)
+	}
+	if sd != nil {
+		rec = newReconciler(store, sd.api, cfg, cat, alert)
 		webhook = &billing.Webhook{Secret: sd.webhookSecret, Ledger: store, Reconcile: rec.Subscription}
 		jobs.Add(1)
 		go func() {
@@ -228,12 +281,40 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 			})
 		}()
 	}
+	if pd != nil {
+		web = &portal.Server{
+			Store: store, Catalog: cat, Games: cfg.GameNames(), KnownStores: cfg.KnownStores,
+			Sessions:          &session.Codec{Secret: pd.sessionSecret, Secure: strings.HasPrefix(cfg.PublicURL, "https://")},
+			Mail:              pd.mail,
+			PublicURL:         strings.TrimRight(cfg.PublicURL, "/"),
+			PricingURL:        cfg.PricingURL,
+			SuccessPath:       cfg.Stripe.SuccessPath,
+			CancelPath:        cfg.Stripe.CancelPath,
+			AdminEmails:       cfg.AdminEmails,
+			TrialDays:         cfg.TrialDays,
+			TrialSecret:       pd.trialSecret,
+			LoginLinksPerHour: cfg.LoginLinksPerHour,
+			ClientIPHeader:    cfg.ClientIPHeader,
+		}
+		if sd != nil {
+			web.Stripe = sd.api
+			web.Checkout = newCheckout(store, sd.api, cfg, cat)
+			web.Reconcile = rec.Subscription
+			web.ReconcileAll = rec.All
+		}
+		jobs.Add(1)
+		go func() {
+			defer jobs.Done()
+			runDaily(jobsCtx, 9, 0, web.SendTrialReminders)
+		}()
+	}
 
 	mux := newMux(muxDeps{
 		games:       handler.GameNames(),
 		healthy:     store.PingContext,
 		gateway:     handler,
 		webhook:     webhook,
+		portal:      web,
 		successPath: cfg.Stripe.SuccessPath,
 		cancelPath:  cfg.Stripe.CancelPath,
 	})
@@ -277,6 +358,7 @@ type muxDeps struct {
 	healthy     func(context.Context) error
 	gateway     http.Handler
 	webhook     http.Handler
+	portal      *portal.Server
 	successPath string
 	cancelPath  string
 }
@@ -304,6 +386,11 @@ func newMux(d muxDeps) http.Handler {
 	})
 	if d.webhook != nil {
 		mux.Handle("/stripe/webhook", d.webhook)
+	}
+	switch {
+	case d.portal != nil:
+		d.portal.Register(mux)
+	case d.webhook != nil:
 		mux.HandleFunc(d.successPath, plainPage("Payment received. Your access is being set up and your key will work within a minute. You can close this page."))
 		mux.HandleFunc(d.cancelPath, plainPage("Checkout cancelled. Nothing was charged. You can close this page."))
 	}

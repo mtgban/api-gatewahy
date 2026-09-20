@@ -13,6 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mtgban/api-gatewahy/config"
+	"github.com/mtgban/api-gatewahy/mailer"
+	"github.com/mtgban/api-gatewahy/portal"
+	"github.com/mtgban/api-gatewahy/session"
 	"github.com/mtgban/mtgban-website/apiproductlist"
 )
 
@@ -262,6 +266,66 @@ func TestCheckCatalogStores(t *testing.T) {
 	err := checkCatalogStores(cat, []string{"CK", "SCG"})
 	if err == nil || !strings.Contains(err.Error(), `"StarCityGames"`) {
 		t.Errorf("missing shorthand: %v", err)
+	}
+}
+
+func TestMuxMountsPortal(t *testing.T) {
+	web := &portal.Server{
+		Catalog: apiproductlist.MustLoad(), Games: []string{"magic"},
+		Sessions:   &session.Codec{Secret: []byte("0123456789abcdef0123456789abcdef")},
+		PricingURL: "https://mtgban.com/api-plans", SuccessPath: "/checkout/success", CancelPath: "/checkout/cancel",
+	}
+	// The real gateway handler answers an unmatched /v1/ path with a JSON 404
+	// (gateway/handler.go's writeError); http.NotFoundHandler here would give
+	// a false failure on the last assertion below, so mimic that shape.
+	jsonNotFound := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error": "not found"}`))
+	})
+	mux := newMux(muxDeps{games: []string{"magic"}, healthy: func(context.Context) error { return nil }, gateway: jsonNotFound,
+		portal: web, successPath: "/checkout/success", cancelPath: "/checkout/cancel"})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	if rec.Code != 302 || rec.Header().Get("Location") != "https://mtgban.com/api-plans" {
+		t.Errorf("root: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/login", nil))
+	if rec.Code != 200 || !strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
+		t.Errorf("login: %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/nope.json", nil))
+	if rec.Code != 404 || rec.Header().Get("Content-Type") != "application/json" {
+		t.Errorf("api fallthrough still json: %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+}
+
+func TestPortalDepsFromEnv(t *testing.T) {
+	cfg := &config.Config{Mail: config.MailConfig{From: "MTGBAN <no-reply@mtgban.com>"}}
+	t.Setenv("GATEWAY_SESSION_SECRET", "")
+	if d, err := portalDepsFromEnv(cfg, io.Discard); d != nil || err != nil {
+		t.Errorf("off: %v %v", d, err)
+	}
+	t.Setenv("GATEWAY_SESSION_SECRET", "short")
+	t.Setenv("TRIAL_SECRET", "t")
+	if _, err := portalDepsFromEnv(cfg, io.Discard); err == nil {
+		t.Error("short secret accepted")
+	}
+	t.Setenv("GATEWAY_SESSION_SECRET", "0123456789abcdef0123456789abcdef")
+	t.Setenv("TRIAL_SECRET", "")
+	if _, err := portalDepsFromEnv(cfg, io.Discard); err == nil {
+		t.Error("missing TRIAL_SECRET accepted")
+	}
+	t.Setenv("TRIAL_SECRET", "t")
+	t.Setenv("MAIL_SMTP_HOST", "")
+	d, err := portalDepsFromEnv(cfg, io.Discard)
+	if err != nil || d == nil {
+		t.Fatalf("%v %v", d, err)
+	}
+	if _, ok := d.mail.(*mailer.Log); !ok {
+		t.Errorf("mail %T, want the logging mailer", d.mail)
 	}
 }
 

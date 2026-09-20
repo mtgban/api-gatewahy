@@ -1,0 +1,5 @@
+{{template "header" .}}
+<h1>Check your inbox</h1>
+{{with .Data}}<p>If <strong>{{.Email}}</strong> can receive mail, a sign-in link is on its way. It works once and expires in {{.Minutes}} minutes.</p>{{end}}
+<p class="dim">Nothing arrived? Check spam, then <a href="/login">request another link</a>.</p>
+{{template "footer" .}}

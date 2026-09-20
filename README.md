@@ -49,6 +49,37 @@ Meta endpoints, unauthenticated: `/healthz` (200 when the database pings
 and at least one game is configured) and `/v1/games.json` (the configured
 game names).
 
+## Customer pages
+
+When `GATEWAY_SESSION_SECRET` is set the gateway also serves the customer
+portal on the same host. Game sites render the pricing page and hand off
+here; every page links back to the site the customer came from. Portal
+pages send `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors
+'none'`, and `Referrer-Policy: no-referrer`; `/static/portal.css` is the
+only static asset.
+
+| Route | Auth | Purpose |
+| --- | --- | --- |
+| `GET /` | none | Redirects to `pricing_url`. |
+| `GET /checkout` | none | Receives the plan from a game site's configurator; shows login or the confirm page. |
+| `POST /checkout` | session + CSRF | Creates the Stripe Checkout Session. |
+| `GET /checkout/success`, `/checkout/cancel` | session (success only) | Landing after Stripe. |
+| `GET /login`, `POST /login`, `GET /login/{token}`, `POST /login/{token}` | none | Magic-link sign-in; links live 15 minutes. `GET /login/{token}` confirms and `POST /login/{token}` signs in; the link is consumed on the sign-in POST. |
+| `POST /logout` | session + CSRF | Clears the cookie. |
+| `GET /account`, `POST /account/keys`, `POST /account/keys/{id}/revoke`, `POST /account/plan`, `GET /portal` | session (+ CSRF on POST) | Keys, usage, entitlements, Stripe portal, plan change. |
+| `GET /trial`, `POST /trial`, `GET /session`, `POST /session` | signed handoff token | `GET /trial` and `GET /session` show a confirm page; `POST /trial` grants the Patreon trial and `POST /session` signs in. Each handoff token is single-use (its nonce is burned on accept). |
+| `GET /admin/...` | session, email in `admin_emails` | Accounts, entitlements, invites, usage, reconcile. |
+
+Sessions are a signed cookie (`ban_session`, 30 days, host-only); suspending
+an account ends its sessions on the next request. The trial lasts
+`trial_days` (15 by default) of all data for every configured game, once
+per Patreon email every 180 days; a reminder mails three days before it
+ends. Rotating `GATEWAY_SESSION_SECRET` signs everyone out, which is the
+emergency logout. Token-consuming posts (`/login/{token}`, `/trial`,
+`/session`) are accepted only from the gateway's own origin
+(`Sec-Fetch-Site` or `Origin`), so a foreign page cannot sign a visitor
+into someone else's account.
+
 ## Admin subcommands
 
 All admin subcommands take `-config <path>` (or `BAN_CONFIG_PATH`). The flag
@@ -151,6 +182,11 @@ JSON, named by `-config` or `BAN_CONFIG_PATH` (a `b2://` path needs
 | `stripe.grace_days` | `10` |
 | `stripe.success_path` | `/checkout/success` |
 | `stripe.cancel_path` | `/checkout/cancel` |
+| `pricing_url` | `https://mtgban.com/api-plans` |
+| `admin_emails` | (none) |
+| `mail.from` | `MTGBAN <no-reply@mtgban.com>` |
+| `trial_days` | `15` |
+| `login_links_per_hour` | `5` |
 
 `cache_ttl_seconds` is how long a resolved key stays cached, and
 `stale_grace_seconds` is how much longer the gateway keeps serving that
@@ -187,7 +223,11 @@ and accept the loss during one.
 tuning (`readonly`, `max_open_conns`, `max_idle_conns`,
 `conn_max_lifetime_seconds`). `games` maps a game name to
 `{"upstream": "https://...", "secret": "..."}`; the secret must match the
-value under that game's `api_user_secrets["gateway@mtgban.com"]`.
+value under that game's `api_user_secrets["gateway@mtgban.com"]`. The
+gateway creates `magic_links`, `trials`, and `handoff_nonces` at startup
+through `ensureSchema`, so the database role needs `CREATE` on the schema
+on the first boot after this deploy (the `apiaccess_app` role already has
+it).
 
 `public_url` is where customers land after Stripe Checkout:
 `stripe.success_path` and `stripe.cancel_path` are joined onto it.
@@ -212,6 +252,14 @@ customer-facing reminders during that window.
   endpoint. Required by `serve` when `STRIPE_SECRET_KEY` is set.
 - `STRIPE_TEST_KEY`: a `sk_test_` key for the `billing` package's Stripe
   tests; tests skip when it is unset.
+- `GATEWAY_SESSION_SECRET`: turns the customer pages on; at least 32
+  characters. Signs the session, pending-checkout, and CSRF tokens.
+- `TRIAL_SECRET`: shared with every game deployment; verifies the Patreon
+  handoff tokens (`/trial`, `/session`). Required when the portal is on.
+- `MAIL_SMTP_HOST`, `MAIL_SMTP_PORT` (587), `MAIL_SMTP_USER`,
+  `MAIL_SMTP_PASS`: STARTTLS SMTP for sign-in links and notices. With no
+  host, mail is written to the log instead, sign-in links included, which
+  is only acceptable while no customer can reach the host.
 
 ## Running locally
 
