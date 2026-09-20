@@ -88,6 +88,46 @@ func (c *Client) GetAccountByStripeCustomer(ctx context.Context, customerID stri
 		`SELECT `+accountCols+` FROM accounts WHERE stripe_customer_id = $1`, customerID))
 }
 
+// GetOrCreateAccount returns the account for email, creating an active one
+// with note when none exists. An existing row keeps its own note.
+func (c *Client) GetOrCreateAccount(ctx context.Context, email, note string) (Account, error) {
+	return scanAccount(c.db.QueryRowContext(ctx,
+		`INSERT INTO accounts (email, note) VALUES ($1, $2)
+		 ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
+		 RETURNING `+accountCols, NormalizeEmail(email), note))
+}
+
+// SetAccountNote replaces the operator note.
+func (c *Client) SetAccountNote(ctx context.Context, id int64, note string) error {
+	res, err := c.db.ExecContext(ctx, `UPDATE accounts SET note = $2 WHERE id = $1`, id, note)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SearchAccounts lists accounts whose email contains q, case-insensitively.
+func (c *Client) SearchAccounts(ctx context.Context, q string) ([]Account, error) {
+	pattern := "%" + strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(strings.TrimSpace(q)) + "%"
+	rows, err := c.db.QueryContext(ctx, `SELECT `+accountCols+` FROM accounts WHERE email ILIKE $1 ORDER BY email LIMIT 200`, pattern)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Account
+	for rows.Next() {
+		a, err := scanAccount(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // ListAccounts returns every account, oldest first.
 func (c *Client) ListAccounts(ctx context.Context) ([]Account, error) {
 	rows, err := c.db.QueryContext(ctx, `SELECT `+accountCols+` FROM accounts ORDER BY id`)

@@ -71,6 +71,27 @@ var schemaStatements = []string{
     received_at  timestamptz NOT NULL DEFAULT now(),
     processed_at timestamptz
 )`,
+	// Phase 3: portal.
+	`CREATE TABLE IF NOT EXISTS magic_links (
+    token_hash  text PRIMARY KEY,
+    account_id  bigint NOT NULL REFERENCES accounts(id),
+    expires_at  timestamptz NOT NULL,
+    used_at     timestamptz,
+    created_at  timestamptz NOT NULL DEFAULT now()
+)`,
+	`CREATE TABLE IF NOT EXISTS trials (
+    id               bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    patreon_email    text NOT NULL,
+    account_id       bigint NOT NULL REFERENCES accounts(id),
+    granted_at       timestamptz NOT NULL DEFAULT now(),
+    ends_at          timestamptz NOT NULL,
+    reminder_sent_at timestamptz
+)`,
+	`CREATE INDEX IF NOT EXISTS idx_trials_email_granted ON trials (patreon_email, granted_at DESC)`,
+	`CREATE TABLE IF NOT EXISTS handoff_nonces (
+    nonce      text PRIMARY KEY,
+    expires_at timestamptz NOT NULL
+)`,
 }
 
 func ensureSchema(db *sql.DB) error {
