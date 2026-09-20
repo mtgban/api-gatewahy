@@ -30,9 +30,13 @@ type Client struct {
 
 var _ API = (*Client)(nil)
 
-// NewClient returns a Client for the secret key.
+// NewClient returns a Client for the secret key. Stripe errors come back as
+// return values, so the library's own error logging is switched off.
 func NewClient(secretKey string) *Client {
-	return &Client{sc: stripe.NewClient(secretKey)}
+	backends := stripe.NewBackendsWithConfig(&stripe.BackendConfig{
+		LeveledLogger: &stripe.LeveledLogger{Level: stripe.LevelNull},
+	})
+	return &Client{sc: stripe.NewClient(secretKey, stripe.WithBackends(backends))}
 }
 
 // listLimit is Stripe's maximum page size; the iterator pages past it.

@@ -62,7 +62,7 @@ func TestCheckoutSessionPerPackageAgainstStripe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	account := apiaccess.Account{ID: 1, Email: "integration@example.com", StripeCustomerID: cust.ID}
+	account := apiaccess.Account{ID: 1, Email: "integration@example.com", Status: "active", StripeCustomerID: cust.ID}
 	co := &Checkout{
 		Store: newMemStore(account), API: api, Catalog: testCatalog, Games: []string{"magic", "pokemon"},
 		SuccessURL: "https://api.mtgban.com/checkout/success", CancelURL: "https://api.mtgban.com/checkout/cancel",
