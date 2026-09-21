@@ -268,10 +268,6 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 			abort()
 			return nil, nil, err
 		}
-		if err := checkCatalogGames(cat, cfg.GameNames()); err != nil {
-			abort()
-			return nil, nil, err
-		}
 	}
 	if sd != nil {
 		rec = newReconciler(store, sd.api, cfg, cat, alert)
@@ -354,20 +350,6 @@ func checkCatalogStores(cat *apiproductlist.ProductList, known []string) error {
 			if !knownSet[sh] {
 				return fmt.Errorf("known_stores is missing catalog shorthand %q; add it or clear known_stores", sh)
 			}
-		}
-	}
-	return nil
-}
-
-// checkCatalogGames fails startup if the catalog requires a game the config does not serve.
-func checkCatalogGames(cat *apiproductlist.ProductList, games []string) error {
-	known := map[string]bool{}
-	for _, g := range games {
-		known[g] = true
-	}
-	for _, g := range cat.IncludedGames {
-		if !known[g] {
-			return fmt.Errorf("games is missing catalog included game %q", g)
 		}
 	}
 	return nil

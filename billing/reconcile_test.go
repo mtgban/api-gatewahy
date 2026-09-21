@@ -57,7 +57,7 @@ func TestReconcileWritesTheRow(t *testing.T) {
 	s := newMemStore(testAccount)
 	var alerts []string
 	r := newTestReconciler(f, s, &alerts)
-	plan, _ := Plan{Package: "starter", Interval: "monthly", Games: []string{"pokemon"}, Stores: []string{"CK", "SCG"}}.Normalize(testCatalog)
+	plan, _ := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"CK", "SCG"}}.Normalize(testCatalog)
 	f.addSub(t, "sub_1", "cus_x", stripe.SubscriptionStatusActive, plan.Metadata(7), periodEnd,
 		fakeItem{"starter_monthly", 1}, fakeItem{"extra_store_monthly", 1}, fakeItem{"extra_game_monthly", 1})
 
@@ -71,7 +71,7 @@ func TestReconcileWritesTheRow(t *testing.T) {
 	if e.AccountID != 7 || e.Source != "stripe" || e.Status != "active" || e.ValidUntil != nil || e.ExternalRef != "sub_1" ||
 		!reflect.DeepEqual(e.Games, []string{"magic", "pokemon"}) || e.StoreScope != "TCGLow,TCGMarket,TCGDirect,TCGDirectNet,TCGPlayer,CK,SCG" ||
 		!reflect.DeepEqual(e.Modes, []string{"retail", "buylist"}) || !reflect.DeepEqual(e.Addons, []string{"extra_store:1", "extra_game:1"}) ||
-		!strings.Contains(e.Note, "TCGplayer plus one store") {
+		!strings.Contains(e.Note, "À la carte") {
 		t.Errorf("row %+v", e)
 	}
 	if s.notified != 1 || len(alerts) != 0 {
@@ -92,7 +92,7 @@ func TestReconcileStatusesAndGrace(t *testing.T) {
 	s := newMemStore(testAccount)
 	var alerts []string
 	r := newTestReconciler(f, s, &alerts)
-	plan, _ := Plan{Package: "all_data", Interval: "monthly"}.Normalize(testCatalog)
+	plan, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
 	f.addSub(t, "sub_due", "cus_x", stripe.SubscriptionStatusPastDue, plan.Metadata(7), periodEnd, fakeItem{"all_data_monthly", 1})
 	f.addSub(t, "sub_gone", "cus_x", stripe.SubscriptionStatusCanceled, plan.Metadata(7), periodEnd, fakeItem{"all_data_monthly", 1})
 
@@ -119,7 +119,7 @@ func TestReconcileFindsAccountByCustomer(t *testing.T) {
 	s := newMemStore(withCustomer)
 	var alerts []string
 	r := newTestReconciler(f, s, &alerts)
-	plan, _ := Plan{Package: "all_data", Interval: "monthly"}.Normalize(testCatalog)
+	plan, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
 	md := plan.Metadata(0)
 	delete(md, "account_id")
 	f.addSub(t, "sub_1", "cus_7", stripe.SubscriptionStatusActive, md, periodEnd, fakeItem{"all_data_monthly", 1})
@@ -148,7 +148,7 @@ func TestReconcileMetadataWinsOverItems(t *testing.T) {
 	s := newMemStore(testAccount)
 	var alerts []string
 	r := newTestReconciler(f, s, &alerts)
-	plan, _ := Plan{Package: "all_stores", Interval: "monthly", Games: []string{"pokemon"}}.Normalize(testCatalog)
+	plan, _ := Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic", "pokemon"}}.Normalize(testCatalog)
 	// The dashboard was used to add a second extra game without touching metadata.
 	f.addSub(t, "sub_1", "cus_x", stripe.SubscriptionStatusActive, plan.Metadata(7), periodEnd, fakeItem{"all_stores_monthly", 1}, fakeItem{"extra_game_monthly", 2})
 	if err := r.Subscription(context.Background(), "sub_1"); err != nil {
@@ -225,7 +225,7 @@ func TestReconcileAll(t *testing.T) {
 	s := newMemStore(testAccount)
 	var alerts []string
 	r := newTestReconciler(f, s, &alerts)
-	plan, _ := Plan{Package: "all_data", Interval: "monthly"}.Normalize(testCatalog)
+	plan, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
 	f.addSub(t, "sub_a", "cus_x", stripe.SubscriptionStatusActive, plan.Metadata(7), periodEnd, fakeItem{"all_data_monthly", 1})
 	f.addSub(t, "sub_b", "cus_x", stripe.SubscriptionStatusPastDue, plan.Metadata(7), periodEnd, fakeItem{"all_data_monthly", 1})
 	// Canceled in Stripe, so not listed, but still active here: the webhook was missed.
@@ -269,7 +269,7 @@ func TestReconcileToleratesReplacedPrice(t *testing.T) {
 	s := newMemStore(testAccount)
 	var alerts []string
 	r := newTestReconciler(f, s, &alerts)
-	plan, _ := Plan{Package: "all_stores", Interval: "monthly"}.Normalize(testCatalog)
+	plan, _ := Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
 	f.addSub(t, "sub_1", "cus_x", stripe.SubscriptionStatusActive, plan.Metadata(7), periodEnd, fakeItem{"all_stores_monthly", 1})
 
 	// Simulate Seed's replacement path clearing the old price's lookup key.

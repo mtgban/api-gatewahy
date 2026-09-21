@@ -38,7 +38,7 @@ func TestCheckoutCreatesSessionAndCustomer(t *testing.T) {
 	co := newTestCheckout(f, s)
 	ctx := context.Background()
 
-	url, err := co.Create(ctx, Request{Account: testAccount, Plan: Plan{Package: "starter", Interval: "monthly", Games: []string{"pokemon"}, Stores: []string{"CK", "SCG"}}})
+	url, err := co.Create(ctx, Request{Account: testAccount, Plan: Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"CK", "SCG"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestCheckoutCreatesSessionAndCustomer(t *testing.T) {
 	}
 
 	// A second checkout reuses the stored customer.
-	if _, err := co.Create(ctx, Request{Account: s.accounts[7], Plan: Plan{Package: "all_data", Interval: "monthly"}}); err != nil {
+	if _, err := co.Create(ctx, Request{Account: s.accounts[7], Plan: Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if f.calls["CreateCustomer"] != 1 {
@@ -86,10 +86,10 @@ func TestCheckoutRejectsBadPlans(t *testing.T) {
 	f := seededFake(t)
 	co := newTestCheckout(f, newMemStore(testAccount))
 	ctx := context.Background()
-	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: Plan{Package: "all_data", Interval: "quarterly"}}); !errors.Is(err, ErrInviteRequired) {
+	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: Plan{Package: "all_data", Interval: "quarterly", Games: []string{"magic"}}}); !errors.Is(err, ErrInviteRequired) {
 		t.Errorf("quarterly without invite: %v", err)
 	}
-	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: Plan{Package: "starter", Interval: "monthly"}}); err == nil {
+	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}}}); err == nil {
 		t.Error("starter without stores accepted")
 	}
 	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: Plan{Package: "all_data", Interval: "monthly", Games: []string{"yugioh"}}}); err == nil {
@@ -97,7 +97,7 @@ func TestCheckoutRejectsBadPlans(t *testing.T) {
 	}
 	suspended := testAccount
 	suspended.Status = "suspended"
-	if _, err := co.Create(ctx, Request{Account: suspended, Plan: Plan{Package: "all_data", Interval: "monthly"}}); err == nil || !strings.Contains(err.Error(), "suspended") {
+	if _, err := co.Create(ctx, Request{Account: suspended, Plan: Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}}); err == nil || !strings.Contains(err.Error(), "suspended") {
 		t.Errorf("suspended account: %v", err)
 	}
 	if len(f.sessions) != 0 || f.calls["CreateCustomer"] != 0 {
@@ -111,7 +111,7 @@ func TestCheckoutInvites(t *testing.T) {
 	co := newTestCheckout(f, s)
 	ctx := context.Background()
 	later := co.Now().Add(24 * time.Hour)
-	quarterly := Plan{Package: "all_stores", Interval: "quarterly"}
+	quarterly := Plan{Package: "all_stores", Interval: "quarterly", Games: []string{"magic"}}
 
 	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: quarterly, Invite: "nope"}); !errors.Is(err, apiaccess.ErrInviteInvalid) {
 		t.Errorf("unknown invite: %v", err)
@@ -156,7 +156,7 @@ func TestCheckoutInvites(t *testing.T) {
 func TestCheckoutNeedsSeededPrices(t *testing.T) {
 	f := newFakeAPI()
 	co := newTestCheckout(f, newMemStore(testAccount))
-	_, err := co.Create(context.Background(), Request{Account: testAccount, Plan: Plan{Package: "all_data", Interval: "monthly"}})
+	_, err := co.Create(context.Background(), Request{Account: testAccount, Plan: Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}})
 	if !errors.Is(err, ErrPriceNotSeeded) {
 		t.Errorf("unseeded: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestCheckoutEveryPackage(t *testing.T) {
 	f := seededFake(t)
 	co := newTestCheckout(f, newMemStore(testAccount))
 	for _, pkg := range testCatalog.Packages {
-		plan := Plan{Package: pkg.Key, Interval: "monthly"}
+		plan := Plan{Package: pkg.Key, Interval: "monthly", Games: []string{"magic"}}
 		if pkg.StoreScope == apiproductlist.StoreScopeExplicit {
 			plan.Stores = []string{"CK"}
 		}

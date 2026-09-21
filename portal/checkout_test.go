@@ -21,7 +21,7 @@ func TestCheckoutWithoutSessionShowsLoginAndKeepsThePlan(t *testing.T) {
 	ts := newTestServer(t)
 	rec := ts.do("GET", starterQuery, "")
 	body := rec.Body.String()
-	if rec.Code != 200 || !strings.Contains(body, `name="email"`) || !strings.Contains(body, "TCGplayer plus one store") || !strings.Contains(body, "https://pokemon.mtgban.com/api-login") {
+	if rec.Code != 200 || !strings.Contains(body, `name="email"`) || !strings.Contains(body, "À la carte") || !strings.Contains(body, "https://pokemon.mtgban.com/api-login") {
 		t.Fatalf("%d %s", rec.Code, body)
 	}
 	ck := cookieNamed(rec, session.PendingName)
@@ -194,7 +194,7 @@ func TestSuccessAndCancelPages(t *testing.T) {
 	}
 	ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
 	rec = ts.do("GET", "/checkout/success", "", ck)
-	if !strings.Contains(rec.Body.String(), "All EU/US stores, no sealed") || !strings.Contains(rec.Body.String(), `action="/account/keys"`) {
+	if !strings.Contains(rec.Body.String(), "Base Access") || !strings.Contains(rec.Body.String(), `action="/account/keys"`) {
 		t.Errorf("success with entitlement: %s", rec.Body.String())
 	}
 	if rec := ts.do("GET", "/checkout/success", ""); rec.Code != 302 {

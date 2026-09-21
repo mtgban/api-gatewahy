@@ -86,7 +86,7 @@ func TestCatalogEntitlementRoundtrip(t *testing.T) {
 	}
 
 	for _, pkg := range testCatalog.Packages {
-		plan := Plan{Package: pkg.Key, Interval: "monthly"}
+		plan := Plan{Package: pkg.Key, Interval: "monthly", Games: []string{"magic"}}
 		if pkg.StoreScope == apiproductlist.StoreScopeExplicit {
 			plan.Stores = []string{"CK", "SCG"}
 		}

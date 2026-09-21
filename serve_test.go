@@ -268,18 +268,6 @@ func TestCheckCatalogStores(t *testing.T) {
 		t.Errorf("missing shorthand: %v", err)
 	}
 }
-
-func TestCheckCatalogGames(t *testing.T) {
-	cat := &apiproductlist.ProductList{IncludedGames: []string{"magic"}}
-	if err := checkCatalogGames(cat, []string{"magic", "pokemon"}); err != nil {
-		t.Errorf("included game known: %v", err)
-	}
-	err := checkCatalogGames(cat, []string{"pokemon"})
-	if err == nil || !strings.Contains(err.Error(), `"magic"`) {
-		t.Errorf("missing included game: %v", err)
-	}
-}
-
 func TestMuxMountsPortal(t *testing.T) {
 	web := &portal.Server{
 		Catalog: apiproductlist.MustLoad(), Games: []string{"magic"},
