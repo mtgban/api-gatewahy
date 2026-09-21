@@ -8,6 +8,9 @@ import (
 	"github.com/mtgban/api-gatewahy/apiaccess"
 )
 
+// ErrManySubscriptions means the account has more than one active Stripe subscription.
+var ErrManySubscriptions = errors.New("billing: account has more than one active Stripe subscription")
+
 // SubscriptionFor picks the account's one active Stripe subscription from its entitlements.
 func SubscriptionFor(ents []apiaccess.Entitlement) (string, error) {
 	var refs []string
@@ -22,5 +25,5 @@ func SubscriptionFor(ents []apiaccess.Entitlement) (string, error) {
 	case 1:
 		return refs[0], nil
 	}
-	return "", fmt.Errorf("account has %d active Stripe subscriptions (%s); name one with -sub", len(refs), strings.Join(refs, ", "))
+	return "", fmt.Errorf("%w: account has %d active Stripe subscriptions (%s); name one with -sub", ErrManySubscriptions, len(refs), strings.Join(refs, ", "))
 }
