@@ -120,6 +120,7 @@ type page struct {
 	Notice     string
 	PricingURL string
 	PrivacyURL string
+	PublicURL  string
 	Data       any
 }
 
@@ -210,7 +211,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 // pageFor is the common page frame for sess.
 func (s *Server) pageFor(sess *session.Session, title string) page {
-	p := page{Title: title, Session: sess, PricingURL: s.PricingURL, PrivacyURL: siteOrigin(s.PricingURL) + "/privacy"}
+	p := page{Title: title, Session: sess, PricingURL: s.PricingURL, PublicURL: s.PublicURL, PrivacyURL: siteOrigin(s.PricingURL) + "/privacy"}
 	if sess != nil {
 		p.CSRF = s.Sessions.CSRF(*sess)
 	}

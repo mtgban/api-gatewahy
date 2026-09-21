@@ -9,7 +9,7 @@
   <h2 style="margin-top:0">Your new key</h2>
   <div class="key-box">{{.NewKey}}</div>
   <p class="msg msg-error" style="margin-top:0.8em">Copy it now. It is shown once and cannot be recovered; create a new key if you lose it.</p>
-  <p class="dim">Use it as <code>Authorization: Bearer {{.NewKey}}</code> against <code>{{$.PricingURL}}</code>'s API host, see the guide linked from the plans page.</p>
+  <p class="dim">Send requests to <code>{{$.PublicURL}}/v1/{game}/mtgban/&hellip;</code> with <code>Authorization: Bearer {{.NewKey}}</code>. Paths and fields are in the guide linked from the plans page.</p>
 </div>
 {{end}}
 
