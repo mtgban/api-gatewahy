@@ -23,9 +23,12 @@ func TestNormalizeCanonicalizes(t *testing.T) {
 	if !reflect.DeepEqual(p, want) {
 		t.Errorf("got %+v want %+v", p, want)
 	}
-	p, err = Plan{Package: "all_data", Interval: "quarterly"}.Normalize(testCatalog)
-	if err != nil || !reflect.DeepEqual(p.Games, []string{"magic"}) || len(p.Stores) != 0 {
-		t.Errorf("included game not added: %+v %v", p, err)
+	p, err = Plan{Package: "all_data", Interval: "quarterly", Games: []string{"Pokemon"}}.Normalize(testCatalog)
+	if err != nil || !reflect.DeepEqual(p.Games, []string{"pokemon"}) || len(p.Stores) != 0 {
+		t.Errorf("any game can be the included one: %+v %v", p, err)
+	}
+	if _, err := (Plan{Package: "all_data", Interval: "quarterly"}).Normalize(testCatalog); !IsValidation(err) {
+		t.Errorf("no game should be a validation error, got %v", err)
 	}
 }
 
@@ -35,12 +38,12 @@ func TestNormalizeRejects(t *testing.T) {
 		plan Plan
 		want string
 	}{
-		{"unknown package", Plan{Package: "gold", Interval: "monthly"}, "package"},
-		{"unknown interval", Plan{Package: "all_data", Interval: "weekly"}, "interval"},
-		{"starter without stores", Plan{Package: "starter", Interval: "monthly"}, "store"},
-		{"starter with TCG", Plan{Package: "starter", Interval: "monthly", Stores: []string{"TCG"}}, "not selectable"},
-		{"starter unknown store", Plan{Package: "starter", Interval: "monthly", Stores: []string{"XYZ"}}, "not selectable"},
-		{"preset with stores", Plan{Package: "all_stores", Interval: "monthly", Stores: []string{"CK"}}, "store list"},
+		{"unknown package", Plan{Package: "gold", Interval: "monthly", Games: []string{"magic"}}, "package"},
+		{"unknown interval", Plan{Package: "all_data", Interval: "weekly", Games: []string{"magic"}}, "interval"},
+		{"starter without stores", Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}}, "store"},
+		{"starter with TCG", Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"TCG"}}, "not selectable"},
+		{"starter unknown store", Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"XYZ"}}, "not selectable"},
+		{"preset with stores", Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"CK"}}, "store list"},
 	}
 	for _, c := range cases {
 		_, err := c.plan.Normalize(testCatalog)
@@ -54,13 +57,13 @@ func TestValidate(t *testing.T) {
 	if _, err := (Plan{Package: "all_data", Interval: "monthly", Games: []string{"yugioh"}}).Validate(testCatalog, testGames, false); err == nil || !strings.Contains(err.Error(), "game") {
 		t.Errorf("unknown game: %v", err)
 	}
-	if _, err := (Plan{Package: "all_data", Interval: "quarterly"}).Validate(testCatalog, testGames, false); !errors.Is(err, ErrInviteRequired) {
+	if _, err := (Plan{Package: "all_data", Interval: "quarterly", Games: []string{"magic"}}).Validate(testCatalog, testGames, false); !errors.Is(err, ErrInviteRequired) {
 		t.Errorf("quarterly without invite: %v", err)
 	}
-	if _, err := (Plan{Package: "all_data", Interval: "quarterly"}).Validate(testCatalog, testGames, true); err != nil {
+	if _, err := (Plan{Package: "all_data", Interval: "quarterly", Games: []string{"magic"}}).Validate(testCatalog, testGames, true); err != nil {
 		t.Errorf("quarterly with invite: %v", err)
 	}
-	if _, err := (Plan{Package: "all_data", Interval: "monthly", Games: []string{"pokemon"}}).Validate(testCatalog, testGames, false); err != nil {
+	if _, err := (Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic", "pokemon"}}).Validate(testCatalog, testGames, false); err != nil {
 		t.Errorf("good plan: %v", err)
 	}
 }
@@ -74,25 +77,25 @@ func TestLineItemsAndTotal(t *testing.T) {
 	}{
 		{
 			"starter one store",
-			Plan{Package: "starter", Interval: "monthly", Stores: []string{"CK"}},
+			Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"CK"}},
 			[]LineItem{{"starter", "starter_monthly", 1, 20000}},
 			20000,
 		},
 		{
 			"starter three stores two games",
-			Plan{Package: "starter", Interval: "monthly", Games: []string{"pokemon"}, Stores: []string{"CK", "SCG", "CSI"}},
+			Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"CK", "SCG", "CSI"}},
 			[]LineItem{{"starter", "starter_monthly", 1, 20000}, {"extra_store", "extra_store_monthly", 2, 15000}, {"extra_game", "extra_game_monthly", 1, 15000}},
 			65000,
 		},
 		{
 			"all stores",
-			Plan{Package: "all_stores", Interval: "monthly"},
+			Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}},
 			[]LineItem{{"all_stores", "all_stores_monthly", 1, 50000}},
 			50000,
 		},
 		{
 			"all data quarterly two extra games",
-			Plan{Package: "all_data", Interval: "quarterly", Games: []string{"pokemon", "lorcana"}},
+			Plan{Package: "all_data", Interval: "quarterly", Games: []string{"magic", "pokemon", "lorcana"}},
 			[]LineItem{{"all_data", "all_data_quarterly", 1, 80000}, {"extra_game", "extra_game_quarterly", 2, 15000}},
 			330000,
 		},
@@ -112,7 +115,7 @@ func TestLineItemsAndTotal(t *testing.T) {
 }
 
 func TestMetadataRoundTrip(t *testing.T) {
-	p, _ := Plan{Package: "starter", Interval: "quarterly", Games: []string{"pokemon"}, Stores: []string{"CK", "SCG"}}.Normalize(testCatalog)
+	p, _ := Plan{Package: "starter", Interval: "quarterly", Games: []string{"magic", "pokemon"}, Stores: []string{"CK", "SCG"}}.Normalize(testCatalog)
 	m := p.Metadata(42)
 	want := map[string]string{"package": "starter", "interval": "quarterly", "games": "magic,pokemon", "stores": "CK,SCG", "account_id": "42"}
 	if !reflect.DeepEqual(m, want) {
@@ -122,7 +125,7 @@ func TestMetadataRoundTrip(t *testing.T) {
 	if err != nil || accountID != 42 || !reflect.DeepEqual(back, p) {
 		t.Errorf("round trip %+v %d %v", back, accountID, err)
 	}
-	empty, _ := Plan{Package: "all_data", Interval: "monthly"}.Normalize(testCatalog)
+	empty, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
 	back, _, err = PlanFromMetadata(empty.Metadata(1))
 	if err != nil || len(back.Stores) != 0 {
 		t.Errorf("empty stores round trip: %+v %v", back, err)
@@ -136,7 +139,7 @@ func TestMetadataRoundTrip(t *testing.T) {
 }
 
 func TestEntitlementAndAddons(t *testing.T) {
-	starter, _ := Plan{Package: "starter", Interval: "monthly", Games: []string{"pokemon"}, Stores: []string{"SCG", "CK"}}.Normalize(testCatalog)
+	starter, _ := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"SCG", "CK"}}.Normalize(testCatalog)
 	scope, modes := starter.Entitlement(testCatalog)
 	if scope != "TCGLow,TCGMarket,TCGDirect,TCGDirectNet,TCGPlayer,CK,SCG" || !reflect.DeepEqual(modes, []string{"retail", "buylist"}) {
 		t.Errorf("starter entitlement %q %v", scope, modes)
@@ -147,7 +150,7 @@ func TestEntitlementAndAddons(t *testing.T) {
 	if got := starter.Addons(testCatalog); !reflect.DeepEqual(got, []string{"extra_store:1", "extra_game:1"}) {
 		t.Errorf("starter addons %v", got)
 	}
-	allData, _ := Plan{Package: "all_data", Interval: "monthly"}.Normalize(testCatalog)
+	allData, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
 	scope, modes = allData.Entitlement(testCatalog)
 	if scope != "ALL_ACCESS" || len(modes) != 3 {
 		t.Errorf("all_data entitlement %q %v", scope, modes)
@@ -182,9 +185,9 @@ func TestNormalizeErrorsAreValidationErrors(t *testing.T) {
 }
 
 func TestDescribeAndDollars(t *testing.T) {
-	p, _ := Plan{Package: "starter", Interval: "quarterly", Games: []string{"pokemon"}, Stores: []string{"CK"}}.Normalize(testCatalog)
+	p, _ := Plan{Package: "starter", Interval: "quarterly", Games: []string{"magic", "pokemon"}, Stores: []string{"CK"}}.Normalize(testCatalog)
 	got := p.Describe(testCatalog)
-	for _, want := range []string{"TCGplayer plus one store", "magic,pokemon", "TCG,CK", "quarterly", "$1,050"} {
+	for _, want := range []string{"À la carte", "magic,pokemon", "TCG,CK", "quarterly", "$1,050"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("describe %q lacks %q", got, want)
 		}

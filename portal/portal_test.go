@@ -207,11 +207,11 @@ func TestDescribeEntitlement(t *testing.T) {
 		want entitlementView
 	}{
 		{apiaccess.Entitlement{Source: "stripe", Games: []string{"magic"}, StoreScope: "BASE_ACCESS", Modes: []string{"retail", "buylist"}},
-			entitlementView{Source: "Stripe subscription", Package: "All EU/US stores, no sealed", Games: "magic", Stores: "every EU and US store", Modes: "retail, buylist", Until: ""}},
+			entitlementView{Source: "Stripe subscription", Package: "Base Access", Games: "magic", Stores: "every EU and US store", Modes: "retail, buylist", Until: ""}},
 		{apiaccess.Entitlement{Source: "trial", Games: []string{"magic", "pokemon"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail", "buylist", "sealed"}, ValidUntil: &until},
-			entitlementView{Source: "Trial", Package: "All data", Games: "magic, pokemon", Stores: "every store", Modes: "retail, buylist, sealed", Until: "October 5, 2026", Trial: true}},
+			entitlementView{Source: "Trial", Package: "All Access", Games: "magic, pokemon", Stores: "every store", Modes: "retail, buylist, sealed", Until: "October 5, 2026", Trial: true}},
 		{apiaccess.Entitlement{Source: "manual", Games: []string{"magic"}, StoreScope: "TCGLow,TCGMarket,TCGDirect,TCGDirectNet,TCGPlayer,CK,ZZZ", Modes: []string{"retail"}},
-			entitlementView{Source: "Arranged with MTGBAN", Package: "TCGplayer plus one store", Games: "magic", Stores: "TCGplayer, Card Kingdom, ZZZ", Modes: "retail"}},
+			entitlementView{Source: "Arranged with MTGBAN", Package: "À la carte", Games: "magic", Stores: "TCGplayer, Card Kingdom, ZZZ", Modes: "retail"}},
 	}
 	for _, tc := range cases {
 		if got := ts.describeEntitlement(tc.e); got != tc.want {

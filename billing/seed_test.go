@@ -33,7 +33,7 @@ func TestSeedCreatesEverythingOnce(t *testing.T) {
 	if a == nil || a.UnitAmount != 15000 || a.Metadata["kind"] != "addon" || a.Metadata["addon"] != "extra_game" || a.Metadata["applies_to"] != "starter,all_stores,all_data" {
 		t.Errorf("extra_game_monthly %+v", a)
 	}
-	if prod := f.products[ProductID("all_data")]; prod == nil || prod.Name != "All data" || prod.Metadata["kind"] != "package" {
+	if prod := f.products[ProductID("all_data")]; prod == nil || prod.Name != "All Access" || prod.Metadata["kind"] != "package" {
 		t.Errorf("all_data product %+v", prod)
 	}
 
@@ -98,7 +98,7 @@ func TestSeedRefreshesDriftAndReactivates(t *testing.T) {
 	if !p.Active || p.Metadata["package"] != "all_data" || p.Metadata["stale"] != "" {
 		t.Errorf("price not refreshed: %+v", p)
 	}
-	if !f.products[ProductID("extra_store")].Active || f.products[ProductID("starter")].Name != "TCGplayer plus one store" {
+	if !f.products[ProductID("extra_store")].Active || f.products[ProductID("starter")].Name != "À la carte" {
 		t.Error("products not refreshed")
 	}
 }

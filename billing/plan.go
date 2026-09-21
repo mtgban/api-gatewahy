@@ -55,9 +55,9 @@ func invalid(format string, args ...any) error {
 }
 
 // Normalize canonicalizes the plan against the catalog: package and interval
-// exist, games are lowercase, sorted, and include the catalog's included
-// games, stores are uppercase, sorted, selectable, and only on an explicit
-// package, and every implied add-on applies to the package.
+// exist, at least one game is named, games are lowercase and sorted, stores
+// are uppercase, sorted, selectable, and only on an explicit package, and
+// every implied add-on applies to the package.
 func (p Plan) Normalize(cat *apiproductlist.ProductList) (Plan, error) {
 	pkg, ok := cat.Package(p.Package)
 	if !ok {
@@ -67,10 +67,8 @@ func (p Plan) Normalize(cat *apiproductlist.ProductList) (Plan, error) {
 		return Plan{}, invalid("unknown interval %q", p.Interval)
 	}
 	games := dedupe(p.Games, strings.ToLower)
-	for _, g := range cat.IncludedGames {
-		if !slices.Contains(games, g) {
-			games = append(games, g)
-		}
+	if len(games) == 0 {
+		return Plan{}, invalid("pick at least one game")
 	}
 	slices.Sort(games)
 	stores := dedupe(p.Stores, strings.ToUpper)
@@ -118,7 +116,7 @@ func (p Plan) Validate(cat *apiproductlist.ProductList, knownGames []string, hav
 }
 
 // LineItems derives what a normalized plan bills: the package, extra stores
-// past the included count, and games past the included ones.
+// past the included count, and games past the included count.
 func (p Plan) LineItems(cat *apiproductlist.ProductList) []LineItem {
 	pkg, _ := cat.Package(p.Package)
 	items := []LineItem{{Key: pkg.Key, LookupKey: apiproductlist.LookupKey(pkg.Key, p.Interval), Quantity: 1, Monthly: pkg.Monthly}}
@@ -127,7 +125,7 @@ func (p Plan) LineItems(cat *apiproductlist.ProductList) []LineItem {
 			items = append(items, p.addonItem(cat, AddonExtraStore, n))
 		}
 	}
-	if n := int64(len(p.Games) - len(cat.IncludedGames)); n > 0 {
+	if n := int64(len(p.Games) - cat.IncludedGames); n > 0 {
 		items = append(items, p.addonItem(cat, AddonExtraGame, n))
 	}
 	return items

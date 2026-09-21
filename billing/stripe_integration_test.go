@@ -68,7 +68,7 @@ func TestCheckoutSessionPerPackageAgainstStripe(t *testing.T) {
 		SuccessURL: "https://api.mtgban.com/checkout/success", CancelURL: "https://api.mtgban.com/checkout/cancel",
 	}
 	for _, pkg := range testCatalog.Packages {
-		plan := Plan{Package: pkg.Key, Interval: "monthly", Games: []string{"pokemon"}}
+		plan := Plan{Package: pkg.Key, Interval: "monthly", Games: []string{"magic", "pokemon"}}
 		if pkg.StoreScope == apiproductlist.StoreScopeExplicit {
 			plan.Stores = []string{"CK", "SCG"}
 		}
