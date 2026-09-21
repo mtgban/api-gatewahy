@@ -34,16 +34,29 @@ func scanTrial(row scanner) (Trial, error) {
 }
 
 // CreateTrial records a trial unless one for email was granted after notBefore.
+// A per-email advisory lock serializes concurrent grants.
 func (c *Client) CreateTrial(ctx context.Context, email string, accountID int64, endsAt, notBefore time.Time) (Trial, error) {
-	t, err := scanTrial(c.db.QueryRowContext(ctx,
+	email = NormalizeEmail(email)
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Trial{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "trial:"+email); err != nil {
+		return Trial{}, err
+	}
+	t, err := scanTrial(tx.QueryRowContext(ctx,
 		`INSERT INTO trials (patreon_email, account_id, ends_at)
 		 SELECT $1, $2, $3
 		  WHERE NOT EXISTS (SELECT 1 FROM trials WHERE patreon_email = $1 AND granted_at > $4)
-		 RETURNING `+trialCols, NormalizeEmail(email), accountID, endsAt, notBefore))
+		 RETURNING `+trialCols, email, accountID, endsAt, notBefore))
 	if errors.Is(err, ErrNotFound) {
 		return Trial{}, ErrTrialTooSoon
 	}
-	return t, err
+	if err != nil {
+		return Trial{}, err
+	}
+	return t, tx.Commit()
 }
 
 // LastTrial is the most recent trial for email, or ErrNotFound.
@@ -73,8 +86,18 @@ func (c *Client) TrialsToRemind(ctx context.Context, from, to time.Time) ([]Tria
 
 // MarkTrialReminded records that the ending-soon mail went out.
 func (c *Client) MarkTrialReminded(ctx context.Context, id int64, at time.Time) error {
-	_, err := c.db.ExecContext(ctx, `UPDATE trials SET reminder_sent_at = $2 WHERE id = $1`, id, at)
-	return err
+	res, err := c.db.ExecContext(ctx, `UPDATE trials SET reminder_sent_at = $2 WHERE id = $1`, id, at)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // DeleteTrial removes a trial whose entitlement could not be written.

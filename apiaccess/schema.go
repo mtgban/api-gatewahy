@@ -92,6 +92,18 @@ var schemaStatements = []string{
     nonce      text PRIMARY KEY,
     expires_at timestamptz NOT NULL
 )`,
+	`CREATE TABLE IF NOT EXISTS admin_actions (
+    id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    at         timestamptz NOT NULL DEFAULT now(),
+    actor      text NOT NULL,
+    action     text NOT NULL,
+    account_id bigint,
+    target     text NOT NULL DEFAULT '',
+    detail     text NOT NULL DEFAULT ''
+)`,
+	`CREATE INDEX IF NOT EXISTS idx_admin_actions_account ON admin_actions (account_id, at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_magic_links_expires ON magic_links (expires_at)`,
+	`CREATE INDEX IF NOT EXISTS idx_handoff_nonces_expires ON handoff_nonces (expires_at)`,
 }
 
 func ensureSchema(db *sql.DB) error {
