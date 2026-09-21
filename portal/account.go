@@ -24,6 +24,7 @@ type accountData struct {
 	HasStripe    bool
 	ChangeURL    string
 	TrialEnds    string
+	ReturnTo     string
 }
 
 type keyView struct {
@@ -51,6 +52,11 @@ func (s *Server) renderAccount(w http.ResponseWriter, r *http.Request, status in
 	ctx := r.Context()
 	now := s.now().UTC()
 	d := accountData{Account: a, NewKey: newKey, HasStripe: a.StripeCustomerID != "" && s.Stripe != nil, Month: now.Format("January 2006")}
+	if pv, err := s.Sessions.Pending(r); err == nil {
+		if rt := pv.Get("return_to"); rt != "" {
+			d.ReturnTo = validReturnTo(rt, s.PricingURL)
+		}
+	}
 	ents, err := s.Store.ListEntitlements(ctx, a.ID)
 	if err != nil {
 		s.logf("account %s: entitlements: %v", a.Email, err)
@@ -108,8 +114,15 @@ func mergeQuery(pricingURL string, q url.Values) string {
 	return u.String()
 }
 
+// keysPerHour caps how many keys one account can mint in a sliding hour.
+const keysPerHour = 10
+
 // createKey mints a key and shows it once.
 func (s *Server) createKey(w http.ResponseWriter, r *http.Request, sess session.Session, a apiaccess.Account) {
+	if !s.limit.allow("keys:"+itoa(a.ID), keysPerHour, s.now()) {
+		s.renderAccount(w, r, http.StatusTooManyRequests, sess, a, "", "", "Too many keys created in the last hour. Try again later.")
+		return
+	}
 	label := strings.TrimSpace(r.FormValue("label"))
 	if runes := []rune(label); len(runes) > 64 {
 		label = string(runes[:64])
@@ -187,13 +200,17 @@ func (s *Server) changePlan(w http.ResponseWriter, r *http.Request, sess session
 		return
 	}
 	subID, err := billing.SubscriptionFor(ents)
+	if errors.Is(err, billing.ErrManySubscriptions) {
+		s.fail(w, r, http.StatusBadRequest, manySubscriptionsMsg)
+		return
+	}
 	if err != nil {
 		s.fail(w, r, http.StatusBadRequest, "You have no active subscription to change. Start a new plan from the pricing page instead.")
 		return
 	}
 	if _, err := billing.ChangePlan(r.Context(), s.Stripe, s.Catalog, s.Games, a, subID, plan, s.Reconcile); err != nil {
 		s.logf("plan change %s: %v", a.Email, err)
-		s.renderConfirm(w, r, http.StatusBadGateway, sess, plan, "", s.PricingURL, true, checkoutError(err))
+		s.renderConfirm(w, r, http.StatusBadGateway, sess, plan, "", s.PricingURL, true, checkoutError(err), false)
 		return
 	}
 	http.Redirect(w, r, "/account?notice=plan", http.StatusFound)

@@ -46,6 +46,15 @@ func fakeBackend(t *testing.T, secret string) *httptest.Server {
 			w.WriteHeader(429)
 			return
 		}
+		if r.URL.Path == "/api/mtgban/retail/redirect.json" {
+			w.Header().Set("Location", "/api/mtgban/retail.json")
+			w.WriteHeader(302)
+			return
+		}
+		if r.URL.Path == "/api/mtgban/retail/notmodified.json" {
+			w.WriteHeader(304)
+			return
+		}
 		v, err := apisig.Decode(r.URL.Query().Get("sig"))
 		if err != nil {
 			_, _ = w.Write([]byte(`{"error": "invalid signature"}`))
@@ -351,10 +360,24 @@ func TestHandlerUpstreamFailures(t *testing.T) {
 			t.Errorf("status %d body %v", rec.Code, body)
 		}
 	})
+	t.Run("upstream 302 becomes 502", func(t *testing.T) {
+		h, _ := testHandler(t, be, "s3cret")
+		rec, body := do(h, "GET", "/v1/magic/mtgban/retail/redirect.json", goodKey)
+		if rec.Code != 502 || !strings.Contains(body["error"].(string), "302") {
+			t.Errorf("status %d body %v", rec.Code, body)
+		}
+	})
 	t.Run("upstream 429 passes through", func(t *testing.T) {
 		h, _ := testHandler(t, be, "s3cret")
 		rec, _ := do(h, "GET", "/v1/magic/mtgban/retail/ratelimited.json", goodKey)
 		if rec.Code != 429 {
+			t.Errorf("status %d", rec.Code)
+		}
+	})
+	t.Run("upstream 304 passes through", func(t *testing.T) {
+		h, _ := testHandler(t, be, "s3cret")
+		rec, _ := do(h, "GET", "/v1/magic/mtgban/retail/notmodified.json", goodKey)
+		if rec.Code != 304 {
 			t.Errorf("status %d", rec.Code)
 		}
 	})

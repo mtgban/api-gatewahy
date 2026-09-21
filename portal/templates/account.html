@@ -1,6 +1,7 @@
 {{template "header" .}}
 <h1>Your API account</h1>
 {{with .Data}}
+{{if .ReturnTo}}<p><a href="{{.ReturnTo}}" class="dim">Back to {{host .ReturnTo}}</a></p>{{end}}
 <p class="dim">{{.Account.Email}}</p>
 
 {{if .NewKey}}

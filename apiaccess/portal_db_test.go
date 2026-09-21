@@ -3,6 +3,7 @@ package apiaccess
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -152,6 +153,69 @@ func TestDeleteTrialAllowsImmediateRetry(t *testing.T) {
 	}
 	if _, err := c.CreateTrial(ctx, "retry@example.com", a.ID, now.AddDate(0, 0, 15), now.AddDate(0, 0, -180)); err != nil {
 		t.Errorf("retry after delete: %v", err)
+	}
+}
+
+func TestCreateTrialSerializesConcurrentGrants(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	a, _ := c.CreateAccount(ctx, "race@example.com", "")
+	now := time.Now()
+	var wg sync.WaitGroup
+	results := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := c.CreateTrial(ctx, "race@example.com", a.ID, now.AddDate(0, 0, 15), now.AddDate(0, 0, -180))
+			results <- err
+		}()
+	}
+	wg.Wait()
+	close(results)
+	var granted, refused int
+	for err := range results {
+		switch {
+		case err == nil:
+			granted++
+		case errors.Is(err, ErrTrialTooSoon):
+			refused++
+		default:
+			t.Errorf("unexpected: %v", err)
+		}
+	}
+	if granted != 1 || refused != 7 {
+		t.Errorf("granted %d refused %d", granted, refused)
+	}
+}
+
+func TestMarkTrialRemindedUnknownID(t *testing.T) {
+	c := testClient(t)
+	if err := c.MarkTrialReminded(context.Background(), 999999, time.Now()); !errors.Is(err, ErrNotFound) {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestAdminActions(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	a, _ := c.CreateAccount(ctx, "audited@example.com", "")
+	if err := c.RecordAdminAction(ctx, "ops@mtgban.com", "suspend", a.ID, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RecordAdminAction(ctx, "ops@mtgban.com", "grant", a.ID, "entitlement 7", "magic BASE_ACCESS"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RecordAdminAction(ctx, "ops@mtgban.com", "reconcile", 0, "", "3 in sync"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.ListAdminActions(ctx, a.ID, 10)
+	if err != nil || len(got) != 2 || got[0].Action != "grant" || got[0].Target != "entitlement 7" || got[1].Actor != "ops@mtgban.com" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	all, _ := c.ListAdminActions(ctx, 0, 1)
+	if len(all) != 1 || all[0].Action != "reconcile" {
+		t.Errorf("all: %+v", all)
 	}
 }
 

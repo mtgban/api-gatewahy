@@ -2,9 +2,10 @@
 <h1>Start your API trial</h1>
 {{with .Data}}
 <div class="card">
-  <p>{{.Days}} days of every store and every game for <strong>{{.Email}}</strong>. Nothing is charged and nothing renews; when it ends you can pick a plan.</p>
+  <p>{{.Days}} days of every store and every game for {{if .Name}}<strong>{{.Name}}</strong> ({{.Email}}){{else}}<strong>{{.Email}}</strong>{{end}}. Nothing is charged and nothing renews; when it ends you can pick a plan.</p>
   <form method="POST" action="/trial">
     <input type="hidden" name="t" value="{{.Token}}">
+    <input type="hidden" name="return_to" value="{{.ReturnTo}}">
     <button type="submit" class="btn">Start the trial</button>
     <a href="{{$.PricingURL}}" class="dim" style="margin-left:1em">Not now</a>
   </form>

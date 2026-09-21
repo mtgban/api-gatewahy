@@ -269,6 +269,17 @@ func TestCheckCatalogStores(t *testing.T) {
 	}
 }
 
+func TestCheckCatalogGames(t *testing.T) {
+	cat := &apiproductlist.ProductList{IncludedGames: []string{"magic"}}
+	if err := checkCatalogGames(cat, []string{"magic", "pokemon"}); err != nil {
+		t.Errorf("included game known: %v", err)
+	}
+	err := checkCatalogGames(cat, []string{"pokemon"})
+	if err == nil || !strings.Contains(err.Error(), `"magic"`) {
+		t.Errorf("missing included game: %v", err)
+	}
+}
+
 func TestMuxMountsPortal(t *testing.T) {
 	web := &portal.Server{
 		Catalog: apiproductlist.MustLoad(), Games: []string{"magic"},
@@ -279,6 +290,7 @@ func TestMuxMountsPortal(t *testing.T) {
 	// (gateway/handler.go's writeError); http.NotFoundHandler here would give
 	// a false failure on the last assertion below, so mimic that shape.
 	jsonNotFound := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Gateway", "1")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"error": "not found"}`))
@@ -299,6 +311,9 @@ func TestMuxMountsPortal(t *testing.T) {
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/nope.json", nil))
 	if rec.Code != 404 || rec.Header().Get("Content-Type") != "application/json" {
 		t.Errorf("api fallthrough still json: %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	if rec.Header().Get("X-Gateway") != "1" {
+		t.Errorf("/v1/ did not reach the gateway stub: %v", rec.Header())
 	}
 }
 
@@ -326,6 +341,21 @@ func TestPortalDepsFromEnv(t *testing.T) {
 	}
 	if _, ok := d.mail.(*mailer.Log); !ok {
 		t.Errorf("mail %T, want the logging mailer", d.mail)
+	}
+}
+
+func TestCheckReservedPaths(t *testing.T) {
+	cfg := &config.Config{Stripe: config.StripeConfig{SuccessPath: "/account", CancelPath: "/checkout/cancel"}}
+	if err := checkReservedPaths(cfg); err == nil || !strings.Contains(err.Error(), "success_path") {
+		t.Errorf("success_path collision: %v", err)
+	}
+	cfg = &config.Config{Stripe: config.StripeConfig{SuccessPath: "/checkout/success", CancelPath: "/login"}}
+	if err := checkReservedPaths(cfg); err == nil || !strings.Contains(err.Error(), "cancel_path") {
+		t.Errorf("cancel_path collision: %v", err)
+	}
+	cfg = &config.Config{Stripe: config.StripeConfig{SuccessPath: "/checkout/success", CancelPath: "/checkout/cancel"}}
+	if err := checkReservedPaths(cfg); err != nil {
+		t.Errorf("no collision: %v", err)
 	}
 }
 

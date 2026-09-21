@@ -38,6 +38,14 @@
   </tbody>
 </table>
 
+<h2>Activity</h2>
+<table>
+  <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead>
+  <tbody>
+  {{range .Actions}}<tr><td>{{datetime .At}}</td><td>{{.Actor}}</td><td>{{.Action}}</td><td>{{.Target}}</td><td>{{.Detail}}</td></tr>{{end}}
+  </tbody>
+</table>
+
 <div class="card">
   <h2 style="margin-top:0">Add a manual entitlement</h2>
   <form method="POST" action="/admin/accounts/{{.Account.ID}}/entitlements">

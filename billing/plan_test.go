@@ -157,15 +157,39 @@ func TestEntitlementAndAddons(t *testing.T) {
 	}
 }
 
+func TestNormalizeErrorsAreValidationErrors(t *testing.T) {
+	bad := []Plan{
+		{Package: "nope", Interval: "monthly", Games: []string{"magic"}},
+		{Package: "starter", Interval: "weekly", Games: []string{"magic"}},
+		{Package: "starter", Interval: "monthly", Games: []string{"magic"}},
+		{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"TCG"}},
+		{Package: "all_data", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"CK"}},
+	}
+	for _, p := range bad {
+		if _, err := p.Normalize(testCatalog); !IsValidation(err) {
+			t.Errorf("%+v: %v is not a ValidationError", p, err)
+		}
+	}
+	if _, err := (Plan{Package: "all_data", Interval: "monthly", Games: []string{"chess"}}).Validate(testCatalog, []string{"magic"}, true); !IsValidation(err) {
+		t.Errorf("unknown game: %v", err)
+	}
+	if _, err := (Plan{Package: "all_data", Interval: "quarterly", Games: []string{"magic"}}).Validate(testCatalog, []string{"magic"}, false); !errors.Is(err, ErrInviteRequired) || IsValidation(err) {
+		t.Errorf("invite: %v", err)
+	}
+	if IsValidation(errors.New("billing: other")) {
+		t.Error("plain error classified as validation")
+	}
+}
+
 func TestDescribeAndDollars(t *testing.T) {
 	p, _ := Plan{Package: "starter", Interval: "quarterly", Games: []string{"pokemon"}, Stores: []string{"CK"}}.Normalize(testCatalog)
 	got := p.Describe(testCatalog)
-	for _, want := range []string{"TCGplayer plus one store", "magic,pokemon", "TCG,CK", "quarterly", "$1050.00"} {
+	for _, want := range []string{"TCGplayer plus one store", "magic,pokemon", "TCG,CK", "quarterly", "$1,050"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("describe %q lacks %q", got, want)
 		}
 	}
-	if Dollars(5) != "$0.05" || Dollars(123456) != "$1234.56" {
-		t.Errorf("dollars %q %q", Dollars(5), Dollars(123456))
+	if Dollars(5) != "$0.05" || Dollars(123456) != "$1,234.56" || Dollars(20000) != "$200" {
+		t.Errorf("dollars %q %q %q", Dollars(5), Dollars(123456), Dollars(20000))
 	}
 }

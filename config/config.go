@@ -178,9 +178,13 @@ func (c *Config) applyDefaults(defaultClientIPHeader, defaultGraceDays bool) {
 	if c.LoginLinksPerHour == 0 {
 		c.LoginLinksPerHour = 5
 	}
-	for i, e := range c.AdminEmails {
-		c.AdminEmails[i] = strings.ToLower(strings.TrimSpace(e))
+	admins := c.AdminEmails[:0]
+	for _, e := range c.AdminEmails {
+		if e = strings.ToLower(strings.TrimSpace(e)); e != "" {
+			admins = append(admins, e)
+		}
 	}
+	c.AdminEmails = admins
 }
 
 // Validate reports the first configuration error, games in name order.

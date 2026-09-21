@@ -38,9 +38,15 @@ type memStore struct {
 	usage    []memUsage
 	notified []string
 	nonces   map[string]time.Time
+	actions  []apiaccess.AdminAction
 
 	// entitlementErr, when set, is what AddEntitlement returns instead of succeeding.
 	entitlementErr error
+	// listKeysErr, listEntitlementsErr, listActionsErr, and usageErr inject failures for their namesakes.
+	listKeysErr         error
+	listEntitlementsErr error
+	listActionsErr      error
+	usageErr            error
 }
 
 func newMemStore() *memStore {
@@ -192,6 +198,9 @@ func (m *memStore) CreateKey(_ context.Context, accountID int64, label string) (
 func (m *memStore) ListKeys(_ context.Context, accountID int64) ([]apiaccess.Key, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.listKeysErr != nil {
+		return nil, m.listKeysErr
+	}
 	var out []apiaccess.Key
 	for _, k := range m.keys {
 		if k.AccountID == accountID {
@@ -217,6 +226,9 @@ func (m *memStore) RevokeKey(_ context.Context, id, accountID int64) (apiaccess.
 func (m *memStore) ListEntitlements(_ context.Context, accountID int64) ([]apiaccess.Entitlement, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.listEntitlementsErr != nil {
+		return nil, m.listEntitlementsErr
+	}
 	var out []apiaccess.Entitlement
 	for _, e := range m.ents {
 		if e.AccountID == accountID {
@@ -286,6 +298,9 @@ func (m *memStore) EndEntitlement(_ context.Context, id int64, at time.Time) err
 func (m *memStore) SummarizeUsage(_ context.Context, since, until time.Time, accountID int64) ([]apiaccess.UsageRow, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.usageErr != nil {
+		return nil, m.usageErr
+	}
 	var out []apiaccess.UsageRow
 	for _, u := range m.usage {
 		if (accountID == 0 || u.Row.AccountID == accountID) && !u.Ts.Before(since) && u.Ts.Before(until) {
@@ -392,6 +407,31 @@ func (m *memStore) Notify(_ context.Context, payload string) error {
 	defer m.mu.Unlock()
 	m.notified = append(m.notified, payload)
 	return nil
+}
+
+// RecordAdminAction appends one action; ListAdminActions reads them newest first.
+func (m *memStore) RecordAdminAction(_ context.Context, actor, action string, accountID int64, target, detail string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.actions = append(m.actions, apiaccess.AdminAction{ID: m.id(), At: time.Now(), Actor: apiaccess.NormalizeEmail(actor), Action: action, AccountID: accountID, Target: target, Detail: detail})
+	return nil
+}
+
+func (m *memStore) ListAdminActions(_ context.Context, accountID int64, limit int) ([]apiaccess.AdminAction, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.listActionsErr != nil {
+		return nil, m.listActionsErr
+	}
+	var out []apiaccess.AdminAction
+	for i := len(m.actions) - 1; i >= 0 && len(out) < limit; i-- {
+		a := m.actions[i]
+		if accountID != 0 && a.AccountID != accountID {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, nil
 }
 
 // ConsumeNonce records nonce until expiresAt; a second call inside that window fails.

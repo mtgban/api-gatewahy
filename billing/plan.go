@@ -37,6 +37,23 @@ type LineItem struct {
 // ErrInviteRequired means the plan names an interval only an invite unlocks.
 var ErrInviteRequired = errors.New("billing: this interval requires an invite")
 
+// ValidationError is a plan the catalog rejects; the message is safe to show a customer.
+type ValidationError struct {
+	Msg string
+}
+
+func (e *ValidationError) Error() string { return "billing: " + e.Msg }
+
+// IsValidation reports whether err is a ValidationError.
+func IsValidation(err error) bool {
+	var ve *ValidationError
+	return errors.As(err, &ve)
+}
+
+func invalid(format string, args ...any) error {
+	return &ValidationError{Msg: fmt.Sprintf(format, args...)}
+}
+
 // Normalize canonicalizes the plan against the catalog: package and interval
 // exist, games are lowercase, sorted, and include the catalog's included
 // games, stores are uppercase, sorted, selectable, and only on an explicit
@@ -44,10 +61,10 @@ var ErrInviteRequired = errors.New("billing: this interval requires an invite")
 func (p Plan) Normalize(cat *apiproductlist.ProductList) (Plan, error) {
 	pkg, ok := cat.Package(p.Package)
 	if !ok {
-		return Plan{}, fmt.Errorf("billing: unknown package %q", p.Package)
+		return Plan{}, invalid("unknown package %q", p.Package)
 	}
 	if _, ok := cat.Interval(p.Interval); !ok {
-		return Plan{}, fmt.Errorf("billing: unknown interval %q", p.Interval)
+		return Plan{}, invalid("unknown interval %q", p.Interval)
 	}
 	games := dedupe(p.Games, strings.ToLower)
 	for _, g := range cat.IncludedGames {
@@ -61,15 +78,15 @@ func (p Plan) Normalize(cat *apiproductlist.ProductList) (Plan, error) {
 	out := Plan{Package: pkg.Key, Interval: p.Interval, Games: games, Stores: stores}
 	if pkg.StoreScope == apiproductlist.StoreScopeExplicit {
 		if len(stores) == 0 {
-			return Plan{}, errors.New("billing: pick at least one store")
+			return Plan{}, invalid("pick at least one store")
 		}
 		for _, s := range stores {
 			if st, ok := cat.Store(s); !ok || st.Implied {
-				return Plan{}, fmt.Errorf("billing: store %q is not selectable", s)
+				return Plan{}, invalid("store %q is not selectable", s)
 			}
 		}
 	} else if len(stores) > 0 {
-		return Plan{}, fmt.Errorf("billing: package %s does not take a store list", pkg.Key)
+		return Plan{}, invalid("package %s does not take a store list", pkg.Key)
 	}
 	for _, li := range out.LineItems(cat) {
 		if li.Key == pkg.Key {
@@ -77,7 +94,7 @@ func (p Plan) Normalize(cat *apiproductlist.ProductList) (Plan, error) {
 		}
 		addon, ok := cat.Addon(li.Key)
 		if !ok || !addon.Applies(pkg.Key) {
-			return Plan{}, fmt.Errorf("billing: package %s cannot add %s", pkg.Key, li.Key)
+			return Plan{}, invalid("package %s cannot add %s", pkg.Key, li.Key)
 		}
 	}
 	return out, nil
@@ -91,7 +108,7 @@ func (p Plan) Validate(cat *apiproductlist.ProductList, knownGames []string, hav
 	}
 	for _, g := range p.Games {
 		if !slices.Contains(knownGames, g) {
-			return Plan{}, fmt.Errorf("billing: unknown game %q", g)
+			return Plan{}, invalid("unknown game %q", g)
 		}
 	}
 	if iv, _ := cat.Interval(p.Interval); !iv.Public && !haveInvite {
@@ -213,9 +230,17 @@ func (p Plan) Describe(cat *apiproductlist.ProductList) string {
 	return b.String()
 }
 
-// Dollars formats cents as $12.34.
+// Dollars formats cents as whole dollars ($200) or with cents ($12.50),
+// thousands-separated like the website's formatUSD.
 func Dollars(cents int64) string {
-	return fmt.Sprintf("$%d.%02d", cents/100, cents%100)
+	dollars := strconv.FormatInt(cents/100, 10)
+	for i := len(dollars) - 3; i > 0; i -= 3 {
+		dollars = dollars[:i] + "," + dollars[i:]
+	}
+	if cents%100 == 0 {
+		return "$" + dollars
+	}
+	return "$" + dollars + "." + strconv.FormatInt(100+cents%100, 10)[1:]
 }
 
 func splitList(s string) []string {

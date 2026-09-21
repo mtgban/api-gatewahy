@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -53,11 +54,31 @@ type Store interface {
 	TrialsToRemind(ctx context.Context, from, to time.Time) ([]apiaccess.Trial, error)
 	MarkTrialReminded(ctx context.Context, id int64, at time.Time) error
 	CreateInvite(ctx context.Context, intervalKey, email string, ttl time.Duration, note string) (string, apiaccess.Invite, error)
+	ReleaseInvite(ctx context.Context, token string) error
 	Notify(ctx context.Context, payload string) error
 	ConsumeNonce(ctx context.Context, nonce string, expiresAt, now time.Time) error
+	RecordAdminAction(ctx context.Context, actor, action string, accountID int64, target, detail string) error
+	ListAdminActions(ctx context.Context, accountID int64, limit int) ([]apiaccess.AdminAction, error)
 }
 
 var _ Store = (*apiaccess.Client)(nil)
+
+// reserved are the portal's fixed routes; the Stripe landing paths must not collide with them.
+var reservedExact = []string{"/", "/login", "/logout", "/account", "/portal", "/trial", "/session", "/admin", "/checkout", "/static/portal.css", "/healthz", "/stripe/webhook"}
+var reservedPrefixes = []string{"/login/", "/account/", "/admin/", "/static/", "/v1/"}
+
+// Reserved reports whether path is a portal route or under one.
+func Reserved(path string) bool {
+	if slices.Contains(reservedExact, path) {
+		return true
+	}
+	for _, p := range reservedPrefixes {
+		if strings.HasPrefix(path, p) {
+			return true
+		}
+	}
+	return false
+}
 
 // Server serves the customer and admin pages.
 type Server struct {
@@ -114,6 +135,7 @@ var (
 )
 
 const suspendedMsg = "This account is suspended. Contact administrator@mtgban.com if you think that is a mistake."
+const csrfExpiredMsg = "this form expired, go back and try again"
 
 var funcs = template.FuncMap{
 	"usd": billing.Dollars,
@@ -130,6 +152,16 @@ var funcs = template.FuncMap{
 		return "-"
 	},
 	"join": strings.Join,
+	"datetime": func(t time.Time) string {
+		return t.UTC().Format("2006-01-02 15:04")
+	},
+	"host": func(u string) string {
+		p, err := url.Parse(u)
+		if err != nil {
+			return ""
+		}
+		return p.Host
+	},
 }
 
 func (s *Server) init() {
@@ -257,7 +289,7 @@ func (s *Server) withSession(h func(w http.ResponseWriter, r *http.Request, sess
 			return
 		}
 		if r.Method == http.MethodPost && !s.Sessions.CheckCSRF(sess, r.FormValue("csrf")) {
-			http.Error(w, "this form expired, go back and try again", http.StatusForbidden)
+			http.Error(w, csrfExpiredMsg, http.StatusForbidden)
 			return
 		}
 		h(w, r, sess, a)
@@ -296,6 +328,7 @@ func (s *Server) sameOrigin(r *http.Request) bool {
 	}
 	origin := r.Header.Get("Origin")
 	if origin == "" {
+		// Referer is only present on posts from outside the portal, which no-referrer strips on our own pages.
 		origin = siteOrigin(r.Header.Get("Referer"))
 	}
 	return origin != "" && strings.EqualFold(origin, siteOrigin(s.PublicURL))

@@ -14,19 +14,23 @@ import (
 )
 
 const billingOffMsg = "Billing is not available right now. Try again later or contact administrator@mtgban.com."
+const alreadyHasPlanMsg = "You already have a plan. Use Change plan on your account page to switch."
+const manySubscriptionsMsg = "Your account has more than one subscription. Contact administrator@mtgban.com and we will sort it out."
 
 // confirmData is confirm.html's payload: the plan in words and the POST fields.
 type confirmData struct {
-	Package  string
-	Games    string
-	Stores   string
-	Interval string
-	Total    string
-	Change   bool
-	Invite   string
-	ReturnTo string
-	Action   string
-	Fields   url.Values
+	Package    string
+	Games      string
+	Stores     string
+	Interval   string
+	Total      string
+	Change     bool
+	Invite     string
+	ReturnTo   string
+	Action     string
+	Fields     url.Values
+	BillingOff bool
+	HasPlan    bool
 }
 
 type successData struct {
@@ -60,7 +64,11 @@ func (s *Server) checkoutGet(w http.ResponseWriter, r *http.Request) {
 	returnTo := validReturnTo(q.Get("return_to"), s.PricingURL)
 	invite := q.Get("invite")
 	change := q.Get("change") == "1"
-	plan, err := planFromValues(q).Validate(s.Catalog, s.Games, invite != "")
+	plan := planFromValues(q)
+	if pkg, ok := s.Catalog.Package(plan.Package); ok && pkg.StoreScope != apiproductlist.StoreScopeExplicit {
+		plan.Stores = nil
+	}
+	plan, err := plan.Validate(s.Catalog, s.Games, invite != "")
 	if err != nil {
 		s.Sessions.ClearPending(w)
 		p := s.pageFor(nil, "That plan does not work")
@@ -88,6 +96,14 @@ func (s *Server) checkoutGet(w http.ResponseWriter, r *http.Request) {
 		s.renderLogin(w, r, http.StatusOK, "", pending)
 		return
 	}
+	var hasPlan bool
+	if !change {
+		hasPlan, err = s.hasActiveStripePlan(r, sess.AccountID)
+		if err != nil {
+			s.fail(w, r, http.StatusInternalServerError, tryAgainMsg)
+			return
+		}
+	}
 	if change {
 		var status int
 		var msg string
@@ -97,7 +113,22 @@ func (s *Server) checkoutGet(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.renderConfirm(w, r, http.StatusOK, sess, plan, invite, returnTo, change, "")
+	s.renderConfirm(w, r, http.StatusOK, sess, plan, invite, returnTo, change, "", hasPlan)
+}
+
+// hasActiveStripePlan reports whether the account already has an active Stripe entitlement.
+func (s *Server) hasActiveStripePlan(r *http.Request, accountID int64) (bool, error) {
+	ents, err := s.Store.ListEntitlements(r.Context(), accountID)
+	if err != nil {
+		return false, err
+	}
+	now := s.now()
+	for _, e := range ents {
+		if e.Source == "stripe" && e.ActiveAt(now) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // currentIntervalFor pins a plan change to the subscription's own interval,
@@ -111,6 +142,9 @@ func (s *Server) currentIntervalFor(r *http.Request, sess session.Session, plan 
 		return plan, http.StatusBadRequest, tryAgainMsg
 	}
 	subID, err := billing.SubscriptionFor(ents)
+	if errors.Is(err, billing.ErrManySubscriptions) {
+		return plan, http.StatusBadRequest, manySubscriptionsMsg
+	}
 	if err != nil {
 		return plan, http.StatusBadRequest, "You have no active subscription to change. Start a new plan from the pricing page instead."
 	}
@@ -132,7 +166,7 @@ func (s *Server) currentIntervalFor(r *http.Request, sess session.Session, plan 
 }
 
 // renderConfirm draws the plan in words with the POST button.
-func (s *Server) renderConfirm(w http.ResponseWriter, r *http.Request, status int, sess session.Session, plan billing.Plan, invite, returnTo string, change bool, errMsg string) {
+func (s *Server) renderConfirm(w http.ResponseWriter, r *http.Request, status int, sess session.Session, plan billing.Plan, invite, returnTo string, change bool, errMsg string, hasPlan bool) {
 	pkg, _ := s.Catalog.Package(plan.Package)
 	iv, _ := s.Catalog.Interval(plan.Interval)
 	total, err := plan.Total(s.Catalog)
@@ -141,7 +175,7 @@ func (s *Server) renderConfirm(w http.ResponseWriter, r *http.Request, status in
 		s.fail(w, r, http.StatusInternalServerError, tryAgainMsg)
 		return
 	}
-	d := confirmData{Package: pkg.Name, Games: strings.Join(plan.Games, ", "), Total: billing.Dollars(total), Change: change, Invite: invite, ReturnTo: returnTo, Action: "/checkout"}
+	d := confirmData{Package: pkg.Name, Games: strings.Join(plan.Games, ", "), Total: billing.Dollars(total), Change: change, Invite: invite, ReturnTo: returnTo, Action: "/checkout", BillingOff: s.Stripe == nil, HasPlan: hasPlan}
 	if pkg.StoreScope == apiproductlist.StoreScopeExplicit {
 		d.Stores = storeNamesByKey(s.Catalog, plan.StoreKeys(s.Catalog))
 	}
@@ -176,6 +210,15 @@ func (s *Server) checkoutPost(w http.ResponseWriter, r *http.Request, sess sessi
 		s.fail(w, r, http.StatusServiceUnavailable, billingOffMsg)
 		return
 	}
+	hasPlan, err := s.hasActiveStripePlan(r, a.ID)
+	if err != nil {
+		s.fail(w, r, http.StatusInternalServerError, tryAgainMsg)
+		return
+	}
+	if hasPlan {
+		s.fail(w, r, http.StatusConflict, alreadyHasPlanMsg)
+		return
+	}
 	invite := r.FormValue("invite")
 	returnTo := validReturnTo(r.FormValue("return_to"), s.PricingURL)
 	plan, err := planFromValues(r.Form).Validate(s.Catalog, s.Games, invite != "")
@@ -186,12 +229,15 @@ func (s *Server) checkoutPost(w http.ResponseWriter, r *http.Request, sess sessi
 	checkoutURL, err := s.Checkout.Create(r.Context(), billing.Request{Account: a, Plan: plan, Invite: invite})
 	if err != nil {
 		s.logf("checkout for %s: %v", a.Email, err)
-		s.renderConfirm(w, r, http.StatusBadGateway, sess, plan, invite, returnTo, false, checkoutError(err))
+		s.renderConfirm(w, r, http.StatusBadGateway, sess, plan, invite, returnTo, false, checkoutError(err), false)
 		return
 	}
-	// Keep the plan, not the invite, so a cancelled checkout can resume at /checkout.
+	// Keep the invite too, so a cancelled checkout can resume with it.
 	pending := planValues(plan)
 	pending.Set("return_to", returnTo)
+	if invite != "" {
+		pending.Set("invite", invite)
+	}
 	s.Sessions.SetPending(w, pending, pendingTTL)
 	http.Redirect(w, r, checkoutURL, http.StatusSeeOther)
 }
@@ -205,8 +251,10 @@ func checkoutError(err error) string {
 		return "That invite is invalid, already used, or expired."
 	case errors.Is(err, billing.ErrPriceNotSeeded):
 		return "That plan is not set up for sale yet. Contact administrator@mtgban.com."
-	case strings.HasPrefix(err.Error(), "billing: ") && errors.Unwrap(err) == nil:
-		return "That plan is not valid: " + strings.TrimPrefix(err.Error(), "billing: ") + "."
+	}
+	var ve *billing.ValidationError
+	if errors.As(err, &ve) {
+		return "That plan is not valid: " + ve.Msg + "."
 	}
 	return "Could not start checkout. Try again in a minute."
 }
@@ -244,6 +292,13 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 	returnTo := s.PricingURL
 	if pv, err := s.Sessions.Pending(r); err == nil {
 		returnTo = validReturnTo(pv.Get("return_to"), s.PricingURL)
+		if invite := pv.Get("invite"); invite != "" {
+			if err := s.Store.ReleaseInvite(r.Context(), invite); err != nil {
+				s.logf("cancel release invite: %v", err)
+			}
+			pv.Del("invite")
+			s.Sessions.SetPending(w, pv, pendingTTL)
+		}
 	}
 	var sess *session.Session
 	if got, _, err := s.current(r); err == nil {

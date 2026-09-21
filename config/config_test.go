@@ -120,6 +120,17 @@ func TestPortalConfigDefaultsAndValidation(t *testing.T) {
 	}
 }
 
+func TestAdminEmailsDropsBlankEntries(t *testing.T) {
+	src := strings.Replace(goodJSON, `"gateway_email"`, `"admin_emails": [" ", "ops@mtgban.com", ""], "gateway_email"`, 1)
+	c, err := Parse(strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.AdminEmails) != 1 || c.AdminEmails[0] != "ops@mtgban.com" {
+		t.Errorf("admin_emails %v, want just ops@mtgban.com", c.AdminEmails)
+	}
+}
+
 func TestValidateRejectsStripeFields(t *testing.T) {
 	cases := []struct {
 		name, extra, want string

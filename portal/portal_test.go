@@ -233,6 +233,40 @@ func entitlementFor(accountID int64, source, scope string) apiaccess.Entitlement
 		Modes: []string{"retail", "buylist"}, Status: "active", ExternalRef: "sub_1"}
 }
 
+func TestSameOrigin(t *testing.T) {
+	ts := newTestServer(t)
+	cases := []struct {
+		name     string
+		secFetch string
+		origin   string
+		referer  string
+		want     bool
+	}{
+		{"same-origin passes with no Origin", "same-origin", "", "", true},
+		{"cross-site fails even with a matching Origin", "cross-site", "https://api.test", "", false},
+		{"none with matching Origin passes", "none", "https://api.test", "", true},
+		{"none with no headers fails", "none", "", "", false},
+		{"matching Origin in different case passes", "", "HTTPS://API.TEST", "", true},
+		{"Referer under the public URL passes", "", "", "https://api.test/login/x", true},
+		{"Referer on another host fails", "", "", "https://evil.example/", false},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest("POST", "/x", nil)
+		if tc.secFetch != "" {
+			req.Header.Set("Sec-Fetch-Site", tc.secFetch)
+		}
+		if tc.origin != "" {
+			req.Header.Set("Origin", tc.origin)
+		}
+		if tc.referer != "" {
+			req.Header.Set("Referer", tc.referer)
+		}
+		if got := ts.sameOrigin(req); got != tc.want {
+			t.Errorf("%s: got %v want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestTokenPostsRequireSameOrigin(t *testing.T) {
 	ts := newTestServer(t)
 	ts.do("POST", "/login", "email=ann%40example.com")
@@ -256,6 +290,19 @@ func TestTokenPostsRequireSameOrigin(t *testing.T) {
 	}
 	if rec := ts.do("POST", "/trial", "t="+tok); rec.Code != 302 {
 		t.Fatalf("same-origin trial after refusal: %d", rec.Code)
+	}
+}
+
+func TestReservedPaths(t *testing.T) {
+	for _, p := range []string{"/login", "/account/keys", "/admin/accounts/1", "/static/portal.css", "/checkout", "/healthz", "/stripe/webhook", "/v1/games.json"} {
+		if !Reserved(p) {
+			t.Errorf("%q: want reserved", p)
+		}
+	}
+	for _, p := range []string{"/checkout/success", "/thanks"} {
+		if Reserved(p) {
+			t.Errorf("%q: want not reserved", p)
+		}
 	}
 }
 
