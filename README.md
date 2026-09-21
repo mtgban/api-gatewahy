@@ -139,7 +139,11 @@ from `invite create`. The account must already exist (`account add`).
 `invite create -interval quarterly [-email] [-days 14] [-note]`: prints a
 one-time token, optionally bound to an email, that unlocks a non-public
 interval for one checkout. The token is consumed when the Checkout Session is
-created, and handed back if that creation fails.
+created, and handed back if that creation fails. Landing on the cancel page
+expires the session at Stripe first; the token comes back only once Stripe
+confirms the expiry, so a session left open cannot be paid with a token that
+was also reused. A session abandoned without the cancel page keeps its token
+spent until Stripe expires it on its own.
 
 `stripe reconcile [-sub sub_123]`: rebuilds the entitlement row for one
 subscription, or for every subscription Stripe lists plus every active

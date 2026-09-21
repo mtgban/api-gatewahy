@@ -38,12 +38,12 @@ func TestCheckoutCreatesSessionAndCustomer(t *testing.T) {
 	co := newTestCheckout(f, s)
 	ctx := context.Background()
 
-	url, err := co.Create(ctx, Request{Account: testAccount, Plan: Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"CK", "SCG"}}})
+	sess, err := co.Create(ctx, Request{Account: testAccount, Plan: Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"CK", "SCG"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(url, "https://checkout.stripe.test/") {
-		t.Errorf("url %q", url)
+	if !strings.HasPrefix(sess.URL, "https://checkout.stripe.test/") || sess.ID == "" {
+		t.Errorf("session %+v", sess)
 	}
 	if len(f.sessions) != 1 {
 		t.Fatalf("sessions %d", len(f.sessions))
@@ -176,5 +176,57 @@ func TestCheckoutEveryPackage(t *testing.T) {
 		if _, err := co.Create(context.Background(), Request{Account: testAccount, Plan: plan}); err != nil {
 			t.Errorf("%s: %v", pkg.Key, err)
 		}
+	}
+}
+
+func TestAbandonReleasesInviteOnlyWhenStripeExpiresTheSession(t *testing.T) {
+	f := seededFake(t)
+	s := newMemStore(testAccount)
+	co := newTestCheckout(f, s)
+	ctx := context.Background()
+	later := co.Now().Add(24 * time.Hour)
+	quarterly := Plan{Package: "all_stores", Interval: "quarterly", Games: []string{"magic"}}
+
+	s.addInvite("walk-away", "quarterly", "", later)
+	sess, err := co.Create(ctx, Request{Account: testAccount, Plan: quarterly, Invite: "walk-away"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := co.Abandon(ctx, sess.ID, "walk-away"); err != nil {
+		t.Fatalf("abandon: %v", err)
+	}
+	if f.sessionStatus[sess.ID] != stripe.CheckoutSessionStatusExpired {
+		t.Errorf("session %s is %s", sess.ID, f.sessionStatus[sess.ID])
+	}
+	if s.invites["walk-away"].UsedAt != nil {
+		t.Error("invite not released after the session expired")
+	}
+
+	// A session the customer already paid for cannot be expired, so its invite stays spent.
+	s.addInvite("paid", "quarterly", "", later)
+	sess, err = co.Create(ctx, Request{Account: testAccount, Plan: quarterly, Invite: "paid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.sessionStatus[sess.ID] = stripe.CheckoutSessionStatusComplete
+	if err := co.Abandon(ctx, sess.ID, "paid"); err == nil {
+		t.Error("abandon of a completed session succeeded")
+	}
+	if s.invites["paid"].UsedAt == nil {
+		t.Error("invite released although the session completed")
+	}
+
+	// Stripe down: the invite stays spent rather than risk a double spend.
+	s.addInvite("outage", "quarterly", "", later)
+	sess, err = co.Create(ctx, Request{Account: testAccount, Plan: quarterly, Invite: "outage"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.fail["ExpireCheckoutSession"] = errors.New("stripe down")
+	if err := co.Abandon(ctx, sess.ID, "outage"); err == nil {
+		t.Error("stripe failure swallowed")
+	}
+	if s.invites["outage"].UsedAt == nil {
+		t.Error("invite released although Stripe did not confirm the expiry")
 	}
 }

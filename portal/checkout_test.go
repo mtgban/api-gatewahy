@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"testing"
@@ -57,7 +58,7 @@ func TestCheckoutConfirmAndPost(t *testing.T) {
 	}
 	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"monthly"}, "games": {"magic,pokemon"}, "stores": {"CK,SCG"}, "return_to": {"https://pokemon.mtgban.com/api-plans"}}
 	rec = ts.do("POST", "/checkout", form.Encode(), ck)
-	if rec.Code != 303 || rec.Header().Get("Location") != "https://checkout.stripe.com/c/pay/test" || f.checkouts != 1 {
+	if rec.Code != 303 || rec.Header().Get("Location") != "https://checkout.stripe.com/c/pay/cs_test_1" || f.checkouts != 1 {
 		t.Fatalf("post: %d %q %d", rec.Code, rec.Header().Get("Location"), f.checkouts)
 	}
 	pending := cookieNamed(rec, session.PendingName)
@@ -122,7 +123,7 @@ func TestManySubscriptionsShowsContactMessage(t *testing.T) {
 
 func TestCancelReleasesInvite(t *testing.T) {
 	ts := newTestServer(t)
-	ts.withStripe()
+	f := ts.withStripe()
 	_, ck, csrf := ts.signIn(t, "ann@example.com")
 	ctx := context.Background()
 	token, _, err := ts.store.CreateInvite(ctx, "quarterly", "ann@example.com", time.Hour, "")
@@ -145,6 +146,9 @@ func TestCancelReleasesInvite(t *testing.T) {
 	inv, ok := ts.store.invites[apiaccess.HashKey(token)]
 	if !ok || inv.UsedAt != nil {
 		t.Errorf("invite not released: %+v", inv)
+	}
+	if f.sessions["cs_test_1"] != stripe.CheckoutSessionStatusExpired {
+		t.Errorf("session not expired at Stripe: %v", f.sessions)
 	}
 	if rec := ts.do("GET", query, "", ck); rec.Code != 200 {
 		t.Errorf("resume checkout: %d %s", rec.Code, rec.Body.String())
@@ -243,5 +247,49 @@ func TestCheckoutChangeConfirm(t *testing.T) {
 	body := rec.Body.String()
 	if rec.Code != 200 || !strings.Contains(body, `action="/account/plan"`) || !strings.Contains(body, "(unchanged)") || !strings.Contains(body, "$800") {
 		t.Fatalf("change confirm: %d %s", rec.Code, body)
+	}
+}
+
+// startInviteCheckout signs in, creates a quarterly invite, and posts a checkout with it.
+func startInviteCheckout(t *testing.T, ts *testServer) (token string, ck, pending *http.Cookie) {
+	t.Helper()
+	_, ck, csrf := ts.signIn(t, "ann@example.com")
+	token, _, err := ts.store.CreateInvite(context.Background(), "quarterly", "ann@example.com", time.Hour, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"quarterly"}, "games": {"magic"}, "stores": {"CK"}, "invite": {token}}
+	rec := ts.do("POST", "/checkout", form.Encode(), ck)
+	if rec.Code != 303 {
+		t.Fatalf("post: %d %s", rec.Code, rec.Body.String())
+	}
+	return token, ck, cookieNamed(rec, session.PendingName)
+}
+
+func TestCancelKeepsInviteWhenSessionCompleted(t *testing.T) {
+	ts := newTestServer(t)
+	f := ts.withStripe()
+	token, ck, pending := startInviteCheckout(t, ts)
+	// The customer paid in the Stripe tab, then hit the cancel URL anyway.
+	f.sessions["cs_test_1"] = stripe.CheckoutSessionStatusComplete
+	if rec := ts.do("GET", "/checkout/cancel", "", ck, pending); rec.Code != 200 {
+		t.Fatalf("cancel: %d", rec.Code)
+	}
+	if inv := ts.store.invites[apiaccess.HashKey(token)]; inv.UsedAt == nil {
+		t.Error("invite released although the session completed")
+	}
+}
+
+func TestCancelWithoutSessionIDKeepsInvite(t *testing.T) {
+	ts := newTestServer(t)
+	ts.withStripe()
+	token, ck, _ := startInviteCheckout(t, ts)
+	// A pending cookie that names the invite but not the session cannot prove the session is dead.
+	stale := cookieFor(ts, map[string][]string{"invite": {token}, "return_to": {"https://mtgban.com/api-plans"}})
+	if rec := ts.do("GET", "/checkout/cancel", "", ck, stale); rec.Code != 200 {
+		t.Fatalf("cancel: %d", rec.Code)
+	}
+	if inv := ts.store.invites[apiaccess.HashKey(token)]; inv.UsedAt == nil {
+		t.Error("invite released without expiring its session")
 	}
 }

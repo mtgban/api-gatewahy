@@ -41,22 +41,29 @@ func (c *Checkout) now() time.Time {
 	return time.Now()
 }
 
+// Session is a created Checkout Session: the URL to send the customer to and
+// the id to expire if they come back without paying.
+type Session struct {
+	ID  string
+	URL string
+}
+
 // Create validates the plan, consumes the invite if one is needed, ensures
-// the Stripe customer, and returns the Checkout URL to hand to the customer.
-func (c *Checkout) Create(ctx context.Context, req Request) (url string, err error) {
+// the Stripe customer, and returns the Checkout Session to hand to the customer.
+func (c *Checkout) Create(ctx context.Context, req Request) (sess Session, err error) {
 	if req.Account.Status != "active" {
-		return "", fmt.Errorf("billing: account %d is %s", req.Account.ID, req.Account.Status)
+		return Session{}, fmt.Errorf("billing: account %d is %s", req.Account.ID, req.Account.Status)
 	}
 	plan, err := req.Plan.Validate(c.Catalog, c.Games, req.Invite != "")
 	if err != nil {
-		return "", err
+		return Session{}, err
 	}
 	if iv, _ := c.Catalog.Interval(plan.Interval); !iv.Public {
 		// Assigned, not declared, so the deferred release sees this err.
 		var inv apiaccess.Invite
 		inv, err = c.Store.ConsumeInvite(ctx, req.Invite, req.Account.Email, c.now())
 		if err != nil {
-			return "", err
+			return Session{}, err
 		}
 		defer func() {
 			if err != nil {
@@ -64,18 +71,18 @@ func (c *Checkout) Create(ctx context.Context, req Request) (url string, err err
 			}
 		}()
 		if inv.IntervalKey != plan.Interval {
-			return "", fmt.Errorf("billing: invite is for %s, not %s", inv.IntervalKey, plan.Interval)
+			return Session{}, fmt.Errorf("billing: invite is for %s, not %s", inv.IntervalKey, plan.Interval)
 		}
 	}
 	lineItems, err := c.lineItems(ctx, plan)
 	if err != nil {
-		return "", err
+		return Session{}, err
 	}
 	customerID, err := c.ensureCustomer(ctx, req.Account)
 	if err != nil {
-		return "", err
+		return Session{}, err
 	}
-	sess, err := c.API.CreateCheckoutSession(ctx, &stripe.CheckoutSessionCreateParams{
+	cs, err := c.API.CreateCheckoutSession(ctx, &stripe.CheckoutSessionCreateParams{
 		Mode:                stripe.String(string(stripe.CheckoutSessionModeSubscription)),
 		Customer:            stripe.String(customerID),
 		ClientReferenceID:   stripe.String(strconv.FormatInt(req.Account.ID, 10)),
@@ -86,9 +93,26 @@ func (c *Checkout) Create(ctx context.Context, req Request) (url string, err err
 		SubscriptionData:    &stripe.CheckoutSessionCreateSubscriptionDataParams{Metadata: plan.Metadata(req.Account.ID)},
 	})
 	if err != nil {
-		return "", fmt.Errorf("billing: create checkout session: %w", err)
+		return Session{}, fmt.Errorf("billing: create checkout session: %w", err)
 	}
-	return sess.URL, nil
+	return Session{ID: cs.ID, URL: cs.URL}, nil
+}
+
+// Abandon ends a Checkout Session the customer walked away from and, once
+// Stripe confirms it expired, hands the invite back. A session that already
+// completed cannot be expired, so its invite stays spent.
+func (c *Checkout) Abandon(ctx context.Context, sessionID, invite string) error {
+	cs, err := c.API.ExpireCheckoutSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("billing: expire checkout session: %w", err)
+	}
+	if cs.Status != stripe.CheckoutSessionStatusExpired {
+		return fmt.Errorf("billing: checkout session %s is %s, not expired", sessionID, cs.Status)
+	}
+	if invite == "" {
+		return nil
+	}
+	return c.Store.ReleaseInvite(ctx, invite)
 }
 
 // ensureCustomer returns the account's Stripe customer, creating one if needed.

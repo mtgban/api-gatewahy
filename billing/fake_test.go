@@ -12,16 +12,17 @@ import (
 
 // fakeAPI is an in-memory Stripe with just enough state for the billing tests.
 type fakeAPI struct {
-	seq       int
-	customers map[string]*stripe.Customer
-	products  map[string]*stripe.Product
-	prices    map[string]*stripe.Price
-	subs      map[string]*stripe.Subscription
-	sessions  []*stripe.CheckoutSessionCreateParams
-	portals   []*stripe.BillingPortalSessionCreateParams
-	updates   map[string][]*stripe.SubscriptionUpdateParams
-	fail      map[string]error
-	calls     map[string]int
+	seq           int
+	customers     map[string]*stripe.Customer
+	products      map[string]*stripe.Product
+	prices        map[string]*stripe.Price
+	subs          map[string]*stripe.Subscription
+	sessions      []*stripe.CheckoutSessionCreateParams
+	sessionStatus map[string]stripe.CheckoutSessionStatus
+	portals       []*stripe.BillingPortalSessionCreateParams
+	updates       map[string][]*stripe.SubscriptionUpdateParams
+	fail          map[string]error
+	calls         map[string]int
 }
 
 var _ API = (*fakeAPI)(nil)
@@ -68,7 +69,23 @@ func (f *fakeAPI) CreateCheckoutSession(_ context.Context, p *stripe.CheckoutSes
 	}
 	f.sessions = append(f.sessions, p)
 	id := f.next("cs")
+	if f.sessionStatus == nil {
+		f.sessionStatus = map[string]stripe.CheckoutSessionStatus{}
+	}
+	f.sessionStatus[id] = stripe.CheckoutSessionStatusOpen
 	return &stripe.CheckoutSession{ID: id, URL: "https://checkout.stripe.test/" + id}, nil
+}
+
+// ExpireCheckoutSession expires an open session; Stripe refuses once it is complete or gone.
+func (f *fakeAPI) ExpireCheckoutSession(_ context.Context, id string) (*stripe.CheckoutSession, error) {
+	if err := f.enter("ExpireCheckoutSession"); err != nil {
+		return nil, err
+	}
+	if f.sessionStatus[id] != stripe.CheckoutSessionStatusOpen {
+		return nil, fmt.Errorf("fake stripe: session %s is not open", id)
+	}
+	f.sessionStatus[id] = stripe.CheckoutSessionStatusExpired
+	return &stripe.CheckoutSession{ID: id, Status: stripe.CheckoutSessionStatusExpired}, nil
 }
 
 func (f *fakeAPI) GetSubscription(_ context.Context, id string) (*stripe.Subscription, error) {
