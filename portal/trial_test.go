@@ -26,15 +26,21 @@ func TestTrialGrantsOnceAndSignsIn(t *testing.T) {
 	ctx := context.Background()
 
 	tok := ts.handoff(apihandoff.PurposeTrial, "Ann@Example.com")
-	rec := ts.do("GET", "/trial?t="+tok, "")
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "ann@example.com") || !strings.Contains(rec.Body.String(), tok) {
+	rec := ts.do("GET", "/trial?t="+tok+"&return_to=https%3A%2F%2Fpokemon.mtgban.com%2Fapi-plans", "")
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "ann@example.com") || !strings.Contains(rec.Body.String(), tok) ||
+		!strings.Contains(rec.Body.String(), `name="return_to" value="https://pokemon.mtgban.com/api-plans"`) ||
+		!strings.Contains(rec.Body.String(), "Ann Example") {
 		t.Fatalf("confirm: %d %s", rec.Code, rec.Body.String())
 	}
 
-	rec = ts.do("POST", "/trial", "t="+tok)
+	rec = ts.do("POST", "/trial", "t="+tok+"&return_to=https%3A%2F%2Fpokemon.mtgban.com%2Fapi-plans")
 	ck := cookieNamed(rec, session.CookieName)
 	if rec.Code != 302 || rec.Header().Get("Location") != "/account?notice=trial" || ck == nil {
 		t.Fatalf("%d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	pending := cookieNamed(rec, session.PendingName)
+	if rec := ts.do("GET", "/account", "", ck, pending); !strings.Contains(rec.Body.String(), "https://pokemon.mtgban.com/api-plans") {
+		t.Errorf("account page missing return_to: %s", rec.Body.String())
 	}
 	a, err := ts.store.GetAccountByEmail(ctx, "ann@example.com")
 	if err != nil {
@@ -67,6 +73,29 @@ func TestTrialGrantsOnceAndSignsIn(t *testing.T) {
 	}
 	if ents, _ = ts.store.ListEntitlements(ctx, a.ID); len(ents) != 1 {
 		t.Error("second trial added an entitlement")
+	}
+
+	// A foreign return_to falls back to PricingURL.
+	tok3 := ts.handoff(apihandoff.PurposeTrial, "foreign@example.com")
+	rec = ts.do("GET", "/trial?t="+tok3+"&return_to=https%3A%2F%2Fevil.example%2F", "")
+	if !strings.Contains(rec.Body.String(), `name="return_to" value="`+ts.PricingURL+`"`) {
+		t.Errorf("foreign return_to not rebased to pricing url: %s", rec.Body.String())
+	}
+}
+
+func TestTrialWithoutReturnToSetsNoPendingCookie(t *testing.T) {
+	ts := newTestServer(t)
+	tok := ts.handoff(apihandoff.PurposeTrial, "noreturn@example.com")
+	rec := ts.do("POST", "/trial", "t="+tok)
+	ck := cookieNamed(rec, session.CookieName)
+	if rec.Code != 302 || ck == nil {
+		t.Fatalf("%d", rec.Code)
+	}
+	if cookieNamed(rec, session.PendingName) != nil {
+		t.Error("pending cookie set without a return_to")
+	}
+	if rec := ts.do("GET", "/account", "", ck); strings.Contains(rec.Body.String(), "Back to") {
+		t.Errorf("account page shows a return_to link without one: %s", rec.Body.String())
 	}
 }
 
@@ -122,7 +151,8 @@ func TestPatreonSessionHandoff(t *testing.T) {
 	ts := newTestServer(t)
 	tok := ts.handoff(apihandoff.PurposeLogin, "bob@example.com")
 	rec := ts.do("GET", "/session?t="+tok, "")
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "bob@example.com") || !strings.Contains(rec.Body.String(), `value="`+tok+`"`) {
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "bob@example.com") || !strings.Contains(rec.Body.String(), `value="`+tok+`"`) ||
+		!strings.Contains(rec.Body.String(), "Ann Example") {
 		t.Fatalf("confirm: %d %s", rec.Code, rec.Body.String())
 	}
 	rec = ts.do("POST", "/session", "t="+tok)
@@ -131,13 +161,56 @@ func TestPatreonSessionHandoff(t *testing.T) {
 	}
 
 	pending := cookieFor(ts, map[string][]string{"package": {"all_data"}, "interval": {"monthly"}, "games": {"magic"}})
-	rec = ts.do("POST", "/session", "t="+ts.handoff(apihandoff.PurposeLogin, "bob@example.com"), pending)
+	rec = ts.do("POST", "/session", "t="+ts.handoff(apihandoff.PurposeLogin, "bob@example.com")+"&return_to=https%3A%2F%2Fpokemon.mtgban.com%2Fapi-plans", pending)
 	if rec.Header().Get("Location") != "/checkout" {
 		t.Errorf("pending: %q", rec.Header().Get("Location"))
+	}
+	merged := cookieNamed(rec, session.PendingName)
+	pv, _ := ts.Sessions.Open(merged.Value)
+	if pv.Get("package") != "all_data" || pv.Get("return_to") != "https://pokemon.mtgban.com/api-plans" {
+		t.Errorf("pending after session merge: %v", pv)
 	}
 
 	if rec := ts.do("GET", "/session?t="+ts.handoff(apihandoff.PurposeTrial, "bob@example.com"), ""); rec.Code != 400 {
 		t.Errorf("trial token on /session: %d", rec.Code)
+	}
+
+	tok3 := ts.handoff(apihandoff.PurposeLogin, "eve@example.com")
+	if rec := ts.doCrossSite("POST", "/session", "t="+tok3); rec.Code != 403 {
+		t.Errorf("cross-site session: %d", rec.Code)
+	}
+	rec = ts.do("POST", "/session", "t="+tok3)
+	if rec.Code != 302 || cookieNamed(rec, session.CookieName) == nil {
+		t.Errorf("nonce still usable after cross-site refusal: %d", rec.Code)
+	}
+}
+
+func TestPatreonSessionWithoutReturnToSetsNoPendingCookie(t *testing.T) {
+	ts := newTestServer(t)
+	tok := ts.handoff(apihandoff.PurposeLogin, "noreturn2@example.com")
+	rec := ts.do("POST", "/session", "t="+tok)
+	ck := cookieNamed(rec, session.CookieName)
+	if rec.Code != 302 || ck == nil {
+		t.Fatalf("%d", rec.Code)
+	}
+	if cookieNamed(rec, session.PendingName) != nil {
+		t.Error("pending cookie set without a return_to")
+	}
+	if rec := ts.do("GET", "/account", "", ck); strings.Contains(rec.Body.String(), "Back to") {
+		t.Errorf("account page shows a return_to link without one: %s", rec.Body.String())
+	}
+}
+
+func TestTrialConfirmGreetsEmailAloneWithoutName(t *testing.T) {
+	ts := newTestServer(t)
+	nonce, err := apihandoff.NewNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := apihandoff.Mint(ts.TrialSecret, apihandoff.Claims{Email: "noname@example.com", Purpose: apihandoff.PurposeTrial, Nonce: nonce, Expires: ts.now.Add(apihandoff.TTL)})
+	rec := ts.do("GET", "/trial?t="+tok, "")
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "noname@example.com") || strings.Contains(rec.Body.String(), "()") {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 }
 

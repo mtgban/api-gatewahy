@@ -9,6 +9,9 @@
     <tr><th>Billing</th><td>{{.Interval}}{{if .Change}} (unchanged){{end}}</td></tr>
     <tr><th>Total</th><td class="total">{{.Total}} {{.Interval}}</td></tr>
   </table>
+  {{if .HasPlan}}
+  <p class="msg msg-error">You already have a plan. Use <a href="/account">Change plan</a> on your account page to switch.</p>
+  {{else}}
   {{if .Change}}
   <p class="dim">The difference is prorated on your next invoice. Your key keeps working throughout.</p>
   {{else}}
@@ -17,9 +20,10 @@
   <form method="POST" action="{{.Action}}">
     <input type="hidden" name="csrf" value="{{$.CSRF}}">
     {{range $k, $vs := .Fields}}{{range $vs}}<input type="hidden" name="{{$k}}" value="{{.}}">{{end}}{{end}}
-    <button type="submit" class="btn">{{if .Change}}Change plan{{else}}Continue to payment{{end}}</button>
+    <button type="submit" class="btn"{{if .BillingOff}} disabled{{end}}>{{if .Change}}Change plan{{else}}Continue to payment{{end}}</button>
     <a href="{{.ReturnTo}}" class="dim" style="margin-left:1em">Change selection</a>
   </form>
+  {{end}}
 </div>
 {{end}}
 {{template "footer" .}}

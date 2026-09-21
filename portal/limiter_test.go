@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -27,5 +28,23 @@ func TestLimiterSlidingHour(t *testing.T) {
 	}
 	if _, ok := l.hits["empty"]; ok {
 		t.Error("refused key left an entry")
+	}
+}
+
+func TestLimiterSweepShrinksMap(t *testing.T) {
+	var l limiter
+	now := time.Now()
+	for i := 0; i < 300; i++ {
+		l.allow(fmt.Sprintf("k%d", i), 1000, now)
+	}
+	if len(l.hits) != 300 {
+		t.Fatalf("setup: %d keys", len(l.hits))
+	}
+	later := now.Add(2 * time.Hour)
+	for i := 0; i < 256; i++ {
+		l.allow(fmt.Sprintf("burst%d", i), 1000, later)
+	}
+	if len(l.hits) >= 300 {
+		t.Errorf("sweep did not shrink the map: %d keys", len(l.hits))
 	}
 }

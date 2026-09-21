@@ -81,6 +81,10 @@ func (s *Server) renderLogin(w http.ResponseWriter, r *http.Request, status int,
 // login sends a magic link. The page is the same whether the account existed.
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	pv, _ := s.Sessions.Pending(r)
+	if !s.sameOrigin(r) {
+		s.renderLogin(w, r, http.StatusForbidden, "That request did not come from this site. Use the form on this page.", pv)
+		return
+	}
 	email := apiaccess.NormalizeEmail(r.FormValue("email"))
 	if addr, err := mail.ParseAddress(email); len(email) > 254 || err != nil || addr.Address != email || strings.ContainsAny(email, " <>") {
 		s.renderLogin(w, r, http.StatusBadRequest, "Enter your email address.", pv)
@@ -160,7 +164,7 @@ func (s *Server) afterLogin(w http.ResponseWriter, r *http.Request) {
 // logout clears cookies for any signed-in reader, even a suspended one, as long as the CSRF token checks out.
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if sess, err := s.Sessions.Read(r); err == nil && !s.Sessions.CheckCSRF(sess, r.FormValue("csrf")) {
-		http.Error(w, "this form expired, go back and try again", http.StatusForbidden)
+		http.Error(w, csrfExpiredMsg, http.StatusForbidden)
 		return
 	}
 	s.Sessions.Clear(w)

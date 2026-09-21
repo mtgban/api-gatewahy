@@ -13,5 +13,13 @@
   {{range .Accounts}}<tr><td><a href="/admin/accounts/{{.ID}}">{{.Email}}</a></td><td>{{.Status}}</td><td>{{date .CreatedAt}}</td><td>{{.Note}}</td></tr>{{end}}
   </tbody>
 </table>
+
+<h2>Activity</h2>
+<table>
+  <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Account</th><th>Target</th><th>Detail</th></tr></thead>
+  <tbody>
+  {{range .Actions}}<tr><td>{{datetime .At}}</td><td>{{.Actor}}</td><td>{{.Action}}</td><td>{{if .AccountID}}<a href="/admin/accounts/{{.AccountID}}">{{.AccountID}}</a>{{end}}</td><td>{{.Target}}</td><td>{{.Detail}}</td></tr>{{end}}
+  </tbody>
+</table>
 {{end}}
 {{template "footer" .}}

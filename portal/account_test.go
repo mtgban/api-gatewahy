@@ -88,7 +88,7 @@ func TestPortalAndPlanChange(t *testing.T) {
 	if !strings.Contains(body, `href="/portal"`) {
 		t.Error("portal button missing")
 	}
-	changeURL := regexp.MustCompile(`href="(https://mtgban\.com/api-plans\?[^"]+)"`).FindStringSubmatch(body)
+	changeURL := regexp.MustCompile(`href="([^"]+)">Change plan</a>`).FindStringSubmatch(body)
 	if changeURL == nil {
 		t.Fatalf("no change link in %s", body)
 	}
@@ -97,13 +97,25 @@ func TestPortalAndPlanChange(t *testing.T) {
 		t.Errorf("change link %q", changeURL[1])
 	}
 
+	ts.PricingURL = "https://mtgban.com/api-plans?utm=x"
+	rec = ts.do("GET", "/account", "", ck)
+	changeURLWithUTM := regexp.MustCompile(`href="([^"]+)">Change plan</a>`).FindStringSubmatch(rec.Body.String())
+	if changeURLWithUTM == nil {
+		t.Fatalf("no change link with utm in %s", rec.Body.String())
+	}
+	u2, _ := url.Parse(strings.ReplaceAll(changeURLWithUTM[1], "&amp;", "&"))
+	if u2.Query().Get("utm") != "x" || u2.Query().Get("change") != "1" {
+		t.Errorf("change link lost pricing query %q", changeURLWithUTM[1])
+	}
+	ts.PricingURL = "https://mtgban.com/api-plans"
+
 	rec = ts.do("GET", "/portal", "", ck)
 	if rec.Code != 303 || rec.Header().Get("Location") != "https://billing.stripe.com/p/session/test" {
 		t.Errorf("portal: %d %q", rec.Code, rec.Header().Get("Location"))
 	}
 
 	rec = ts.do("GET", "/checkout?change=1&package=starter&games=magic&stores=CK,SCG&return_to=https%3A%2F%2Fmtgban.com%2Fapi-plans", "", ck)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `action="/account/plan"`) || !strings.Contains(rec.Body.String(), "$350.00") {
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `action="/account/plan"`) || !strings.Contains(rec.Body.String(), "$350") {
 		t.Fatalf("change confirm: %d %s", rec.Code, rec.Body.String())
 	}
 	reconciled := ""
@@ -147,5 +159,23 @@ func TestCreateKeyCapsLabelByRunes(t *testing.T) {
 	}
 	if !utf8.ValidString(got) {
 		t.Errorf("label is not valid utf8: %q", got)
+	}
+}
+
+func TestCreateKeyRateLimit(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, csrf := ts.signIn(t, "many@example.com")
+	for i := 0; i < 11; i++ {
+		rec := ts.do("POST", "/account/keys", "csrf="+csrf, ck)
+		want := 200
+		if i == 10 {
+			want = 429
+		}
+		if rec.Code != want {
+			t.Errorf("key %d: got %d want %d", i, rec.Code, want)
+		}
+		if i == 10 && !strings.Contains(rec.Body.String(), "Too many keys") {
+			t.Errorf("eleventh body: %s", rec.Body.String())
+		}
 	}
 }

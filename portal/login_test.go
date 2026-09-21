@@ -90,6 +90,21 @@ func TestLoginRejectsBadEmailAndRateLimits(t *testing.T) {
 	}
 }
 
+func TestLoginRequiresSameOrigin(t *testing.T) {
+	ts := newTestServer(t)
+	rec := ts.doCrossSite("POST", "/login", "email=ann%40example.com")
+	if rec.Code != 403 {
+		t.Errorf("cross-site: %d", rec.Code)
+	}
+	if ts.mail.Len() != 0 {
+		t.Error("cross-site login sent mail")
+	}
+	rec = ts.do("POST", "/login", "email=ann%40example.com")
+	if rec.Code != 200 {
+		t.Errorf("same-origin: %d", rec.Code)
+	}
+}
+
 func TestLoginContinuesPendingCheckout(t *testing.T) {
 	ts := newTestServer(t)
 	rec := ts.do("POST", "/login", "email=ann%40example.com")

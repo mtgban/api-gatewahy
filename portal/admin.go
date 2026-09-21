@@ -17,6 +17,7 @@ type adminHomeData struct {
 	Query     string
 	Accounts  []apiaccess.Account
 	HasStripe bool
+	Actions   []apiaccess.AdminAction
 }
 
 type adminAccountData struct {
@@ -28,6 +29,7 @@ type adminAccountData struct {
 	Intervals    []apiproductlist.Interval
 	NewInvite    string
 	StripeURL    string
+	Actions      []apiaccess.AdminAction
 }
 
 type adminEntitlement struct {
@@ -68,10 +70,17 @@ func (s *Server) renderAdminHome(w http.ResponseWriter, r *http.Request, sess se
 		s.logf("admin accounts: %v", err)
 		errMsg = tryAgainMsg
 	}
+	actions, err := s.Store.ListAdminActions(r.Context(), 0, 20)
+	if err != nil {
+		s.logf("admin actions: %v", err)
+		if errMsg == "" {
+			errMsg = tryAgainMsg
+		}
+	}
 	p := s.pageFor(&sess, "Admin")
 	p.Notice = notice
 	p.Error = errMsg
-	p.Data = adminHomeData{Query: q, Accounts: accounts, HasStripe: s.ReconcileAll != nil}
+	p.Data = adminHomeData{Query: q, Accounts: accounts, HasStripe: s.ReconcileAll != nil, Actions: actions}
 	s.render(w, status, "admin_home.html", p)
 }
 
@@ -89,6 +98,7 @@ func (s *Server) adminReconcile(w http.ResponseWriter, r *http.Request, sess ses
 		s.renderAdminHome(w, r, sess, http.StatusBadGateway, "", "Reconcile failed: "+err.Error())
 		return
 	}
+	s.audit(r, sess, "reconcile", 0, "", res.Summary())
 	s.renderAdminHome(w, r, sess, http.StatusOK, res.Summary(), "")
 }
 
@@ -120,16 +130,30 @@ func (s *Server) renderAdminAccount(w http.ResponseWriter, r *http.Request, sess
 	}
 	keys, err := s.Store.ListKeys(ctx, a.ID)
 	if err != nil {
-		errMsg = tryAgainMsg
+		s.logf("admin account %d: keys: %v", a.ID, err)
+		if errMsg == "" {
+			errMsg = tryAgainMsg
+		}
 	}
 	d.Keys = keys
 	ents, err := s.Store.ListEntitlements(ctx, a.ID)
 	if err != nil {
-		errMsg = tryAgainMsg
+		s.logf("admin account %d: entitlements: %v", a.ID, err)
+		if errMsg == "" {
+			errMsg = tryAgainMsg
+		}
 	}
 	for _, e := range ents {
 		d.Entitlements = append(d.Entitlements, adminEntitlement{Entitlement: e, View: s.describeEntitlement(e)})
 	}
+	actions, err := s.Store.ListAdminActions(ctx, a.ID, 20)
+	if err != nil {
+		s.logf("admin account %d: actions: %v", a.ID, err)
+		if errMsg == "" {
+			errMsg = tryAgainMsg
+		}
+	}
+	d.Actions = actions
 	p := s.pageFor(&sess, "Account "+a.Email)
 	p.Notice = notice
 	p.Error = errMsg
@@ -163,6 +187,7 @@ func (s *Server) adminStatus(w http.ResponseWriter, r *http.Request, sess sessio
 		s.renderAdminAccount(w, r, sess, a, http.StatusInternalServerError, "", tryAgainMsg, "")
 		return
 	}
+	s.audit(r, sess, "status", a.ID, "", status)
 	s.notify(r)
 	s.adminRedirect(w, r, a, "status")
 }
@@ -172,10 +197,12 @@ func (s *Server) adminNote(w http.ResponseWriter, r *http.Request, sess session.
 	if !ok {
 		return
 	}
-	if err := s.Store.SetAccountNote(r.Context(), a.ID, strings.TrimSpace(r.FormValue("note"))); err != nil {
+	note := strings.TrimSpace(r.FormValue("note"))
+	if err := s.Store.SetAccountNote(r.Context(), a.ID, note); err != nil {
 		s.renderAdminAccount(w, r, sess, a, http.StatusInternalServerError, "", tryAgainMsg, "")
 		return
 	}
+	s.audit(r, sess, "note", a.ID, "", note)
 	s.adminRedirect(w, r, a, "saved")
 }
 
@@ -201,6 +228,7 @@ func (s *Server) adminRevokeKey(w http.ResponseWriter, r *http.Request, sess ses
 	if err := s.Store.Notify(r.Context(), k.Hash); err != nil {
 		s.logf("notify: %v", err)
 	}
+	s.audit(r, sess, "key revoke", a.ID, k.Prefix, "")
 	s.adminRedirect(w, r, a, "revoked")
 }
 
@@ -239,12 +267,20 @@ func (s *Server) adminAddEntitlement(w http.ResponseWriter, r *http.Request, ses
 			bad("Until must be YYYY-MM-DD.")
 			return
 		}
+		if t.Before(s.now()) {
+			bad("Until must be in the future.")
+			return
+		}
 		e.ValidUntil = &t
 	}
-	if _, err := s.Store.AddEntitlement(r.Context(), e); err != nil {
-		bad("Could not add the entitlement: " + err.Error())
+	added, err := s.Store.AddEntitlement(r.Context(), e)
+	if err != nil {
+		s.logf("admin add entitlement %d: %v", a.ID, err)
+		s.renderAdminAccount(w, r, sess, a, http.StatusInternalServerError, "", tryAgainMsg, "")
 		return
 	}
+	detail := strings.Join(added.Games, ",") + " " + added.StoreScope + " " + strings.Join(added.Modes, ",")
+	s.audit(r, sess, "grant", a.ID, "entitlement "+itoa(added.ID), detail)
 	s.notify(r)
 	s.adminRedirect(w, r, a, "granted")
 }
@@ -268,6 +304,7 @@ func (s *Server) adminEndEntitlement(w http.ResponseWriter, r *http.Request, ses
 		s.renderAdminAccount(w, r, sess, a, http.StatusInternalServerError, "", tryAgainMsg, "")
 		return
 	}
+	s.audit(r, sess, "end", a.ID, "entitlement "+itoa(eid), "")
 	s.notify(r)
 	s.adminRedirect(w, r, a, "ended")
 }
@@ -284,13 +321,19 @@ func (s *Server) adminInvite(w http.ResponseWriter, r *http.Request, sess sessio
 	}
 	days, err := strconv.Atoi(r.FormValue("days"))
 	if err != nil || days <= 0 {
-		days = 14
+		s.renderAdminAccount(w, r, sess, a, http.StatusBadRequest, "", "Days must be a positive number.", "")
+		return
+	}
+	if days > 365 {
+		s.renderAdminAccount(w, r, sess, a, http.StatusBadRequest, "", "Days must be at most 365.", "")
+		return
 	}
 	token, _, err := s.Store.CreateInvite(r.Context(), iv.Key, a.Email, time.Duration(days)*24*time.Hour, strings.TrimSpace(r.FormValue("note")))
 	if err != nil {
 		s.renderAdminAccount(w, r, sess, a, http.StatusInternalServerError, "", tryAgainMsg, "")
 		return
 	}
+	s.audit(r, sess, "invite", a.ID, iv.Key, itoa(int64(days))+" days")
 	s.renderAdminAccount(w, r, sess, a, http.StatusOK, "Invite created. It is shown once.", "", token)
 }
 
@@ -311,6 +354,10 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess session
 			return
 		}
 	}
+	if from.After(to) {
+		s.fail(w, r, http.StatusBadRequest, "Since must not be after until.")
+		return
+	}
 	if d.Since == "" {
 		d.Since = from.Format("2006-01-02")
 	}
@@ -327,6 +374,10 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess session
 		accountID = a.ID
 	}
 	rows, err := s.Store.SummarizeUsage(r.Context(), from, to, accountID)
+	if errors.Is(err, apiaccess.ErrNotFound) {
+		s.fail(w, r, http.StatusNotFound, tryAgainMsg)
+		return
+	}
 	if err != nil {
 		s.fail(w, r, http.StatusInternalServerError, tryAgainMsg)
 		return
@@ -339,6 +390,13 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess session
 	p := s.pageFor(&sess, "Usage")
 	p.Data = d
 	s.render(w, http.StatusOK, "admin_usage.html", p)
+}
+
+// audit records an admin mutation on the account's activity log.
+func (s *Server) audit(r *http.Request, sess session.Session, action string, accountID int64, target, detail string) {
+	if err := s.Store.RecordAdminAction(r.Context(), sess.Email, action, accountID, target, detail); err != nil {
+		s.logf("audit %s: %v", action, err)
+	}
 }
 
 // notify asks every gateway to drop its cache; the write already landed, so failure is only logged.

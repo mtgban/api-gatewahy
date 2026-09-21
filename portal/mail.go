@@ -26,12 +26,12 @@ func keyCreatedMail(prefix, label, accountURL string) (subject, text, htmlBody s
 	return
 }
 
-func trialStartedMail(endsAt time.Time, accountURL string) (subject, text, htmlBody string) {
+func trialStartedMail(endsAt time.Time, accountURL string, days int) (subject, text, htmlBody string) {
 	when := endsAt.Format("January 2, 2006")
 	subject = "Your MTGBAN API trial has started"
-	text = fmt.Sprintf("Your 15-day trial of the MTGBAN API is active until %s, covering every game and every store. Create a key and read the guide at %s\n", when, accountURL)
-	htmlBody = fmt.Sprintf(`<p>Your 15-day trial of the MTGBAN API is active until <strong>%s</strong>, covering every game and every store.</p><p><a href="%s">Create a key and get started</a>.</p>`,
-		when, html.EscapeString(accountURL))
+	text = fmt.Sprintf("Your %d-day trial of the MTGBAN API is active until %s, covering every game and every store. Create a key and read the guide at %s\n", days, when, accountURL)
+	htmlBody = fmt.Sprintf(`<p>Your %d-day trial of the MTGBAN API is active until <strong>%s</strong>, covering every game and every store.</p><p><a href="%s">Create a key and get started</a>.</p>`,
+		days, when, html.EscapeString(accountURL))
 	return
 }
 

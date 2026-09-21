@@ -3,6 +3,7 @@ package portal
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"slices"
 	"time"
 
@@ -20,15 +21,19 @@ type trialDeniedData struct {
 
 // trialConfirmData is trial_confirm.html's payload.
 type trialConfirmData struct {
-	Email string
-	Token string
-	Days  int
+	Email    string
+	Name     string
+	Token    string
+	Days     int
+	ReturnTo string
 }
 
 // sessionConfirmData is session_confirm.html's payload.
 type sessionConfirmData struct {
-	Email string
-	Token string
+	Email    string
+	Name     string
+	Token    string
+	ReturnTo string
 }
 
 func (s *Server) registerTrial(mux *http.ServeMux) {
@@ -39,12 +44,11 @@ func (s *Server) registerTrial(mux *http.ServeMux) {
 }
 
 // verifyHandoff checks the token's signature, expiry, and purpose without touching its nonce.
-// r.FormValue reads the query string on GET and the body on POST.
-func (s *Server) verifyHandoff(r *http.Request, purpose string) (apihandoff.Claims, bool) {
+func (s *Server) verifyHandoff(token, purpose string) (apihandoff.Claims, bool) {
 	if len(s.TrialSecret) == 0 {
 		return apihandoff.Claims{}, false
 	}
-	c, err := apihandoff.Verify(s.TrialSecret, r.FormValue("t"), s.now())
+	c, err := apihandoff.Verify(s.TrialSecret, token, s.now())
 	if err != nil || c.Purpose != purpose {
 		return apihandoff.Claims{}, false
 	}
@@ -52,8 +56,9 @@ func (s *Server) verifyHandoff(r *http.Request, purpose string) (apihandoff.Clai
 }
 
 // handoffClaims verifies the token for one purpose and burns its nonce.
+// r.FormValue reads the query string on GET and the body on POST.
 func (s *Server) handoffClaims(r *http.Request, purpose string) (apihandoff.Claims, bool) {
-	c, ok := s.verifyHandoff(r, purpose)
+	c, ok := s.verifyHandoff(r.FormValue("t"), purpose)
 	if !ok {
 		return apihandoff.Claims{}, false
 	}
@@ -83,13 +88,15 @@ func (s *Server) handoffFailed(w http.ResponseWriter, title string) {
 
 // trialConfirm shows the confirm page for a trial token without spending its nonce.
 func (s *Server) trialConfirm(w http.ResponseWriter, r *http.Request) {
-	c, ok := s.verifyHandoff(r, apihandoff.PurposeTrial)
+	token := r.FormValue("t")
+	c, ok := s.verifyHandoff(token, apihandoff.PurposeTrial)
 	if !ok {
 		s.handoffFailed(w, "Trial link expired")
 		return
 	}
+	returnTo := validReturnTo(r.FormValue("return_to"), s.PricingURL)
 	p := s.pageFor(nil, "Start your API trial")
-	p.Data = trialConfirmData{Email: apiaccess.NormalizeEmail(c.Email), Token: r.FormValue("t"), Days: s.trialDays()}
+	p.Data = trialConfirmData{Email: apiaccess.NormalizeEmail(c.Email), Name: c.Name, Token: token, Days: s.trialDays(), ReturnTo: returnTo}
 	s.render(w, http.StatusOK, "trial_confirm.html", p)
 }
 
@@ -104,6 +111,7 @@ func (s *Server) trial(w http.ResponseWriter, r *http.Request) {
 		s.handoffFailed(w, "Trial link expired")
 		return
 	}
+	returnTo := validReturnTo(r.FormValue("return_to"), s.PricingURL)
 	ctx := r.Context()
 	now := s.now()
 	a, err := s.Store.GetOrCreateAccount(ctx, claims.Email, "patreon trial")
@@ -146,23 +154,38 @@ func (s *Server) trial(w http.ResponseWriter, r *http.Request) {
 	if err := s.Store.Notify(ctx, ""); err != nil {
 		s.logf("trial notify: %v", err)
 	}
-	subject, text, htmlBody := trialStartedMail(until, s.PublicURL+"/account")
+	subject, text, htmlBody := trialStartedMail(until, s.PublicURL+"/account", s.trialDays())
 	if err := s.Mail.Send(ctx, a.Email, subject, text, htmlBody); err != nil {
 		s.logf("trial mail %s: %v", a.Email, err)
 	}
 	s.Sessions.Issue(w, session.Session{AccountID: a.ID, Email: a.Email})
+	if r.FormValue("return_to") != "" {
+		s.mergePendingReturnTo(w, r, returnTo)
+	}
 	http.Redirect(w, r, "/account?notice=trial", http.StatusFound)
+}
+
+// mergePendingReturnTo sets return_to on the pending cookie without dropping a pending plan.
+func (s *Server) mergePendingReturnTo(w http.ResponseWriter, r *http.Request, returnTo string) {
+	pending, err := s.Sessions.Pending(r)
+	if err != nil {
+		pending = url.Values{}
+	}
+	pending.Set("return_to", returnTo)
+	s.Sessions.SetPending(w, pending, pendingTTL)
 }
 
 // sessionConfirm shows a confirm button for a Patreon sign-in token without spending its nonce.
 func (s *Server) sessionConfirm(w http.ResponseWriter, r *http.Request) {
-	c, ok := s.verifyHandoff(r, apihandoff.PurposeLogin)
+	token := r.FormValue("t")
+	c, ok := s.verifyHandoff(token, apihandoff.PurposeLogin)
 	if !ok {
 		s.handoffFailed(w, "Sign-in link expired")
 		return
 	}
+	returnTo := validReturnTo(r.FormValue("return_to"), s.PricingURL)
 	p := s.pageFor(nil, "Sign in with Patreon")
-	p.Data = sessionConfirmData{Email: apiaccess.NormalizeEmail(c.Email), Token: r.FormValue("t")}
+	p.Data = sessionConfirmData{Email: apiaccess.NormalizeEmail(c.Email), Name: c.Name, Token: token, ReturnTo: returnTo}
 	s.render(w, http.StatusOK, "session_confirm.html", p)
 }
 
@@ -177,6 +200,7 @@ func (s *Server) patreonSession(w http.ResponseWriter, r *http.Request) {
 		s.handoffFailed(w, "Sign-in link expired")
 		return
 	}
+	returnTo := validReturnTo(r.FormValue("return_to"), s.PricingURL)
 	a, err := s.Store.GetOrCreateAccount(r.Context(), claims.Email, "patreon")
 	if err != nil {
 		s.logf("session %s: %v", claims.Email, err)
@@ -188,5 +212,8 @@ func (s *Server) patreonSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Sessions.Issue(w, session.Session{AccountID: a.ID, Email: a.Email})
+	if r.FormValue("return_to") != "" {
+		s.mergePendingReturnTo(w, r, returnTo)
+	}
 	s.afterLogin(w, r)
 }

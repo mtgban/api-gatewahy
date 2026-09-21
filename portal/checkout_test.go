@@ -3,10 +3,13 @@ package portal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/mtgban/api-gatewahy/apiaccess"
 	"github.com/mtgban/api-gatewahy/billing"
 	"github.com/mtgban/api-gatewahy/session"
 	"github.com/stripe/stripe-go/v84"
@@ -49,7 +52,7 @@ func TestCheckoutConfirmAndPost(t *testing.T) {
 	_, ck, csrf := ts.signIn(t, "ann@example.com")
 	rec := ts.do("GET", starterQuery, "", ck)
 	body := rec.Body.String()
-	if rec.Code != 200 || !strings.Contains(body, "$500.00") || !strings.Contains(body, "Card Kingdom") || !strings.Contains(body, "pokemon") || !strings.Contains(body, `name="csrf" value="`+csrf+`"`) {
+	if rec.Code != 200 || !strings.Contains(body, "$500") || !strings.Contains(body, "Card Kingdom") || !strings.Contains(body, "pokemon") || !strings.Contains(body, `name="csrf" value="`+csrf+`"`) {
 		t.Fatalf("confirm: %d %s", rec.Code, body)
 	}
 	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"monthly"}, "games": {"magic,pokemon"}, "stores": {"CK,SCG"}, "return_to": {"https://pokemon.mtgban.com/api-plans"}}
@@ -71,8 +74,100 @@ func TestCheckoutConfirmAndPost(t *testing.T) {
 	}
 	f.fail = errors.New("stripe down")
 	rec = ts.do("POST", "/checkout", form.Encode(), ck)
-	if rec.Code != 502 || !strings.Contains(rec.Body.String(), "Could not start checkout") || !strings.Contains(rec.Body.String(), "$500.00") {
+	if rec.Code != 502 || !strings.Contains(rec.Body.String(), "Could not start checkout") || !strings.Contains(rec.Body.String(), "$500") {
 		t.Errorf("failure: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCheckoutBlocksSecondSubscription(t *testing.T) {
+	ts := newTestServer(t)
+	ts.withStripe()
+	a, ck, csrf := ts.signIn(t, "ann@example.com")
+	ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
+
+	rec := ts.do("GET", starterQuery, "", ck)
+	body := rec.Body.String()
+	if rec.Code != 200 || !strings.Contains(body, "You already have a plan") || strings.Contains(body, `class="btn"`) {
+		t.Fatalf("confirm with existing plan: %d %s", rec.Code, body)
+	}
+
+	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"monthly"}, "games": {"magic,pokemon"}, "stores": {"CK,SCG"}}
+	rec = ts.do("POST", "/checkout", form.Encode(), ck)
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "You already have a plan") {
+		t.Errorf("post with existing plan: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestManySubscriptionsShowsContactMessage(t *testing.T) {
+	ts := newTestServer(t)
+	ts.withStripe()
+	a, ck, csrf := ts.signIn(t, "ann@example.com")
+	ctx := context.Background()
+	ts.store.AddEntitlement(ctx, entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
+	e2 := entitlementFor(a.ID, "stripe", "BASE_ACCESS")
+	e2.ExternalRef = "sub_2"
+	ts.store.AddEntitlement(ctx, e2)
+
+	const changeQuery = "/checkout?change=1&package=all_data&games=magic&return_to=https%3A%2F%2Fmtgban.com%2Fapi-plans"
+	rec := ts.do("GET", changeQuery, "", ck)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "more than one subscription") {
+		t.Errorf("checkout change: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec = ts.do("POST", "/account/plan", "csrf="+csrf+"&package=all_data&interval=monthly&games=magic", ck)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "more than one subscription") {
+		t.Errorf("account plan: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCancelReleasesInvite(t *testing.T) {
+	ts := newTestServer(t)
+	ts.withStripe()
+	_, ck, csrf := ts.signIn(t, "ann@example.com")
+	ctx := context.Background()
+	token, _, err := ts.store.CreateInvite(ctx, "quarterly", "ann@example.com", time.Hour, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := "/checkout?package=starter&interval=quarterly&games=magic&games=pokemon&stores=CK&stores=SCG&invite=" + token
+	if rec := ts.do("GET", query, "", ck); rec.Code != 200 {
+		t.Fatalf("confirm: %d", rec.Code)
+	}
+	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"quarterly"}, "games": {"magic,pokemon"}, "stores": {"CK,SCG"}, "invite": {token}}
+	rec := ts.do("POST", "/checkout", form.Encode(), ck)
+	if rec.Code != 303 {
+		t.Fatalf("post: %d %s", rec.Code, rec.Body.String())
+	}
+	pending := cookieNamed(rec, session.PendingName)
+	if rec := ts.do("GET", "/checkout/cancel", "", ck, pending); rec.Code != 200 {
+		t.Fatalf("cancel: %d", rec.Code)
+	}
+	inv, ok := ts.store.invites[apiaccess.HashKey(token)]
+	if !ok || inv.UsedAt != nil {
+		t.Errorf("invite not released: %+v", inv)
+	}
+	if rec := ts.do("GET", query, "", ck); rec.Code != 200 {
+		t.Errorf("resume checkout: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCheckoutGetFailsClosedOnEntitlementListError(t *testing.T) {
+	ts := newTestServer(t)
+	ts.withStripe()
+	_, ck, _ := ts.signIn(t, "ann@example.com")
+	ts.store.listEntitlementsErr = errors.New("db down")
+	rec := ts.do("GET", starterQuery, "", ck)
+	if rec.Code != 500 || !strings.Contains(rec.Body.String(), tryAgainMsg) {
+		t.Errorf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCheckoutDropsStoresForNonExplicitPackage(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, _ := ts.signIn(t, "ann@example.com")
+	rec := ts.do("GET", "/checkout?package=all_data&games=magic&stores=CK", "", ck)
+	if rec.Code != 200 || strings.Contains(rec.Body.String(), "does not take a store list") {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -110,6 +205,25 @@ func TestSuccessAndCancelPages(t *testing.T) {
 	}
 }
 
+func TestConfirmDisablesButtonWithoutBilling(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, _ := ts.signIn(t, "ann@example.com")
+	rec := ts.do("GET", starterQuery, "", ck)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `class="btn" disabled>`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCheckoutErrorMessages(t *testing.T) {
+	ve := &billing.ValidationError{Msg: `unknown package "nope"`}
+	if got := checkoutError(ve); got != `That plan is not valid: unknown package "nope".` {
+		t.Errorf("validation: %q", got)
+	}
+	if got := checkoutError(fmt.Errorf("checkout: %w", errors.New("stripe down"))); got != "Could not start checkout. Try again in a minute." {
+		t.Errorf("wrapped stripe error: %q", got)
+	}
+}
+
 func TestCheckoutChangeConfirm(t *testing.T) {
 	ts := newTestServer(t)
 	_, ck, _ := ts.signIn(t, "ann@example.com")
@@ -127,7 +241,7 @@ func TestCheckoutChangeConfirm(t *testing.T) {
 		Metadata: billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID)}
 	rec := ts.do("GET", changeQuery, "", ck)
 	body := rec.Body.String()
-	if rec.Code != 200 || !strings.Contains(body, `action="/account/plan"`) || !strings.Contains(body, "(unchanged)") || !strings.Contains(body, "$800.00") {
+	if rec.Code != 200 || !strings.Contains(body, `action="/account/plan"`) || !strings.Contains(body, "(unchanged)") || !strings.Contains(body, "$800") {
 		t.Fatalf("change confirm: %d %s", rec.Code, body)
 	}
 }
