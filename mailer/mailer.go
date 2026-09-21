@@ -30,7 +30,8 @@ type SMTP struct {
 	Port int
 	User string
 	Pass string
-	// From is the header value, for example "MTGBAN <no-reply@mtgban.com>"
+	// From is the header value, for example "MTGBAN <no-reply@mtgban.com>";
+	// the header keeps the display name but MAIL FROM uses the bare address.
 	From string
 }
 
