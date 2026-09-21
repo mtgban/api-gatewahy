@@ -226,20 +226,21 @@ func (s *Server) checkoutPost(w http.ResponseWriter, r *http.Request, sess sessi
 		s.fail(w, r, http.StatusBadRequest, checkoutError(err))
 		return
 	}
-	checkoutURL, err := s.Checkout.Create(r.Context(), billing.Request{Account: a, Plan: plan, Invite: invite})
+	cs, err := s.Checkout.Create(r.Context(), billing.Request{Account: a, Plan: plan, Invite: invite})
 	if err != nil {
 		s.logf("checkout for %s: %v", a.Email, err)
 		s.renderConfirm(w, r, http.StatusBadGateway, sess, plan, invite, returnTo, false, checkoutError(err), false)
 		return
 	}
-	// Keep the invite too, so a cancelled checkout can resume with it.
+	// Keep the invite and the session id, so a cancelled checkout can expire the session and resume with the invite.
 	pending := planValues(plan)
 	pending.Set("return_to", returnTo)
+	pending.Set("cs", cs.ID)
 	if invite != "" {
 		pending.Set("invite", invite)
 	}
 	s.Sessions.SetPending(w, pending, pendingTTL)
-	http.Redirect(w, r, checkoutURL, http.StatusSeeOther)
+	http.Redirect(w, r, cs.URL, http.StatusSeeOther)
 }
 
 // checkoutError turns billing errors into sentences for the page.
@@ -292,13 +293,18 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 	returnTo := s.PricingURL
 	if pv, err := s.Sessions.Pending(r); err == nil {
 		returnTo = validReturnTo(pv.Get("return_to"), s.PricingURL)
+		// The invite comes back only once Stripe has expired the session it paid for;
+		// otherwise the same invite could pay for that session and a new one.
 		if invite := pv.Get("invite"); invite != "" {
-			if err := s.Store.ReleaseInvite(r.Context(), invite); err != nil {
-				s.logf("cancel release invite: %v", err)
+			if id := pv.Get("cs"); id != "" && s.Checkout != nil {
+				if err := s.Checkout.Abandon(r.Context(), id, invite); err != nil {
+					s.logf("cancel abandon %s: %v", id, err)
+				}
 			}
 			pv.Del("invite")
-			s.Sessions.SetPending(w, pv, pendingTTL)
 		}
+		pv.Del("cs")
+		s.Sessions.SetPending(w, pv, pendingTTL)
 	}
 	var sess *session.Session
 	if got, _, err := s.current(r); err == nil {

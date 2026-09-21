@@ -11,6 +11,7 @@ import (
 type API interface {
 	CreateCustomer(ctx context.Context, params *stripe.CustomerCreateParams) (*stripe.Customer, error)
 	CreateCheckoutSession(ctx context.Context, params *stripe.CheckoutSessionCreateParams) (*stripe.CheckoutSession, error)
+	ExpireCheckoutSession(ctx context.Context, id string) (*stripe.CheckoutSession, error)
 	GetSubscription(ctx context.Context, id string) (*stripe.Subscription, error)
 	ListSubscriptions(ctx context.Context) ([]*stripe.Subscription, error)
 	UpdateSubscription(ctx context.Context, id string, params *stripe.SubscriptionUpdateParams) (*stripe.Subscription, error)
@@ -50,6 +51,11 @@ func (c *Client) CreateCustomer(ctx context.Context, params *stripe.CustomerCrea
 // CreateCheckoutSession implements API.
 func (c *Client) CreateCheckoutSession(ctx context.Context, params *stripe.CheckoutSessionCreateParams) (*stripe.CheckoutSession, error) {
 	return c.sc.V1CheckoutSessions.Create(ctx, params)
+}
+
+// ExpireCheckoutSession implements API.
+func (c *Client) ExpireCheckoutSession(ctx context.Context, id string) (*stripe.CheckoutSession, error) {
+	return c.sc.V1CheckoutSessions.Expire(ctx, id, nil)
 }
 
 // GetSubscription fetches one subscription with its item prices expanded.

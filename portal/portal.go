@@ -54,7 +54,6 @@ type Store interface {
 	TrialsToRemind(ctx context.Context, from, to time.Time) ([]apiaccess.Trial, error)
 	MarkTrialReminded(ctx context.Context, id int64, at time.Time) error
 	CreateInvite(ctx context.Context, intervalKey, email string, ttl time.Duration, note string) (string, apiaccess.Invite, error)
-	ReleaseInvite(ctx context.Context, token string) error
 	Notify(ctx context.Context, payload string) error
 	ConsumeNonce(ctx context.Context, nonce string, expiresAt, now time.Time) error
 	RecordAdminAction(ctx context.Context, actor, action string, accountID int64, target, detail string) error

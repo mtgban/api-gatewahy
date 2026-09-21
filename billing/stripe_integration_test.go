@@ -72,13 +72,13 @@ func TestCheckoutSessionPerPackageAgainstStripe(t *testing.T) {
 		if pkg.StoreScope == apiproductlist.StoreScopeExplicit {
 			plan.Stores = []string{"CK", "SCG"}
 		}
-		url, err := co.Create(ctx, Request{Account: account, Plan: plan})
+		sess, err := co.Create(ctx, Request{Account: account, Plan: plan})
 		if err != nil {
 			t.Errorf("%s: %v", pkg.Key, err)
 			continue
 		}
-		if !strings.HasPrefix(url, "https://checkout.stripe.com/") {
-			t.Errorf("%s: url %q", pkg.Key, url)
+		if !strings.HasPrefix(sess.URL, "https://checkout.stripe.com/") {
+			t.Errorf("%s: sess.URL %q", pkg.Key, sess.URL)
 		}
 	}
 }

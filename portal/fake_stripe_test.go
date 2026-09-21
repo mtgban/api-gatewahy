@@ -3,6 +3,7 @@ package portal
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/mtgban/api-gatewahy/billing"
 	"github.com/mtgban/mtgban-website/apiproductlist"
@@ -16,6 +17,7 @@ type fakeStripe struct {
 	sub       *stripe.Subscription
 	updated   *stripe.SubscriptionUpdateParams
 	checkouts int
+	sessions  map[string]stripe.CheckoutSessionStatus
 	fail      error
 }
 
@@ -48,7 +50,21 @@ func (f *fakeStripe) CreateCheckoutSession(context.Context, *stripe.CheckoutSess
 		return nil, f.fail
 	}
 	f.checkouts++
-	return &stripe.CheckoutSession{URL: "https://checkout.stripe.com/c/pay/test"}, nil
+	id := fmt.Sprintf("cs_test_%d", f.checkouts)
+	if f.sessions == nil {
+		f.sessions = map[string]stripe.CheckoutSessionStatus{}
+	}
+	f.sessions[id] = stripe.CheckoutSessionStatusOpen
+	return &stripe.CheckoutSession{ID: id, URL: "https://checkout.stripe.com/c/pay/" + id}, nil
+}
+
+// ExpireCheckoutSession expires an open session; a completed one is refused like Stripe does.
+func (f *fakeStripe) ExpireCheckoutSession(_ context.Context, id string) (*stripe.CheckoutSession, error) {
+	if f.sessions[id] != stripe.CheckoutSessionStatusOpen {
+		return nil, fmt.Errorf("fake stripe: session %s is not open", id)
+	}
+	f.sessions[id] = stripe.CheckoutSessionStatusExpired
+	return &stripe.CheckoutSession{ID: id, Status: stripe.CheckoutSessionStatusExpired}, nil
 }
 
 func (f *fakeStripe) CreatePortalSession(context.Context, *stripe.BillingPortalSessionCreateParams) (*stripe.BillingPortalSession, error) {
