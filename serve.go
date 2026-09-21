@@ -249,6 +249,13 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 		})
 	}()
 
+	abort := func() {
+		stopJobs()
+		jobs.Wait()
+		_ = listener.Close()
+		_ = meter.Close()
+	}
+
 	var (
 		cat     *apiproductlist.ProductList
 		rec     *billing.Reconciler
@@ -258,10 +265,11 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 	if sd != nil || pd != nil {
 		cat = apiproductlist.MustLoad()
 		if err := checkCatalogStores(cat, cfg.KnownStores); err != nil {
-			stopJobs()
-			jobs.Wait()
-			_ = listener.Close()
-			_ = meter.Close()
+			abort()
+			return nil, nil, err
+		}
+		if err := checkCatalogGames(cat, cfg.GameNames()); err != nil {
+			abort()
 			return nil, nil, err
 		}
 	}
@@ -282,6 +290,10 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 		}()
 	}
 	if pd != nil {
+		if err := checkReservedPaths(cfg); err != nil {
+			abort()
+			return nil, nil, err
+		}
 		web = &portal.Server{
 			Store: store, Catalog: cat, Games: cfg.GameNames(), KnownStores: cfg.KnownStores,
 			Sessions:          &session.Codec{Secret: pd.sessionSecret, Secure: strings.HasPrefix(cfg.PublicURL, "https://")},
@@ -324,13 +336,7 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-	cleanup := func() {
-		stopJobs()
-		jobs.Wait()
-		_ = listener.Close()
-		_ = meter.Close()
-	}
-	return srv, cleanup, nil
+	return srv, abort, nil
 }
 
 // checkCatalogStores fails startup if known_stores would silently drop a
@@ -349,6 +355,31 @@ func checkCatalogStores(cat *apiproductlist.ProductList, known []string) error {
 				return fmt.Errorf("known_stores is missing catalog shorthand %q; add it or clear known_stores", sh)
 			}
 		}
+	}
+	return nil
+}
+
+// checkCatalogGames fails startup if the catalog requires a game the config does not serve.
+func checkCatalogGames(cat *apiproductlist.ProductList, games []string) error {
+	known := map[string]bool{}
+	for _, g := range games {
+		known[g] = true
+	}
+	for _, g := range cat.IncludedGames {
+		if !known[g] {
+			return fmt.Errorf("games is missing catalog included game %q", g)
+		}
+	}
+	return nil
+}
+
+// checkReservedPaths refuses a Stripe landing path that collides with a portal route.
+func checkReservedPaths(cfg *config.Config) error {
+	if portal.Reserved(cfg.Stripe.SuccessPath) {
+		return fmt.Errorf("stripe.success_path %q collides with a portal route", cfg.Stripe.SuccessPath)
+	}
+	if portal.Reserved(cfg.Stripe.CancelPath) {
+		return fmt.Errorf("stripe.cancel_path %q collides with a portal route", cfg.Stripe.CancelPath)
 	}
 	return nil
 }

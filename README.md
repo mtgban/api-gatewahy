@@ -8,8 +8,10 @@ entitlements in Postgres, mints a short-lived backend signature for the
 target game, and reverse-proxies to that game's own API host.
 
 Accounts, keys, and entitlements are managed by operators through this
-binary's admin subcommands in phase 1. A later phase lets Stripe write
-entitlements directly. The gateway also runs a background prober, a daily
+binary's admin subcommands in phase 1. Phase 2 adds Stripe billing so
+entitlements are written directly from checkout and webhooks, and phase 3
+adds the customer portal for self-service signup and account management.
+The gateway also runs a background prober, a daily
 usage summary posted to Discord, and cache invalidation over Postgres
 LISTEN/NOTIFY so key and entitlement changes take effect without a
 restart.
@@ -41,7 +43,7 @@ A request with neither returns 401. Errors are JSON:
 | 404 | Unknown game or path. |
 | 405 | A method other than `GET` under `/v1/`. |
 | 429 | Per-key limit exceeded. Carries `RateLimit-Limit` like the backend does. |
-| 502 | Upstream unreachable, returned a non-2xx, or is misconfigured. |
+| 502 | Upstream unreachable, returned any status outside 2xx except 304 (redirects included), or is misconfigured. |
 | 503 | Database unavailable and the key was not in cache. |
 | 504 | Upstream exceeded the timeout. |
 
@@ -68,7 +70,7 @@ only static asset.
 | `POST /logout` | session + CSRF | Clears the cookie. |
 | `GET /account`, `POST /account/keys`, `POST /account/keys/{id}/revoke`, `POST /account/plan`, `GET /portal` | session (+ CSRF on POST) | Keys, usage, entitlements, Stripe portal, plan change. |
 | `GET /trial`, `POST /trial`, `GET /session`, `POST /session` | signed handoff token | `GET /trial` and `GET /session` show a confirm page; `POST /trial` grants the Patreon trial and `POST /session` signs in. Each handoff token is single-use (its nonce is burned on accept). |
-| `GET /admin/...` | session, email in `admin_emails` | Accounts, entitlements, invites, usage, reconcile. |
+| `GET /admin/...` | session, email in `admin_emails` | Accounts, entitlements, invites, usage, reconcile. Each account page shows an activity log of admin actions taken on it. |
 
 Sessions are a signed cookie (`ban_session`, 30 days, host-only); suspending
 an account ends its sessions on the next request. The trial lasts
@@ -78,7 +80,8 @@ ends. Rotating `GATEWAY_SESSION_SECRET` signs everyone out, which is the
 emergency logout. Token-consuming posts (`/login/{token}`, `/trial`,
 `/session`) are accepted only from the gateway's own origin
 (`Sec-Fetch-Site` or `Origin`), so a foreign page cannot sign a visitor
-into someone else's account.
+into someone else's account; the sign-in email form (`POST /login`) has
+the same requirement. An account can create at most 10 keys per hour.
 
 ## Admin subcommands
 
@@ -224,10 +227,10 @@ tuning (`readonly`, `max_open_conns`, `max_idle_conns`,
 `conn_max_lifetime_seconds`). `games` maps a game name to
 `{"upstream": "https://...", "secret": "..."}`; the secret must match the
 value under that game's `api_user_secrets["gateway@mtgban.com"]`. The
-gateway creates `magic_links`, `trials`, and `handoff_nonces` at startup
-through `ensureSchema`, so the database role needs `CREATE` on the schema
-on the first boot after this deploy (the `apiaccess_app` role already has
-it).
+gateway creates `magic_links`, `trials`, `handoff_nonces`, and
+`admin_actions` at startup through `ensureSchema`, so the database role
+needs `CREATE` on the schema on the first boot after this deploy (the
+`apiaccess_app` role already has it).
 
 `public_url` is where customers land after Stripe Checkout:
 `stripe.success_path` and `stripe.cancel_path` are joined onto it.
@@ -310,6 +313,11 @@ config. Pushing a tag `vX.Y.Z` (or running the workflow manually) triggers
 `.github/workflows/deploy.yml`, which installs `doctl` and runs
 `doctl apps create-deployment` against the app recorded in the
 `DO_APIGATEWAY_APP_ID` repo secret.
+
+The website module is pinned to a commit on its `api-products-page`
+branch; when that branch merges to the website's master, merge without
+squashing and re-pin the gateway to the merged commit before the branch
+is deleted.
 
 ### Backend contract
 
