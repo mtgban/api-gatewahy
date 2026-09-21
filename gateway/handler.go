@@ -145,10 +145,10 @@ func (h *Handler) newProxy(_ string, up Upstream) *httputil.ReverseProxy {
 			pr.Out.Header.Set("X-Forwarded-Proto", "https")
 		},
 		ModifyResponse: func(resp *http.Response) error {
-			if resp.StatusCode == http.StatusTooManyRequests {
+			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusNotModified {
 				return nil
 			}
-			if resp.StatusCode >= 400 {
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 				return errUpstreamStatus{resp.StatusCode}
 			}
 			// The backends answer a bad signature with 200 and a body of
