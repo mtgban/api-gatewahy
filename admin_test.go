@@ -18,6 +18,7 @@ type memStore struct {
 	ents      []apiaccess.Entitlement
 	notified  int
 	notifyErr error
+	audit     []string
 }
 
 func (m *memStore) CreateAccount(_ context.Context, email, note string) (apiaccess.Account, error) {
@@ -98,6 +99,14 @@ func (m *memStore) SummarizeUsage(context.Context, time.Time, time.Time, int64) 
 }
 func (m *memStore) Notify(context.Context, string) error { m.notified++; return m.notifyErr }
 
+func (m *memStore) RecordAdminAction(_ context.Context, actor, action string, accountID int64, target, detail string) error {
+	if !strings.HasPrefix(actor, "cli") {
+		return errors.New("actor must name the cli")
+	}
+	m.audit = append(m.audit, action+" "+target)
+	return nil
+}
+
 func admin(t *testing.T, store adminStore, args ...string) (int, string, string) {
 	t.Helper()
 	var out, errb bytes.Buffer
@@ -124,6 +133,9 @@ func TestAdminAccountLifecycle(t *testing.T) {
 	}
 	if s.notified != 2 {
 		t.Errorf("notified %d times, want 2 (suspend, reinstate)", s.notified)
+	}
+	if len(s.audit) != 2 || s.audit[0] != "status " || s.audit[1] != "status " {
+		t.Errorf("audit %v, want the suspend and the reinstate", s.audit)
 	}
 }
 
@@ -159,6 +171,9 @@ func TestAdminKeys(t *testing.T) {
 	}
 	if s.notified != 2 {
 		t.Errorf("notified %d, want 2 (create, revoke)", s.notified)
+	}
+	if len(s.audit) != 2 || !strings.HasPrefix(s.audit[0], "key create ") || !strings.HasPrefix(s.audit[1], "key revoke ") {
+		t.Errorf("audit %v, want the create and the revoke", s.audit)
 	}
 }
 
