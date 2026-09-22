@@ -158,7 +158,7 @@ func (s *Server) trial(w http.ResponseWriter, r *http.Request) {
 	if err := s.Mail.Send(ctx, a.Email, subject, text, htmlBody); err != nil {
 		s.logf("trial mail %s: %v", a.Email, err)
 	}
-	s.Sessions.Issue(w, session.Session{AccountID: a.ID, Email: a.Email})
+	s.Sessions.Issue(w, session.Session{AccountID: a.ID, Email: a.Email, Epoch: a.SessionEpoch})
 	if r.FormValue("return_to") != "" {
 		s.mergePendingReturnTo(w, r, returnTo)
 	}
@@ -211,7 +211,7 @@ func (s *Server) patreonSession(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusForbidden, suspendedMsg)
 		return
 	}
-	s.Sessions.Issue(w, session.Session{AccountID: a.ID, Email: a.Email})
+	s.Sessions.Issue(w, session.Session{AccountID: a.ID, Email: a.Email, Epoch: a.SessionEpoch})
 	if r.FormValue("return_to") != "" {
 		s.mergePendingReturnTo(w, r, returnTo)
 	}

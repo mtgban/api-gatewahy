@@ -91,6 +91,7 @@ func (m *UsageMeter) run() {
 	ticker := time.NewTicker(m.flushEvery)
 	defer ticker.Stop()
 	var pending []apiaccess.Usage
+	var lastDropped int64
 	for {
 		select {
 		case u := <-m.in:
@@ -100,6 +101,10 @@ func (m *UsageMeter) run() {
 				pending = nil
 			}
 		case <-ticker.C:
+			if d := m.dropped.Load(); d != lastDropped {
+				log.Printf("meter: %d usage rows dropped so far", d)
+				lastDropped = d
+			}
 			if len(pending) > 0 {
 				m.flush(pending)
 				pending = nil

@@ -56,6 +56,8 @@ type Config struct {
 	StaleGraceSeconds      int                   `json:"stale_grace_seconds"`
 	PerKeyRequestsPerSec   float64               `json:"per_key_requests_per_sec"`
 	PerKeyBurst            int                   `json:"per_key_burst"`
+	PerIPRequestsPerSec    float64               `json:"per_ip_requests_per_sec"`
+	PerIPBurst             int                   `json:"per_ip_burst"`
 	UpstreamTimeoutSeconds int                   `json:"upstream_timeout_seconds"`
 	ShutdownGraceSeconds   int                   `json:"shutdown_grace_seconds"`
 	UsageRetentionDays     int                   `json:"usage_retention_days"`
@@ -144,6 +146,12 @@ func (c *Config) applyDefaults(defaultClientIPHeader, defaultGraceDays bool) {
 	}
 	if c.PerKeyBurst <= 0 {
 		c.PerKeyBurst = 5
+	}
+	if c.PerIPRequestsPerSec <= 0 {
+		c.PerIPRequestsPerSec = 50
+	}
+	if c.PerIPBurst <= 0 {
+		c.PerIPBurst = 100
 	}
 	if c.UpstreamTimeoutSeconds <= 0 {
 		c.UpstreamTimeoutSeconds = 300

@@ -16,6 +16,8 @@ type Account struct {
 	CreatedAt        time.Time
 	Note             string
 	StripeCustomerID string
+	// SessionEpoch is stamped into portal sessions; a logout bumps it.
+	SessionEpoch int64
 }
 
 // NormalizeEmail lowercases and trims, which is how emails are stored and looked up.
@@ -23,13 +25,13 @@ func NormalizeEmail(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
-const accountCols = "id, email, status, created_at, note, coalesce(stripe_customer_id, '')"
+const accountCols = "id, email, status, created_at, note, coalesce(stripe_customer_id, ''), session_epoch"
 
 type scanner interface{ Scan(dest ...any) error }
 
 func scanAccount(row scanner) (Account, error) {
 	var a Account
-	err := row.Scan(&a.ID, &a.Email, &a.Status, &a.CreatedAt, &a.Note, &a.StripeCustomerID)
+	err := row.Scan(&a.ID, &a.Email, &a.Status, &a.CreatedAt, &a.Note, &a.StripeCustomerID, &a.SessionEpoch)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Account{}, ErrNotFound
 	}
@@ -144,4 +146,14 @@ func (c *Client) ListAccounts(ctx context.Context) ([]Account, error) {
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// BumpSessionEpoch signs out every portal session of the account and returns the new epoch.
+func (c *Client) BumpSessionEpoch(ctx context.Context, accountID int64) (int64, error) {
+	var epoch int64
+	err := c.db.QueryRowContext(ctx, `UPDATE accounts SET session_epoch = session_epoch + 1 WHERE id = $1 RETURNING session_epoch`, accountID).Scan(&epoch)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return epoch, err
 }

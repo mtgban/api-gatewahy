@@ -18,7 +18,7 @@ func TestSessionRoundTrip(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	c := codecAt(now)
 	rec := httptest.NewRecorder()
-	issued := c.Issue(rec, Session{AccountID: 7, Email: "ann@example.com"})
+	issued := c.Issue(rec, Session{AccountID: 7, Email: "ann@example.com", Epoch: 3})
 	if issued.IssuedAt != now || issued.ExpiresAt != now.Add(DefaultTTL) {
 		t.Errorf("stamps %+v", issued)
 	}
@@ -31,6 +31,9 @@ func TestSessionRoundTrip(t *testing.T) {
 	got, err := c.Read(req)
 	if err != nil || got != issued {
 		t.Fatalf("read %+v %v want %+v", got, err, issued)
+	}
+	if got.Epoch != 3 {
+		t.Errorf("epoch lost: %+v", got)
 	}
 	late := codecAt(now.Add(DefaultTTL))
 	if _, err := late.Read(req); !errors.Is(err, ErrInvalid) {

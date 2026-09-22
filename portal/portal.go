@@ -11,7 +11,6 @@ import (
 	"errors"
 	"html/template"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
 	"github.com/mtgban/api-gatewahy/billing"
+	"github.com/mtgban/api-gatewahy/gateway"
 	"github.com/mtgban/api-gatewahy/mailer"
 	"github.com/mtgban/api-gatewahy/session"
 	"github.com/mtgban/mtgban-website/apiproductlist"
@@ -55,6 +55,7 @@ type Store interface {
 	MarkTrialReminded(ctx context.Context, id int64, at time.Time) error
 	CreateInvite(ctx context.Context, intervalKey, email string, ttl time.Duration, note string) (string, apiaccess.Invite, error)
 	Notify(ctx context.Context, payload string) error
+	BumpSessionEpoch(ctx context.Context, accountID int64) (int64, error)
 	ConsumeNonce(ctx context.Context, nonce string, expiresAt, now time.Time) error
 	RecordAdminAction(ctx context.Context, actor, action string, accountID int64, target, detail string) error
 	ListAdminActions(ctx context.Context, accountID int64, limit int) ([]apiaccess.AdminAction, error)
@@ -267,6 +268,10 @@ func (s *Server) current(r *http.Request) (session.Session, apiaccess.Account, e
 		}
 		return session.Session{}, apiaccess.Account{}, errNoSession
 	}
+	// A logout bumps the epoch, which signs out every cookie issued before it.
+	if sess.Epoch != a.SessionEpoch {
+		return session.Session{}, apiaccess.Account{}, errNoSession
+	}
 	if a.Status != "active" {
 		return sess, a, errSuspended
 	}
@@ -362,16 +367,7 @@ func siteOrigin(u string) string {
 
 // clientIP trusts the configured header when it holds an IP, else the peer.
 func (s *Server) clientIP(r *http.Request) string {
-	if s.ClientIPHeader != "" {
-		if ip := net.ParseIP(strings.TrimSpace(r.Header.Get(s.ClientIPHeader))); ip != nil {
-			return ip.String()
-		}
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
+	return gateway.ClientIP(r, s.ClientIPHeader)
 }
 
 // notices are the messages a redirect may ask the next page to show.

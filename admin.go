@@ -6,7 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os/user"
 	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -29,6 +31,7 @@ type adminStore interface {
 	ListEntitlements(ctx context.Context, accountID int64) ([]apiaccess.Entitlement, error)
 	SummarizeUsage(ctx context.Context, since, until time.Time, accountID int64) ([]apiaccess.UsageRow, error)
 	Notify(ctx context.Context, payload string) error
+	RecordAdminAction(ctx context.Context, actor, action string, accountID int64, target, detail string) error
 }
 
 func init() {
@@ -145,6 +148,12 @@ func runAdmin(ctx context.Context, store adminStore, knownStores, knownGames []s
 			fmt.Fprintf(stderr, "api-gatewahy: warning: cache reload notification failed (%v); gateways apply the change within cache_ttl_seconds\n", err)
 		}
 	}
+	// Every mutation lands in admin_actions like the web admin, actor "cli:<user>".
+	audit := func(action string, accountID int64, target, detail string) {
+		if err := store.RecordAdminAction(ctx, cliActor(), action, accountID, target, detail); err != nil {
+			fmt.Fprintf(stderr, "api-gatewahy: audit %s: %v\n", action, err)
+		}
+	}
 
 	switch cmd + " " + verb {
 	case "account add":
@@ -169,6 +178,7 @@ func runAdmin(ctx context.Context, store adminStore, knownStores, knownGames []s
 		if err := store.SetAccountStatus(ctx, a.ID, status); err != nil {
 			return fail(err)
 		}
+		audit("status", a.ID, "", status)
 		notify()
 		fmt.Fprintf(stdout, "account %d %s is now %s\n", a.ID, a.Email, status)
 		return 0
@@ -192,6 +202,7 @@ func runAdmin(ctx context.Context, store adminStore, knownStores, knownGames []s
 		if err != nil {
 			return fail(err)
 		}
+		audit("key create", a.ID, k.Prefix, *label)
 		notify()
 		fmt.Fprintf(stdout, "key created for %s (prefix %s). Shown once, copy it now:\n\n    %s\n\n", a.Email, k.Prefix, plain)
 		return 0
@@ -203,6 +214,7 @@ func runAdmin(ctx context.Context, store adminStore, knownStores, knownGames []s
 		if err != nil {
 			return fail(err)
 		}
+		audit("key revoke", k.AccountID, k.Prefix, "")
 		notify()
 		fmt.Fprintf(stdout, "key %s revoked\n", k.Prefix)
 		return 0
@@ -257,6 +269,7 @@ func runAdmin(ctx context.Context, store adminStore, knownStores, knownGames []s
 		if err != nil {
 			return fail(err)
 		}
+		audit("grant", a.ID, "entitlement "+strconv.FormatInt(e.ID, 10), strings.Join(e.Games, ",")+" "+e.StoreScope+" "+strings.Join(e.Modes, ","))
 		notify()
 		fmt.Fprintf(stdout, "entitlement %d added for %s: games %s, stores %s, modes %s\n", e.ID, a.Email,
 			strings.Join(e.Games, ","), e.StoreScope, strings.Join(e.Modes, ","))
@@ -269,6 +282,7 @@ func runAdmin(ctx context.Context, store adminStore, knownStores, knownGames []s
 		if err := store.EndEntitlement(ctx, *id, time.Now()); err != nil {
 			return fail(err)
 		}
+		audit("end", 0, "entitlement "+strconv.FormatInt(*id, 10), "")
 		notify()
 		fmt.Fprintf(stdout, "entitlement %d ended\n", *id)
 		return 0
@@ -368,4 +382,12 @@ func splitList(s string) []string {
 		}
 	}
 	return out
+}
+
+// cliActor names who ran the command in the audit log.
+func cliActor() string {
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		return "cli:" + u.Username
+	}
+	return "cli"
 }

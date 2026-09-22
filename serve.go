@@ -213,6 +213,8 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 		ClientIPHeader:  cfg.ClientIPHeader,
 		PerKeyRate:      cfg.PerKeyRequestsPerSec,
 		PerKeyBurst:     cfg.PerKeyBurst,
+		PerIPRate:       cfg.PerIPRequestsPerSec,
+		PerIPBurst:      cfg.PerIPBurst,
 		UpstreamTimeout: time.Duration(cfg.UpstreamTimeoutSeconds) * time.Second,
 		SigTTL:          5 * time.Minute,
 	}, resolver, meter)
@@ -330,7 +332,10 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 		Addr:              ":" + cfg.Port,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		// A request body has 30s; a response may stream a full snapshot, so it gets the upstream budget plus slack.
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: time.Duration(cfg.UpstreamTimeoutSeconds)*time.Second + 30*time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 	return srv, abort, nil
 }
