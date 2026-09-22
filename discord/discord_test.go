@@ -13,7 +13,7 @@ import (
 
 func TestPostSendsContent(t *testing.T) {
 	var mu sync.Mutex
-	var got map[string]string
+	var got map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -28,6 +28,9 @@ func TestPostSendsContent(t *testing.T) {
 	defer mu.Unlock()
 	if got["content"] != "hello" {
 		t.Errorf("payload %v", got)
+	}
+	if am, ok := got["allowed_mentions"].(map[string]any); !ok || am["parse"] == nil {
+		t.Errorf("mentions not disabled: %v", got)
 	}
 }
 

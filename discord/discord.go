@@ -31,7 +31,8 @@ func (p *Poster) Post(ctx context.Context, msg string) error {
 		log.Println("discord (no hook):", msg)
 		return nil
 	}
-	body, err := json.Marshal(map[string]string{"content": msg})
+	// No mention parsing: message text can carry customer-supplied labels.
+	body, err := json.Marshal(map[string]any{"content": msg, "allowed_mentions": map[string][]string{"parse": {}}})
 	if err != nil {
 		return err
 	}
