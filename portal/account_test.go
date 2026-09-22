@@ -19,7 +19,7 @@ func TestAccountPageAndKeys(t *testing.T) {
 	ts := newTestServer(t)
 	a, ck, csrf := ts.signIn(t, "ann@example.com")
 	ctx := context.Background()
-	ts.store.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: "manual", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail", "buylist", "sealed"}})
+	_, _ = ts.store.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: "manual", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail", "buylist", "sealed"}})
 	ts.store.usage = []memUsage{
 		{Ts: ts.now, Row: apiaccess.UsageRow{AccountID: a.ID, Game: "magic", Requests: 42, Bytes: 4096}},
 		{Ts: ts.now.AddDate(0, -1, 0), Row: apiaccess.UsageRow{AccountID: a.ID, Game: "magic", Requests: 77, Bytes: 1234}},
@@ -77,8 +77,8 @@ func TestPortalAndPlanChange(t *testing.T) {
 	f := ts.withStripe()
 	a, ck, csrf := ts.signIn(t, "ann@example.com")
 	ctx := context.Background()
-	ts.store.SetStripeCustomerID(ctx, a.ID, "cus_test")
-	ts.store.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "TCGLow,TCGMarket,TCGDirect,TCGDirectNet,TCGPlayer,CK", Modes: []string{"retail", "buylist"}, Status: "active", ExternalRef: "sub_1"})
+	_, _ = ts.store.SetStripeCustomerID(ctx, a.ID, "cus_test")
+	_, _ = ts.store.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "TCGLow,TCGMarket,TCGDirect,TCGDirectNet,TCGPlayer,CK", Modes: []string{"retail", "buylist"}, Status: "active", ExternalRef: "sub_1"})
 	current := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"CK"}}
 	f.sub = &stripe.Subscription{ID: "sub_1", Metadata: current.Metadata(a.ID), Customer: &stripe.Customer{ID: "cus_test"},
 		Items: &stripe.SubscriptionItemList{Data: []*stripe.SubscriptionItem{{ID: "si_1", Quantity: 1, Price: &stripe.Price{ID: "price_starter_monthly", LookupKey: "starter_monthly"}}}}}

@@ -118,7 +118,7 @@ func (c *Client) SearchAccounts(ctx context.Context, q string) ([]Account, error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Account
 	for rows.Next() {
 		a, err := scanAccount(rows)

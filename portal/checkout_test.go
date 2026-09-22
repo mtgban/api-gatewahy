@@ -84,7 +84,7 @@ func TestCheckoutBlocksSecondSubscription(t *testing.T) {
 	ts := newTestServer(t)
 	ts.withStripe()
 	a, ck, csrf := ts.signIn(t, "ann@example.com")
-	ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
+	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
 
 	rec := ts.do("GET", starterQuery, "", ck)
 	body := rec.Body.String()

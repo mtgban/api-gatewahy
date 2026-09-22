@@ -172,10 +172,10 @@ func TestValidReturnTo(t *testing.T) {
 func TestSessionGateRedirectsAndChecksCSRF(t *testing.T) {
 	ts := newTestServer(t)
 	ts.mux.HandleFunc("GET /gated", ts.withSession(func(w http.ResponseWriter, r *http.Request, sess session.Session, a apiaccess.Account) {
-		w.Write([]byte("hello " + a.Email))
+		_, _ = w.Write([]byte("hello " + a.Email))
 	}))
 	ts.mux.HandleFunc("POST /gated", ts.withSession(func(w http.ResponseWriter, r *http.Request, sess session.Session, a apiaccess.Account) {
-		w.Write([]byte("posted"))
+		_, _ = w.Write([]byte("posted"))
 	}))
 	if rec := ts.do("GET", "/gated", ""); rec.Code != 302 || rec.Header().Get("Location") != "/login" {
 		t.Errorf("anonymous: %d %q", rec.Code, rec.Header().Get("Location"))
@@ -193,7 +193,7 @@ func TestSessionGateRedirectsAndChecksCSRF(t *testing.T) {
 	if rec := ts.do("POST", "/gated", "csrf="+csrf); rec.Code != 401 {
 		t.Errorf("anonymous post: %d", rec.Code)
 	}
-	ts.store.SetAccountStatus(context.Background(), a.ID, "suspended")
+	_ = ts.store.SetAccountStatus(context.Background(), a.ID, "suspended")
 	if rec := ts.do("GET", "/gated", "", ck); rec.Code != 403 || !strings.Contains(rec.Body.String(), "suspended") {
 		t.Errorf("suspended: %d %s", rec.Code, rec.Body.String())
 	}

@@ -72,7 +72,7 @@ func (c *Client) TrialsToRemind(ctx context.Context, from, to time.Time) ([]Tria
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Trial
 	for rows.Next() {
 		t, err := scanTrial(rows)
