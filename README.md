@@ -67,10 +67,10 @@ only static asset.
 | `POST /checkout` | session + CSRF | Creates the Stripe Checkout Session. |
 | `GET /checkout/success`, `/checkout/cancel` | session (success only) | Landing after Stripe. |
 | `GET /login`, `POST /login`, `GET /login/{token}`, `POST /login/{token}` | none | Magic-link sign-in; links live 15 minutes. `GET /login/{token}` confirms and `POST /login/{token}` signs in; the link is consumed on the sign-in POST. |
-| `POST /logout` | session + CSRF | Clears the cookie. |
+| `POST /logout` | session + CSRF | Clears the cookie and bumps the account's session epoch, so every cookie issued before it stops working. |
 | `GET /account`, `POST /account/keys`, `POST /account/keys/{id}/revoke`, `POST /account/plan`, `GET /portal` | session (+ CSRF on POST) | Keys, usage, entitlements, Stripe portal, plan change. |
 | `GET /trial`, `POST /trial`, `GET /session`, `POST /session` | signed handoff token | `GET /trial` and `GET /session` show a confirm page; `POST /trial` grants the Patreon trial and `POST /session` signs in. Each handoff token is single-use (its nonce is burned on accept). |
-| `GET /admin/...` | session, email in `admin_emails` | Accounts, entitlements, invites, usage, reconcile. Each account page shows an activity log of admin actions taken on it. |
+| `GET /admin/...` | session, email in `admin_emails` | Accounts, entitlements, invites, usage, reconcile. Each account page shows an activity log of admin actions taken on it, from the web admin and from the CLI alike. |
 
 Sessions are a signed cookie (`ban_session`, 30 days, host-only); suspending
 an account ends its sessions on the next request. The trial lasts
@@ -183,6 +183,8 @@ JSON, named by `-config` or `BAN_CONFIG_PATH` (a `b2://` path needs
 | `stale_grace_seconds` | `600` |
 | `per_key_requests_per_sec` | `10` |
 | `per_key_burst` | `5` |
+| `per_ip_requests_per_sec` | `50` |
+| `per_ip_burst` | `100` |
 | `upstream_timeout_seconds` | `300` |
 | `shutdown_grace_seconds` | `60` |
 | `usage_retention_days` | `395` |
@@ -203,16 +205,27 @@ returns 503 instead. A revoked key may therefore keep working for at most
 minutes on the defaults. LISTEN/NOTIFY drops the cached entry immediately
 when the database is reachable.
 
-`client_ip_header` names the one header the gateway trusts for the client
-address. It defaults to `DO-Connecting-IP`, which DigitalOcean App Platform's
-ingress sets to the real peer and which a client cannot forge because the
-ingress overwrites it. An inbound `X-Forwarded-For` is never read: any client
-can send one, and the value ends up in `usage.client_ip` and in what the game
-backends rate-limit on. A value that is not an IP literal, a zoned IPv6
-literal included, falls back to the connection's peer address, and so does an
-empty `client_ip_header`, which trusts nothing but the peer. Whatever address
-is resolved is the `X-Forwarded-For` the gateway sends upstream, and the
+`client_ip_header` names the one header the gateway and the portal trust for
+the client address. It defaults to `DO-Connecting-IP`, which DigitalOcean App
+Platform's ingress sets to the real peer and which a client cannot forge
+because the ingress overwrites it. The header must be one the trusted edge
+sets or overwrites on every request; the listener is only reachable through
+that edge. If a multi-valued header such as `X-Forwarded-For` is ever
+configured, the last element is used, the one a proxy that appends would have
+added, never the first, which the client controls. An inbound
+`X-Forwarded-For` is otherwise never read: any client can send one, and the
+value ends up in `usage.client_ip` and in what the game backends rate-limit
+on. A value that is not an IP literal, a zoned IPv6 literal included, falls
+back to the connection's peer address, and so does an empty
+`client_ip_header`, which trusts nothing but the peer. Whatever address is
+resolved is the `X-Forwarded-For` the gateway sends upstream, and the
 configured header itself is stripped before forwarding.
+
+Requests are throttled per address (`per_ip_requests_per_sec`, `per_ip_burst`)
+before any key is read, so a stream of forged keys cannot turn into database
+lookups. The per-key limit applies after the key resolves. Usage rows are
+buffered and dropped rather than blocking a request when the buffer is full;
+the drop count is logged each flush interval.
 
 `shutdown_grace_seconds` is how long a shutdown waits for in-flight requests
 after SIGTERM, and any request still running when it expires is logged and
