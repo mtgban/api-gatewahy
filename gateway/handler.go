@@ -35,12 +35,15 @@ type Meter interface {
 
 // Options configure a Handler.
 type Options struct {
-	Games           map[string]Upstream
-	GatewayEmail    string
-	Link            string
-	ClientIPHeader  string
-	PerKeyRate      float64
-	PerKeyBurst     int
+	Games          map[string]Upstream
+	GatewayEmail   string
+	Link           string
+	ClientIPHeader string
+	PerKeyRate     float64
+	PerKeyBurst    int
+	// PerIPRate and PerIPBurst throttle by client address before any key is looked up.
+	PerIPRate       float64
+	PerIPBurst      int
 	UpstreamTimeout time.Duration
 	SigTTL          time.Duration
 	Now             func() time.Time
@@ -54,7 +57,9 @@ type Handler struct {
 	res     *Resolver
 	meter   Meter
 	limiter *keyLimiter
-	now     func() time.Time
+	// ipLimiter runs first, so forged keys cannot drive the database.
+	ipLimiter *ratelimit.Limiter
+	now       func() time.Time
 }
 
 // keyLimiter throttles per key hash and remembers its rate for the response header.
@@ -75,14 +80,21 @@ func New(opts Options, res *Resolver, meter Meter) *Handler {
 	if opts.SigTTL == 0 {
 		opts.SigTTL = 5 * time.Minute
 	}
+	if opts.PerIPRate <= 0 {
+		opts.PerIPRate = 50
+	}
+	if opts.PerIPBurst <= 0 {
+		opts.PerIPBurst = 100
+	}
 	h := &Handler{
-		opts:    opts,
-		games:   opts.Games,
-		proxies: map[string]*httputil.ReverseProxy{},
-		res:     res,
-		meter:   meter,
-		limiter: newLimiter(opts.PerKeyRate, opts.PerKeyBurst),
-		now:     opts.Now,
+		opts:      opts,
+		games:     opts.Games,
+		proxies:   map[string]*httputil.ReverseProxy{},
+		res:       res,
+		meter:     meter,
+		limiter:   newLimiter(opts.PerKeyRate, opts.PerKeyBurst),
+		ipLimiter: ratelimit.NewLimiter(rate.Limit(opts.PerIPRate), opts.PerIPBurst),
+		now:       opts.Now,
 	}
 	for name, up := range opts.Games {
 		h.proxies[name] = h.newProxy(name, up)
@@ -161,7 +173,7 @@ func (h *Handler) newProxy(_ string, up Upstream) *httputil.ReverseProxy {
 					io.Reader
 					io.Closer
 				}{io.MultiReader(bytes.NewReader(head), resp.Body), resp.Body}
-				if bytes.Contains(head, []byte(`"error": "invalid`)) {
+				if sigRejected(head) {
 					return errSigRejected{}
 				}
 			}
@@ -190,6 +202,20 @@ func (h *Handler) newProxy(_ string, up Upstream) *httputil.ReverseProxy {
 	}
 }
 
+// sigRejected reports whether a 200 body is the backends' signature error.
+// That error is an object whose first key is "error" with a value starting
+// "invalid", so the check is on the shape, not on a substring anywhere in
+// the body, which price data could carry.
+func sigRejected(head []byte) bool {
+	head = bytes.TrimSpace(head)
+	for _, prefix := range []string{`{"error": "invalid`, `{"error":"invalid`} {
+		if bytes.HasPrefix(head, []byte(prefix)) {
+			return true
+		}
+	}
+	return false
+}
+
 // bearerKey reads the key from the Authorization header or ?key=.
 func bearerKey(r *http.Request) string {
 	if auth := r.Header.Get("Authorization"); auth != "" {
@@ -201,13 +227,15 @@ func bearerKey(r *http.Request) string {
 	return r.URL.Query().Get("key")
 }
 
-// clientIP is the address in header, else the peer address. Anything that is
-// not an IP literal, a zoned IPv6 literal included, falls back to the peer.
-func clientIP(r *http.Request, header string) string {
+// ClientIP is the address in header, else the peer address. A multi-valued
+// header yields its last element, the one the trusted edge appended; anything
+// before it came from the client. Anything that is not an IP literal, or a
+// zoned IPv6 literal, falls back to the peer.
+func ClientIP(r *http.Request, header string) string {
 	if header != "" {
 		if v := r.Header.Get(header); v != "" {
-			first, _, _ := strings.Cut(v, ",")
-			if ip, err := netip.ParseAddr(strings.TrimSpace(first)); err == nil && ip.Zone() == "" {
+			parts := strings.Split(v, ",")
+			if ip, err := netip.ParseAddr(strings.TrimSpace(parts[len(parts)-1])); err == nil && ip.Zone() == "" {
 				return ip.Unmap().String()
 			}
 		}
@@ -262,6 +290,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	proxy := h.proxies[route.Game]
 	if !ok || proxy == nil {
 		writeError(w, http.StatusNotFound, "unknown game", route.Game)
+		return
+	}
+
+	ip := ClientIP(r, h.opts.ClientIPHeader)
+	// Throttled by address before any key is read, so forged keys cannot drive the database.
+	if !h.ipLimiter.Allow(ip) {
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusTooManyRequests, "too many requests from this address", "")
 		return
 	}
 
@@ -328,7 +364,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Expires: now.Add(h.opts.SigTTL).Unix(),
 	})
 
-	ip := clientIP(r, h.opts.ClientIPHeader)
 	params := proxyParams{sig: sig, path: route.BackendPath(), clientIP: ip, game: route.Game}
 	ctx, cancel := context.WithTimeout(context.WithValue(r.Context(), ctxKey{}, params), h.opts.UpstreamTimeout)
 	defer cancel()

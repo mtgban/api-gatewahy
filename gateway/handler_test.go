@@ -55,6 +55,11 @@ func fakeBackend(t *testing.T, secret string) *httptest.Server {
 			w.WriteHeader(304)
 			return
 		}
+		if r.URL.Path == "/api/mtgban/retail/errortext.json" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"meta": {"date": "2026-09-22"}, "retail": {"error": "invalid card", "regular": 1.5}}`))
+			return
+		}
 		v, err := apisig.Decode(r.URL.Query().Get("sig"))
 		if err != nil {
 			_, _ = w.Write([]byte(`{"error": "invalid signature"}`))
@@ -119,6 +124,8 @@ func testHandler(t *testing.T, backend *httptest.Server, secret string) (*Handle
 		ClientIPHeader:  testClientIPHeader,
 		PerKeyRate:      1000,
 		PerKeyBurst:     1000,
+		PerIPRate:       100000,
+		PerIPBurst:      100000,
 		UpstreamTimeout: 100 * time.Millisecond,
 		SigTTL:          5 * time.Minute,
 		Now:             time.Now,
@@ -486,5 +493,82 @@ func TestBoomPathIsNotAccidentallyCached(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != 500 {
 		t.Errorf("fake backend boom returned %d", resp.StatusCode)
+	}
+}
+
+func TestSigRejectedIsStructural(t *testing.T) {
+	for body, want := range map[string]bool{
+		`{"error": "invalid signature"}`:                    true,
+		`{"error":"invalid or expired signature"}`:          true,
+		"  " + `{"error": "invalid signature"}`:             true,
+		`{"meta": {}, "retail": {"error": "invalid card"}}`: false,
+		`{"error": "", "meta": {}}`:                         false,
+		"":                                                  false,
+	} {
+		if got := sigRejected([]byte(body)); got != want {
+			t.Errorf("%q: %v", body, got)
+		}
+	}
+}
+
+func TestErrorTextInsideDataPassesThrough(t *testing.T) {
+	backend := fakeBackend(t, "secret")
+	defer backend.Close()
+	h, _ := testHandler(t, backend, "secret")
+	rec, body := do(h, "GET", "/v1/magic/mtgban/retail/errortext.json", goodKey)
+	if rec.Code != 200 || body["retail"] == nil {
+		t.Fatalf("legitimate body treated as a signature rejection: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPerIPLimitRunsBeforeAnyLookup(t *testing.T) {
+	backend := fakeBackend(t, "secret")
+	defer backend.Close()
+	u, _ := url.Parse(backend.URL)
+	src := &fakeSource{res: map[string]apiaccess.Lookup{}}
+	h := New(Options{
+		Games:          map[string]Upstream{"magic": {URL: u, Secret: []byte("secret")}},
+		GatewayEmail:   "gateway@mtgban.com",
+		Link:           apisig.DefaultLink,
+		ClientIPHeader: testClientIPHeader,
+		PerKeyRate:     1000,
+		PerKeyBurst:    1000,
+		PerIPRate:      1,
+		PerIPBurst:     3,
+	}, NewResolver(src, time.Minute, nil), &recordingMeter{})
+	for i := 0; i < 3; i++ {
+		fake := "mtgban_live_" + strings.Repeat(string(rune('a'+i)), 32)
+		if rec, _ := do(h, "GET", "/v1/magic/mtgban/retail.json", fake); rec.Code != 401 {
+			t.Fatalf("forged key %d: %d", i, rec.Code)
+		}
+	}
+	rec, _ := do(h, "GET", "/v1/magic/mtgban/retail.json", "mtgban_live_"+strings.Repeat("z", 32))
+	if rec.Code != 429 || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("fourth forged key from one address: %d", rec.Code)
+	}
+	if src.calls != 3 {
+		t.Errorf("lookups %d, want 3: the limiter must run before the database", src.calls)
+	}
+	// Another address is unaffected.
+	req := httptest.NewRequest("GET", "/v1/magic/mtgban/retail.json", nil)
+	req.RemoteAddr = "203.0.113.7:1234"
+	req.Header.Set("Authorization", "Bearer mtgban_live_"+strings.Repeat("q", 32))
+	other := httptest.NewRecorder()
+	h.ServeHTTP(other, req)
+	if other.Code != 401 {
+		t.Errorf("other address: %d", other.Code)
+	}
+}
+
+func TestClientIPTakesTheLastHeaderValue(t *testing.T) {
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "198.51.100.9:1234"
+	req.Header.Set("X-Forwarded-For", "10.0.0.1, 203.0.113.5")
+	if got := ClientIP(req, "X-Forwarded-For"); got != "203.0.113.5" {
+		t.Errorf("last hop: %q", got)
+	}
+	req.Header.Set("X-Forwarded-For", "not-an-ip")
+	if got := ClientIP(req, "X-Forwarded-For"); got != "198.51.100.9" {
+		t.Errorf("fallback: %q", got)
 	}
 }
