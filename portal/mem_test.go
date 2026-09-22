@@ -66,6 +66,18 @@ func (m *memStore) GetAccount(_ context.Context, id int64) (apiaccess.Account, e
 	return a, nil
 }
 
+func (m *memStore) BumpSessionEpoch(_ context.Context, id int64) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a, ok := m.accounts[id]
+	if !ok {
+		return 0, apiaccess.ErrNotFound
+	}
+	a.SessionEpoch++
+	m.accounts[id] = a
+	return a.SessionEpoch, nil
+}
+
 func (m *memStore) GetAccountByEmail(_ context.Context, email string) (apiaccess.Account, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

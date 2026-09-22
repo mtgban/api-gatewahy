@@ -104,6 +104,7 @@ var schemaStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_admin_actions_account ON admin_actions (account_id, at DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_magic_links_expires ON magic_links (expires_at)`,
 	`CREATE INDEX IF NOT EXISTS idx_handoff_nonces_expires ON handoff_nonces (expires_at)`,
+	`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS session_epoch bigint NOT NULL DEFAULT 0`,
 }
 
 func ensureSchema(db *sql.DB) error {

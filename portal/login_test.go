@@ -107,10 +107,10 @@ func TestLoginRequiresSameOrigin(t *testing.T) {
 
 func TestLoginContinuesPendingCheckout(t *testing.T) {
 	ts := newTestServer(t)
-	rec := ts.do("POST", "/login", "email=ann%40example.com")
+	ts.do("POST", "/login", "email=ann%40example.com")
 	m := linkRe.FindStringSubmatch(ts.mail.String())
 	pending := cookieFor(ts, map[string][]string{"package": {"starter"}, "interval": {"monthly"}, "games": {"magic"}, "stores": {"CK"}, "return_to": {"https://mtgban.com/api-plans"}})
-	rec = ts.do("POST", "/login/"+m[1], "", pending)
+	rec := ts.do("POST", "/login/"+m[1], "", pending)
 	if rec.Code != 302 || rec.Header().Get("Location") != "/checkout" {
 		t.Errorf("%d %q", rec.Code, rec.Header().Get("Location"))
 	}
@@ -137,6 +137,10 @@ func TestLogoutClearsCookies(t *testing.T) {
 	}
 	if c := cookieNamed(rec, session.CookieName); c == nil || c.MaxAge >= 0 {
 		t.Error("session cookie not cleared")
+	}
+	// The old cookie is dead server-side too: the logout bumped the account epoch.
+	if rec := ts.do("GET", "/account", "", ck); rec.Code != 302 {
+		t.Errorf("stale cookie still signed in: %d", rec.Code)
 	}
 
 	b, ck2, csrf2 := ts.signIn(t, "bob@example.com")

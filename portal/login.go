@@ -148,7 +148,7 @@ func (s *Server) loginToken(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusForbidden, suspendedMsg)
 		return
 	}
-	s.Sessions.Issue(w, session.Session{AccountID: a.ID, Email: a.Email})
+	s.Sessions.Issue(w, session.Session{AccountID: a.ID, Email: a.Email, Epoch: a.SessionEpoch})
 	s.afterLogin(w, r)
 }
 
@@ -163,9 +163,15 @@ func (s *Server) afterLogin(w http.ResponseWriter, r *http.Request) {
 
 // logout clears cookies for any signed-in reader, even a suspended one, as long as the CSRF token checks out.
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
-	if sess, err := s.Sessions.Read(r); err == nil && !s.Sessions.CheckCSRF(sess, r.FormValue("csrf")) {
-		http.Error(w, csrfExpiredMsg, http.StatusForbidden)
-		return
+	if sess, err := s.Sessions.Read(r); err == nil {
+		if !s.Sessions.CheckCSRF(sess, r.FormValue("csrf")) {
+			http.Error(w, csrfExpiredMsg, http.StatusForbidden)
+			return
+		}
+		// Invalidate every cookie for the account, not just this browser's copy.
+		if _, err := s.Store.BumpSessionEpoch(r.Context(), sess.AccountID); err != nil {
+			s.logf("logout epoch %d: %v", sess.AccountID, err)
+		}
 	}
 	s.Sessions.Clear(w)
 	s.Sessions.ClearPending(w)

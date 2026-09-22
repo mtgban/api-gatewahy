@@ -31,6 +31,8 @@ var ErrInvalid = errors.New("session: invalid or expired")
 type Session struct {
 	AccountID int64
 	Email     string
+	// Epoch must match the account's; a logout bumps it.
+	Epoch     int64
 	IssuedAt  time.Time
 	ExpiresAt time.Time
 }
@@ -104,6 +106,7 @@ func (c *Codec) Encode(s Session) (string, Session) {
 	v.Set("a", strconv.FormatInt(s.AccountID, 10))
 	v.Set("e", s.Email)
 	v.Set("iat", strconv.FormatInt(s.IssuedAt.Unix(), 10))
+	v.Set("ep", strconv.FormatInt(s.Epoch, 10))
 	return c.Seal(v, c.ttl()), s
 }
 
@@ -114,12 +117,13 @@ func (c *Codec) Decode(token string) (Session, error) {
 		return Session{}, err
 	}
 	id, err1 := strconv.ParseInt(v.Get("a"), 10, 64)
+	epoch, _ := strconv.ParseInt(v.Get("ep"), 10, 64)
 	iat, err2 := strconv.ParseInt(v.Get("iat"), 10, 64)
 	exp, _ := strconv.ParseInt(v.Get("_exp"), 10, 64)
 	if err1 != nil || err2 != nil || id <= 0 || v.Get("e") == "" {
 		return Session{}, ErrInvalid
 	}
-	return Session{AccountID: id, Email: v.Get("e"), IssuedAt: time.Unix(iat, 0).UTC(), ExpiresAt: time.Unix(exp, 0).UTC()}, nil
+	return Session{AccountID: id, Email: v.Get("e"), Epoch: epoch, IssuedAt: time.Unix(iat, 0).UTC(), ExpiresAt: time.Unix(exp, 0).UTC()}, nil
 }
 
 // Issue sets the session cookie and returns the session as stamped.
