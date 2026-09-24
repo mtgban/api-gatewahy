@@ -18,7 +18,7 @@ func (ts *testServer) handoff(purpose, email string) string {
 	if err != nil {
 		panic(err)
 	}
-	return apihandoff.Mint(ts.TrialSecret, apihandoff.Claims{Email: email, Name: "Ann Example", Purpose: purpose, Nonce: nonce, Expires: ts.now.Add(apihandoff.TTL)})
+	return apihandoff.Mint(ts.GameSecrets["magic"], apihandoff.Claims{Email: email, Name: "Ann Example", Game: "magic", Purpose: purpose, Nonce: nonce, Expires: ts.now.Add(apihandoff.TTL)})
 }
 
 func TestTrialGrantsOnceAndSignsIn(t *testing.T) {
@@ -106,8 +106,8 @@ func TestTrialRejectsBadTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	tokens := []string{"", "garbage", ts.handoff(apihandoff.PurposeLogin, "ann@example.com"),
-		apihandoff.Mint([]byte("other"), apihandoff.Claims{Email: "a@b.c", Purpose: apihandoff.PurposeTrial, Nonce: "n", Expires: ts.now.Add(time.Minute)}),
-		apihandoff.Mint(ts.TrialSecret, apihandoff.Claims{Email: "a@b.c", Purpose: apihandoff.PurposeTrial, Nonce: expiredNonce, Expires: ts.now.Add(-time.Minute)})}
+		apihandoff.Mint([]byte("other"), apihandoff.Claims{Email: "a@b.c", Game: "magic", Purpose: apihandoff.PurposeTrial, Nonce: "n", Expires: ts.now.Add(time.Minute)}),
+		apihandoff.Mint(ts.GameSecrets["magic"], apihandoff.Claims{Email: "a@b.c", Game: "magic", Purpose: apihandoff.PurposeTrial, Nonce: expiredNonce, Expires: ts.now.Add(-time.Minute)})}
 	for _, tok := range tokens {
 		rec := ts.do("GET", "/trial?t="+tok, "")
 		if rec.Code != 400 || !strings.Contains(rec.Body.String(), "try again from the game site") || cookieNamed(rec, session.CookieName) != nil {
@@ -207,7 +207,7 @@ func TestTrialConfirmGreetsEmailAloneWithoutName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tok := apihandoff.Mint(ts.TrialSecret, apihandoff.Claims{Email: "noname@example.com", Purpose: apihandoff.PurposeTrial, Nonce: nonce, Expires: ts.now.Add(apihandoff.TTL)})
+	tok := apihandoff.Mint(ts.GameSecrets["magic"], apihandoff.Claims{Email: "noname@example.com", Game: "magic", Purpose: apihandoff.PurposeTrial, Nonce: nonce, Expires: ts.now.Add(apihandoff.TTL)})
 	rec := ts.do("GET", "/trial?t="+tok, "")
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "noname@example.com") || strings.Contains(rec.Body.String(), "()") {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
@@ -224,5 +224,24 @@ func TestHandoffTokenIsSingleUse(t *testing.T) {
 	rec = ts.do("POST", "/session", "t="+tok)
 	if rec.Code != 400 {
 		t.Fatalf("second: %d", rec.Code)
+	}
+}
+
+func TestHandoffUsesTheMintingGameSecret(t *testing.T) {
+	ts := newTestServer(t)
+	claims := apihandoff.Claims{Email: "ann@example.com", Name: "Ann", Purpose: apihandoff.PurposeLogin, Nonce: "n1", Expires: ts.now.Add(apihandoff.TTL)}
+	// Signed with pokemon's secret and naming pokemon: accepted.
+	claims.Game = "pokemon"
+	if _, ok := ts.verifyHandoff(apihandoff.Mint(ts.GameSecrets["pokemon"], claims), apihandoff.PurposeLogin); !ok {
+		t.Error("token from the pokemon site refused")
+	}
+	// Signed with magic's secret but naming pokemon: the wrong secret is tried, so refused.
+	if _, ok := ts.verifyHandoff(apihandoff.Mint(ts.GameSecrets["magic"], claims), apihandoff.PurposeLogin); ok {
+		t.Error("token signed with another game's secret accepted")
+	}
+	// A game this gateway does not serve has no secret to check.
+	claims.Game = "chess"
+	if _, ok := ts.verifyHandoff(apihandoff.Mint([]byte("whatever"), claims), apihandoff.PurposeLogin); ok {
+		t.Error("token for an unknown game accepted")
 	}
 }

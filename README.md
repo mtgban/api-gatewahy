@@ -77,7 +77,10 @@ an account ends its sessions on the next request. The trial lasts
 `trial_days` (15 by default) of all data for every configured game, once
 per Patreon email every 180 days; a reminder mails three days before it
 ends. Rotating `GATEWAY_SESSION_SECRET` signs everyone out, which is the
-emergency logout. Token-consuming posts (`/login/{token}`, `/trial`,
+emergency logout. A Patreon handoff token names the game site that minted
+it and is verified with that game's `secret` from `games`, the same value
+the site keeps under `api_user_secrets["gateway@mtgban.com"]`, so the
+handoff needs no secret of its own. Token-consuming posts (`/login/{token}`, `/trial`,
 `/session`) are accepted only from the gateway's own origin
 (`Sec-Fetch-Site` or `Origin`), so a foreign page cannot sign a visitor
 into someone else's account; the sign-in email form (`POST /login`) has
@@ -274,8 +277,6 @@ customer-facing reminders during that window.
   tests; tests skip when it is unset.
 - `GATEWAY_SESSION_SECRET`: turns the customer pages on; at least 32
   characters. Signs the session, pending-checkout, and CSRF tokens.
-- `TRIAL_SECRET`: shared with every game deployment; verifies the Patreon
-  handoff tokens (`/trial`, `/session`). Required when the portal is on.
 - `MAIL_SMTP_HOST`, `MAIL_SMTP_PORT` (587), `MAIL_SMTP_USER`,
   `MAIL_SMTP_PASS`: STARTTLS SMTP for sign-in links and notices. With no
   host, mail is written to the log instead, sign-in links included, which

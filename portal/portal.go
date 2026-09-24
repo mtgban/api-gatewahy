@@ -89,17 +89,19 @@ type Server struct {
 	Sessions    *session.Codec
 	Mail        mailer.Mailer
 	// Stripe, Checkout, Reconcile, and ReconcileAll are nil when billing is off
-	Stripe            billing.API
-	Checkout          *billing.Checkout
-	Reconcile         func(ctx context.Context, subID string) error
-	ReconcileAll      func(ctx context.Context) (billing.Result, error)
-	PublicURL         string
-	PricingURL        string
-	SuccessPath       string
-	CancelPath        string
-	AdminEmails       []string
-	TrialDays         int
-	TrialSecret       []byte
+	Stripe       billing.API
+	Checkout     *billing.Checkout
+	Reconcile    func(ctx context.Context, subID string) error
+	ReconcileAll func(ctx context.Context) (billing.Result, error)
+	PublicURL    string
+	PricingURL   string
+	SuccessPath  string
+	CancelPath   string
+	AdminEmails  []string
+	TrialDays    int
+	// GameSecrets are the per-game secrets the gateway calls the sites with; a
+	// handoff token is verified with the secret of the game that minted it.
+	GameSecrets       map[string][]byte
 	LoginLinksPerHour int
 	ClientIPHeader    string
 	Now               func() time.Time

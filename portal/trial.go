@@ -43,12 +43,15 @@ func (s *Server) registerTrial(mux *http.ServeMux) {
 	mux.HandleFunc("POST /session", s.patreonSession)
 }
 
-// verifyHandoff checks the token's signature, expiry, and purpose without touching its nonce.
+// verifyHandoff checks the token's signature, expiry, and purpose without
+// touching its nonce. The game named in the token picks the secret; a token
+// for a game this gateway does not serve has no secret to check against.
 func (s *Server) verifyHandoff(token, purpose string) (apihandoff.Claims, bool) {
-	if len(s.TrialSecret) == 0 {
+	secret, ok := s.GameSecrets[apihandoff.Game(token)]
+	if !ok || len(secret) == 0 {
 		return apihandoff.Claims{}, false
 	}
-	c, err := apihandoff.Verify(s.TrialSecret, token, s.now())
+	c, err := apihandoff.Verify(secret, token, s.now())
 	if err != nil || c.Purpose != purpose {
 		return apihandoff.Claims{}, false
 	}
