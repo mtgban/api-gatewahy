@@ -332,10 +332,14 @@ config. Pushing a tag `vX.Y.Z` (or running the workflow manually) triggers
 `doctl apps create-deployment` against the app recorded in the
 `DO_APIGATEWAY_APP_ID` repo secret.
 
-The website module is pinned to a commit on its `api-products-page`
-branch; when that branch merges to the website's master, merge without
-squashing and re-pin the gateway to the merged commit before the branch
-is deleted.
+The website module is pinned by commit, to a commit on the website's
+`master`. The website rebase-merges its pull requests, which gives every
+commit a new SHA, so a commit pinned from a PR branch is not the one that
+lands. While a change spans both repos, build against a local website
+checkout with `go work init . <path to mtgban-website>` (`go.work` is
+gitignored) and re-pin once the website PR merges. The website's
+[`docs/api-gateway-dependency.md`](https://github.com/mtgban/mtgban-website/blob/master/docs/api-gateway-dependency.md)
+covers what the gateway imports from it, why, and which side deploys first.
 
 ### Backend contract
 
