@@ -332,10 +332,13 @@ config. Pushing a tag `vX.Y.Z` (or running the workflow manually) triggers
 `doctl apps create-deployment` against the app recorded in the
 `DO_APIGATEWAY_APP_ID` repo secret.
 
-The website module is pinned to a commit on its `api-products-page`
-branch; when that branch merges to the website's master, merge without
-squashing and re-pin the gateway to the merged commit before the branch
-is deleted.
+The website module is pinned by commit. The site tags the commits it
+wants the gateway to build against as `apisig-vX.Y.Z`; Go cannot use those
+tags as versions (the site is on major version 13 with no `/v13` module
+path), so `go get github.com/mtgban/mtgban-website@apisig-vX.Y.Z` resolves
+the tag to the commit and records its pseudo-version in `go.mod`. The pin
+is currently `apisig-v0.0.1` (b4be4eed). Bump it the same way when the
+site changes `apisig`, `apiproductlist`, or `apihandoff`.
 
 ### Backend contract
 
