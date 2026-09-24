@@ -78,6 +78,7 @@ func (s *Server) renderAdminHome(w http.ResponseWriter, r *http.Request, sess se
 		}
 	}
 	p := s.pageFor(&sess, "Admin")
+	p.Wide = true
 	p.Notice = notice
 	p.Error = errMsg
 	p.Data = adminHomeData{Query: q, Accounts: accounts, HasStripe: s.ReconcileAll != nil, Actions: actions}
@@ -155,6 +156,7 @@ func (s *Server) renderAdminAccount(w http.ResponseWriter, r *http.Request, sess
 	}
 	d.Actions = actions
 	p := s.pageFor(&sess, "Account "+a.Email)
+	p.Wide = true
 	p.Notice = notice
 	p.Error = errMsg
 	p.Data = d
@@ -388,6 +390,7 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess session
 		}
 	}
 	p := s.pageFor(&sess, "Usage")
+	p.Wide = true
 	p.Data = d
 	s.render(w, http.StatusOK, "admin_usage.html", p)
 }

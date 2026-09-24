@@ -123,7 +123,9 @@ type page struct {
 	PricingURL string
 	PrivacyURL string
 	PublicURL  string
-	Data       any
+	// Wide lets a page with several tables use more of the viewport.
+	Wide bool
+	Data any
 }
 
 // errorData drives error.html's back link.
