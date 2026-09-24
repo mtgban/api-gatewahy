@@ -29,7 +29,7 @@ func TestAdminAccountsAndActions(t *testing.T) {
 	ctx := context.Background()
 	_, ck, csrf := ts.signIn(t, "Admin@Example.com")
 	cust, _ := ts.store.GetOrCreateAccount(ctx, "cust@example.com", "")
-	ts.store.SetStripeCustomerID(ctx, cust.ID, "cus_42")
+	_, _ = ts.store.SetStripeCustomerID(ctx, cust.ID, "cus_42")
 	_, key, _ := ts.store.CreateKey(ctx, cust.ID, "old")
 	id := itoa(cust.ID)
 

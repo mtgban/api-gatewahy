@@ -13,10 +13,10 @@ func TestSendTrialRemindersOnce(t *testing.T) {
 	a, _ := ts.store.GetOrCreateAccount(ctx, "ann@example.com", "")
 	b, _ := ts.store.GetOrCreateAccount(ctx, "bob@example.com", "")
 	c, _ := ts.store.GetOrCreateAccount(ctx, "carl@example.com", "")
-	ts.store.SetAccountStatus(ctx, c.ID, "suspended")
-	ts.store.CreateTrial(ctx, "ann@example.com", a.ID, ts.now.Add(2*24*time.Hour), ts.now.Add(-trialCooldown))
-	ts.store.CreateTrial(ctx, "bob@example.com", b.ID, ts.now.Add(10*24*time.Hour), ts.now.Add(-trialCooldown))
-	ts.store.CreateTrial(ctx, "carl@example.com", c.ID, ts.now.Add(2*24*time.Hour), ts.now.Add(-trialCooldown))
+	_ = ts.store.SetAccountStatus(ctx, c.ID, "suspended")
+	_, _ = ts.store.CreateTrial(ctx, "ann@example.com", a.ID, ts.now.Add(2*24*time.Hour), ts.now.Add(-trialCooldown))
+	_, _ = ts.store.CreateTrial(ctx, "bob@example.com", b.ID, ts.now.Add(10*24*time.Hour), ts.now.Add(-trialCooldown))
+	_, _ = ts.store.CreateTrial(ctx, "carl@example.com", c.ID, ts.now.Add(2*24*time.Hour), ts.now.Add(-trialCooldown))
 
 	ts.SendTrialReminders(ctx, ts.now)
 	if got := strings.Count(ts.mail.String(), "trial ends soon"); got != 1 || !strings.Contains(ts.mail.String(), "ann@example.com") {
