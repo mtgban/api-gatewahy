@@ -104,10 +104,10 @@ func TestManySubscriptionsShowsContactMessage(t *testing.T) {
 	ts.withStripe()
 	a, ck, csrf := ts.signIn(t, "ann@example.com")
 	ctx := context.Background()
-	ts.store.AddEntitlement(ctx, entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
+	_, _ = ts.store.AddEntitlement(ctx, entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
 	e2 := entitlementFor(a.ID, "stripe", "BASE_ACCESS")
 	e2.ExternalRef = "sub_2"
-	ts.store.AddEntitlement(ctx, e2)
+	_, _ = ts.store.AddEntitlement(ctx, e2)
 
 	const changeQuery = "/checkout?change=1&package=all_data&games=magic&return_to=https%3A%2F%2Fmtgban.com%2Fapi-plans"
 	rec := ts.do("GET", changeQuery, "", ck)
@@ -196,7 +196,7 @@ func TestSuccessAndCancelPages(t *testing.T) {
 	if c := cookieNamed(rec, session.PendingName); c == nil || c.MaxAge >= 0 {
 		t.Error("pending cookie not cleared")
 	}
-	ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
+	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
 	rec = ts.do("GET", "/checkout/success", "", ck)
 	if !strings.Contains(rec.Body.String(), "Base Access") || !strings.Contains(rec.Body.String(), `action="/account/keys"`) {
 		t.Errorf("success with entitlement: %s", rec.Body.String())
