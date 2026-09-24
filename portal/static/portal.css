@@ -42,7 +42,7 @@ a { color: var(--ainfo); }
 .bar-links { display: flex; gap: 1em; align-items: center; }
 .inline { display: inline; }
 button.link { background: none; border: none; color: var(--ainfo); cursor: pointer; font: inherit; padding: 0; }
-.page { max-width: 46em; margin: 0 auto; padding: 2em 4vw 4em; }
+.page { max-width: 52em; margin: 0 auto; padding: 2em 4vw 4em; }
 .foot { text-align: center; color: var(--text-dim); font-size: 0.85em; padding: 2em 4vw; }
 h1 { font-size: 1.7em; letter-spacing: -0.02em; margin: 0 0 0.6em; }
 h2 { font-size: 1.2em; margin: 2em 0 0.6em; }
@@ -63,4 +63,16 @@ tbody tr:nth-child(odd) { background: var(--row-odd); }
 .total { font-size: 1.4em; font-weight: 700; }
 .key-box { font-family: ui-monospace, monospace; font-size: 1.05em; padding: 0.8em 1em; background: var(--surface-2); border: 1px solid var(--border-moderate); border-radius: var(--radius-sm); word-break: break-all; user-select: all; }
 .dim { color: var(--text-dim); font-size: 0.9em; }
-@media (max-width: 640px) { .page { padding: 1.2em 16px 3em; } table { display: block; overflow-x: auto; } }
+/* Account page: one card per section, even rhythm, no card butting a table. */
+.section { margin-top: 1.8em; }
+.section h2 { margin: 0 0 0.5em; }
+.section .card { margin-bottom: 0; padding: 0.6em 1em 1em; }
+.section .card > table { margin: 0; }
+.section .card > table + p { margin: 0.9em 0 0; }
+.actions { display: flex; gap: 0.6em; flex-wrap: wrap; margin: 1em 0 0; }
+.right { text-align: right; }
+.row-form { display: flex; gap: 0.6em; align-items: center; flex-wrap: wrap; margin-top: 1em; padding-top: 1em; border-top: 1px solid var(--border-subtle); }
+.row-form label { margin: 0; white-space: nowrap; }
+.row-form input[type=text] { flex: 1 1 14em; width: auto; }
+.note { margin: 0.6em 0 0; }
+@media (max-width: 640px) { .page { padding: 1.2em 16px 3em; } table { display: block; overflow-x: auto; } .row-form { flex-direction: column; align-items: stretch; } .row-form input[type=text] { width: 100%; } }
