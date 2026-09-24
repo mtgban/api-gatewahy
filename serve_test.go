@@ -312,16 +312,10 @@ func TestPortalDepsFromEnv(t *testing.T) {
 		t.Errorf("off: %v %v", d, err)
 	}
 	t.Setenv("GATEWAY_SESSION_SECRET", "short")
-	t.Setenv("TRIAL_SECRET", "t")
 	if _, err := portalDepsFromEnv(cfg, io.Discard); err == nil {
 		t.Error("short secret accepted")
 	}
 	t.Setenv("GATEWAY_SESSION_SECRET", "0123456789abcdef0123456789abcdef")
-	t.Setenv("TRIAL_SECRET", "")
-	if _, err := portalDepsFromEnv(cfg, io.Discard); err == nil {
-		t.Error("missing TRIAL_SECRET accepted")
-	}
-	t.Setenv("TRIAL_SECRET", "t")
 	t.Setenv("MAIL_SMTP_HOST", "")
 	d, err := portalDepsFromEnv(cfg, io.Discard)
 	if err != nil || d == nil {
@@ -361,5 +355,13 @@ func TestStripeDepsFromEnv(t *testing.T) {
 	sd, err := stripeDepsFromEnv()
 	if err != nil || sd == nil || sd.api == nil || sd.webhookSecret != "whsec_x" {
 		t.Errorf("both set: %+v %v", sd, err)
+	}
+}
+
+func TestGameSecretsFollowTheConfig(t *testing.T) {
+	cfg := &config.Config{Games: map[string]config.Game{"magic": {Secret: "m"}, "pokemon": {Secret: "p"}}}
+	got := gameSecrets(cfg)
+	if string(got["magic"]) != "m" || string(got["pokemon"]) != "p" || len(got) != 2 {
+		t.Errorf("%v", got)
 	}
 }

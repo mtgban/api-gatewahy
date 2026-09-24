@@ -58,7 +58,6 @@ func stripeDepsFromEnv() (*stripeDeps, error) {
 // portalDeps is what serve needs when GATEWAY_SESSION_SECRET is set.
 type portalDeps struct {
 	sessionSecret []byte
-	trialSecret   []byte
 	mail          mailer.Mailer
 }
 
@@ -71,11 +70,7 @@ func portalDepsFromEnv(cfg *config.Config, stderr io.Writer) (*portalDeps, error
 	if len(secret) < 32 {
 		return nil, errors.New("GATEWAY_SESSION_SECRET must be at least 32 characters")
 	}
-	trial := os.Getenv("TRIAL_SECRET")
-	if trial == "" {
-		return nil, errors.New("TRIAL_SECRET is required when GATEWAY_SESSION_SECRET is set")
-	}
-	d := &portalDeps{sessionSecret: []byte(secret), trialSecret: []byte(trial)}
+	d := &portalDeps{sessionSecret: []byte(secret)}
 	smtp, err := mailer.FromEnv(cfg.Mail.From)
 	if err != nil {
 		return nil, err
@@ -302,7 +297,7 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 			CancelPath:        cfg.Stripe.CancelPath,
 			AdminEmails:       cfg.AdminEmails,
 			TrialDays:         cfg.TrialDays,
-			TrialSecret:       pd.trialSecret,
+			GameSecrets:       gameSecrets(cfg),
 			LoginLinksPerHour: cfg.LoginLinksPerHour,
 			ClientIPHeader:    cfg.ClientIPHeader,
 		}
@@ -358,6 +353,16 @@ func checkCatalogStores(cat *apiproductlist.ProductList, known []string) error {
 		}
 	}
 	return nil
+}
+
+// gameSecrets is each configured game's shared secret, the one the gateway
+// calls the site with and the site signs handoff tokens with.
+func gameSecrets(cfg *config.Config) map[string][]byte {
+	out := make(map[string][]byte, len(cfg.Games))
+	for name, g := range cfg.Games {
+		out[name] = []byte(g.Secret)
+	}
+	return out
 }
 
 // checkReservedPaths refuses a Stripe landing path that collides with a portal route.

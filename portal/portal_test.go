@@ -45,7 +45,7 @@ func newTestServer(t *testing.T) *testServer {
 		CancelPath:        "/checkout/cancel",
 		AdminEmails:       []string{"admin@example.com"},
 		TrialDays:         15,
-		TrialSecret:       []byte("trial-secret"),
+		GameSecrets:       map[string][]byte{"magic": []byte("trial-secret"), "pokemon": []byte("pokemon-secret")},
 		LoginLinksPerHour: 3,
 		Now:               func() time.Time { return now },
 		Log:               log.New(&bytes.Buffer{}, "", 0),
