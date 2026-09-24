@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/lib/pq v1.11.1
-	github.com/mtgban/mtgban-website v0.0.0-20260924115057-99054175d8ca
+	github.com/mtgban/mtgban-website v0.0.0-20260924120930-987f4c3bd492
 	github.com/mtgban/simplecloud v0.0.13
 	github.com/stripe/stripe-go/v84 v84.4.1
 	golang.org/x/time v0.15.0
