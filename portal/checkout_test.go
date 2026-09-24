@@ -240,7 +240,7 @@ func TestCheckoutChangeConfirm(t *testing.T) {
 		t.Errorf("no entitlement: %d %s", rec.Code, rec.Body.String())
 	}
 	a, _ := ts.store.GetAccountByEmail(context.Background(), "ann@example.com")
-	ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
+	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
 	f.sub = &stripe.Subscription{ID: "sub_1", Customer: &stripe.Customer{ID: "cus_test"},
 		Metadata: billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID)}
 	rec := ts.do("GET", changeQuery, "", ck)
