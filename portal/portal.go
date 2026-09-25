@@ -59,6 +59,7 @@ type Store interface {
 	ConsumeNonce(ctx context.Context, nonce string, expiresAt, now time.Time) error
 	RecordAdminAction(ctx context.Context, actor, action string, accountID int64, target, detail string) error
 	ListAdminActions(ctx context.Context, accountID int64, limit int) ([]apiaccess.AdminAction, error)
+	ListDemoAccess(ctx context.Context) ([]apiaccess.DemoAccess, error)
 }
 
 var _ Store = (*apiaccess.Client)(nil)
