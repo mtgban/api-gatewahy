@@ -218,3 +218,15 @@ func TestKeyKindFollowsTheAccountsAccess(t *testing.T) {
 		t.Fatalf("paid plan: %d, body lacks a live key", rec.Code)
 	}
 }
+
+func TestNewKeyPageExplainsUse(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, csrf := ts.signIn(t, "ann@example.com")
+	rec := ts.do("POST", "/account/keys", "csrf="+csrf+"&label=laptop", ck)
+	body := rec.Body.String()
+	for _, want := range []string{"Using your key", "curl -H", "https://api.test/v1/magic/mtgban/retail/ZEN.json", `href="https://mtgban.com/guide#api-getting-started"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("new key page lacks %q", want)
+		}
+	}
+}

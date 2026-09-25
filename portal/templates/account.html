@@ -9,7 +9,15 @@
   <h2 style="margin-top:0">Your new key</h2>
   <div class="key-box">{{.NewKey}}</div>
   <p class="msg msg-error" style="margin-top:0.8em">Copy it now. It is shown once and cannot be recovered; create a new key if you lose it.</p>
-  <p class="dim">Send requests to <code>{{$.PublicURL}}/v1/{game}/mtgban/&hellip;</code> with <code>Authorization: Bearer {{.NewKey}}</code>. Paths and fields are in the guide linked from the plans page.</p>
+  <h3>Using your key</h3>
+  <ol class="steps">
+    <li>Send it as a bearer token. The <code>key</code> query parameter also works for tools that cannot set headers, but it ends up in logs, so prefer the header.</li>
+    <li>Requests go to <code>{{$.PublicURL}}/v1/{game}/mtgban/&hellip;</code>, where <code>{game}</code> is a game on your plan. One key covers every game on it.</li>
+    <li>Responses are gzip-compressed JSON; replace <code>.json</code> with <code>.csv</code> for CSV.</li>
+  </ol>
+  <pre class="code">curl -H "Authorization: Bearer {{.NewKey}}" \
+  {{$.PublicURL}}/v1/magic/mtgban/retail/ZEN.json</pre>
+  <p class="dim">Every endpoint, query option, and the response shape are in the <a href="{{$.GuideURL}}">API guide</a>.</p>
 </div>
 {{end}}
 

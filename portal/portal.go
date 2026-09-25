@@ -122,6 +122,7 @@ type page struct {
 	Notice     string
 	PricingURL string
 	PrivacyURL string
+	GuideURL   string
 	PublicURL  string
 	// Wide lets a page with several tables use more of the viewport.
 	Wide bool
@@ -215,7 +216,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 // pageFor is the common page frame for sess.
 func (s *Server) pageFor(sess *session.Session, title string) page {
-	p := page{Title: title, Session: sess, PricingURL: s.PricingURL, PublicURL: s.PublicURL, PrivacyURL: siteOrigin(s.PricingURL) + "/privacy"}
+	p := page{Title: title, Session: sess, PricingURL: s.PricingURL, PublicURL: s.PublicURL, PrivacyURL: siteOrigin(s.PricingURL) + "/privacy", GuideURL: siteOrigin(s.PricingURL) + "/guide#api-getting-started"}
 	if sess != nil {
 		p.CSRF = s.Sessions.CSRF(*sess)
 	}
@@ -231,6 +232,9 @@ func (s *Server) render(w http.ResponseWriter, status int, name string, p page) 
 	}
 	if p.PrivacyURL == "" {
 		p.PrivacyURL = siteOrigin(s.PricingURL) + "/privacy"
+	}
+	if p.GuideURL == "" {
+		p.GuideURL = siteOrigin(s.PricingURL) + "/guide#api-getting-started"
 	}
 	var buf bytes.Buffer
 	if err := s.tmpl.ExecuteTemplate(&buf, name, p); err != nil {
