@@ -30,7 +30,7 @@ func TestAdminAccountsAndActions(t *testing.T) {
 	_, ck, csrf := ts.signIn(t, "Admin@Example.com")
 	cust, _ := ts.store.GetOrCreateAccount(ctx, "cust@example.com", "")
 	_, _ = ts.store.SetStripeCustomerID(ctx, cust.ID, "cus_42")
-	_, key, _ := ts.store.CreateKey(ctx, cust.ID, "old")
+	_, key, _ := ts.store.CreateKey(ctx, cust.ID, "old", apiaccess.KeyLive)
 	id := itoa(cust.ID)
 
 	rec := ts.do("GET", "/admin?q=cust", "", ck)
@@ -247,7 +247,7 @@ func TestAdminRevokeKeyCrossAccountFails(t *testing.T) {
 	_, ck, csrf := ts.signIn(t, "admin@example.com")
 	a1, _ := ts.store.GetOrCreateAccount(ctx, "a1@example.com", "")
 	a2, _ := ts.store.GetOrCreateAccount(ctx, "a2@example.com", "")
-	_, key, _ := ts.store.CreateKey(ctx, a2.ID, "b-key")
+	_, key, _ := ts.store.CreateKey(ctx, a2.ID, "b-key", apiaccess.KeyLive)
 
 	rec := ts.do("POST", "/admin/accounts/"+itoa(a1.ID)+"/keys/"+itoa(key.ID)+"/revoke", "csrf="+csrf, ck)
 	if rec.Code != 404 {

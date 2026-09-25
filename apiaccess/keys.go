@@ -15,12 +15,24 @@ import (
 	"github.com/lib/pq"
 )
 
-// KeyPrefix starts every customer key.
-const KeyPrefix = "mtgban_live_"
+// KeyKind is the prefix a key is minted with: it says what kind of access
+// created it and nothing more; the gateway treats both the same.
+type KeyKind string
+
+const (
+	KeyLive KeyKind = "ban_live"
+	KeyDemo KeyKind = "ban_demo"
+)
+
+// valid reports whether k is a kind GenerateKey accepts.
+func (k KeyKind) valid() bool {
+	return k == KeyLive || k == KeyDemo
+}
 
 const keyAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
 
-var keyPattern = regexp.MustCompile(`^mtgban_live_[a-z0-9]{32}$`)
+// keyPattern also admits the prefix keys carried before the rename.
+var keyPattern = regexp.MustCompile(`^(mtgban_live|ban_live|ban_demo)_[a-z0-9]{32}$`)
 
 // Key is one bearer credential. The plaintext is never stored.
 type Key struct {
@@ -41,20 +53,25 @@ type Lookup struct {
 	Entitlements []Entitlement // active status rows only; callers still check ActiveAt
 }
 
-// GenerateKey returns a new plaintext key with its hash and display prefix.
-func GenerateKey() (plaintext, hash, prefix string, err error) {
+// GenerateKey returns a new plaintext key of the given kind with its hash and display prefix.
+func GenerateKey(kind KeyKind) (plaintext, hash, prefix string, err error) {
+	if !kind.valid() {
+		return "", "", "", fmt.Errorf("apiaccess: invalid key kind %q", kind)
+	}
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		return "", "", "", err
 	}
 	var b strings.Builder
-	b.WriteString(KeyPrefix)
+	b.WriteString(string(kind))
+	b.WriteByte('_')
 	for _, x := range buf {
 		// Modulo bias is under 2% per char; irrelevant at 32 chars.
 		b.WriteByte(keyAlphabet[int(x)%len(keyAlphabet)])
 	}
 	plaintext = b.String()
-	return plaintext, HashKey(plaintext), plaintext[len(KeyPrefix) : len(KeyPrefix)+8], nil
+	start := len(kind) + 1
+	return plaintext, HashKey(plaintext), plaintext[start : start+8], nil
 }
 
 // HashKey is the hex sha256 stored in place of the plaintext.
@@ -96,13 +113,13 @@ var generateKey = GenerateKey
 // createKeyAttempts is the first insert plus three regenerations.
 const createKeyAttempts = 4
 
-// CreateKey mints a key for the account and returns the plaintext once.
+// CreateKey mints a key of kind for the account and returns the plaintext once.
 // A prefix the live-prefix index already holds is regenerated.
-func (c *Client) CreateKey(ctx context.Context, accountID int64, label string) (string, Key, error) {
+func (c *Client) CreateKey(ctx context.Context, accountID int64, label string, kind KeyKind) (string, Key, error) {
 	var err error
 	for attempt := 0; attempt < createKeyAttempts; attempt++ {
 		var plaintext, hash, prefix string
-		plaintext, hash, prefix, err = generateKey()
+		plaintext, hash, prefix, err = generateKey(kind)
 		if err != nil {
 			return "", Key{}, err
 		}

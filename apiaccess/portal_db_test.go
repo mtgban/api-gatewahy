@@ -89,7 +89,7 @@ func TestRevokeKeyIsScopedToAccount(t *testing.T) {
 	ctx := context.Background()
 	a, _ := c.CreateAccount(ctx, "a@example.com", "")
 	b, _ := c.CreateAccount(ctx, "b@example.com", "")
-	_, k, err := c.CreateKey(ctx, a.ID, "")
+	_, k, err := c.CreateKey(ctx, a.ID, "", KeyLive)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,7 +13,7 @@ import (
 	"github.com/stripe/stripe-go/v84"
 )
 
-var keyRe = regexp.MustCompile(`mtgban_live_[a-z0-9]{32}`)
+var keyRe = regexp.MustCompile(`ban_(?:live|demo)_[a-z0-9]{32}`)
 
 func TestAccountPageAndKeys(t *testing.T) {
 	ts := newTestServer(t)
@@ -48,8 +48,9 @@ func TestAccountPageAndKeys(t *testing.T) {
 	if !strings.Contains(ts.mail.String(), "A new API key") {
 		t.Error("no key-created mail")
 	}
+	sep := strings.LastIndex(plain, "_")
 	rec = ts.do("GET", "/account", "", ck)
-	if strings.Contains(rec.Body.String(), plain) || !strings.Contains(rec.Body.String(), plain[len(apiaccess.KeyPrefix):len(apiaccess.KeyPrefix)+8]) {
+	if strings.Contains(rec.Body.String(), plain) || !strings.Contains(rec.Body.String(), plain[sep+1:sep+9]) {
 		t.Error("plaintext shown again, or prefix missing")
 	}
 	keys, _ := ts.store.ListKeys(ctx, a.ID)
@@ -66,7 +67,7 @@ func TestAccountPageAndKeys(t *testing.T) {
 
 	// Someone else's key cannot be revoked through this account.
 	b, _ := ts.store.GetOrCreateAccount(ctx, "bob@example.com", "")
-	_, bk, _ := ts.store.CreateKey(ctx, b.ID, "")
+	_, bk, _ := ts.store.CreateKey(ctx, b.ID, "", apiaccess.KeyLive)
 	if rec := ts.do("POST", "/account/keys/"+itoa(bk.ID)+"/revoke", "csrf="+csrf, ck); rec.Code != 404 {
 		t.Errorf("cross-account revoke: %d", rec.Code)
 	}
@@ -177,5 +178,19 @@ func TestCreateKeyRateLimit(t *testing.T) {
 		if i == 10 && !strings.Contains(rec.Body.String(), "Too many keys") {
 			t.Errorf("eleventh body: %s", rec.Body.String())
 		}
+	}
+}
+
+func TestKeyKindFollowsTheAccountsAccess(t *testing.T) {
+	ts := newTestServer(t)
+	a, ck, csrf := ts.signIn(t, "ann@example.com")
+	rec := ts.do("POST", "/account/keys", "csrf="+csrf+"&label=demo", ck)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "ban_demo_") {
+		t.Fatalf("no plan: %d, body lacks a demo key", rec.Code)
+	}
+	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
+	rec = ts.do("POST", "/account/keys", "csrf="+csrf+"&label=paid", ck)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "ban_live_") {
+		t.Fatalf("paid plan: %d, body lacks a live key", rec.Code)
 	}
 }

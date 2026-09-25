@@ -24,11 +24,15 @@ search). Only `GET` is accepted; any other method under `/v1/` is 405.
 
 Authenticate with either:
 
-1. `Authorization: Bearer mtgban_live_...`, the form to use in production.
-2. `?key=mtgban_live_...`, a convenience for curl and for spreadsheet tools
+1. `Authorization: Bearer ban_live_...`, the form to use in production.
+2. `?key=ban_live_...`, a convenience for curl and for spreadsheet tools
    that cannot set a header. The key travels in the URL, so it lands in
    access logs, proxy logs, and browser history; prefer the header wherever
    the caller can send one.
+
+A key starts with `ban_live_` when the account has a paid plan and
+`ban_demo_` for a trial or manual access; the gateway treats both alike and
+still accepts keys minted with the old `mtgban_live_` prefix.
 
 A request with neither returns 401. Errors are JSON:
 

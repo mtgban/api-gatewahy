@@ -41,7 +41,7 @@ type Store interface {
 	CreateMagicLink(ctx context.Context, accountID int64, ttl time.Duration) (string, error)
 	ConsumeMagicLink(ctx context.Context, token string, now time.Time) (apiaccess.Account, error)
 	DeleteMagicLink(ctx context.Context, token string) error
-	CreateKey(ctx context.Context, accountID int64, label string) (string, apiaccess.Key, error)
+	CreateKey(ctx context.Context, accountID int64, label string, kind apiaccess.KeyKind) (string, apiaccess.Key, error)
 	ListKeys(ctx context.Context, accountID int64) ([]apiaccess.Key, error)
 	RevokeKey(ctx context.Context, id, accountID int64) (apiaccess.Key, error)
 	ListEntitlements(ctx context.Context, accountID int64) ([]apiaccess.Entitlement, error)

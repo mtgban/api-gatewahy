@@ -23,7 +23,7 @@ type adminStore interface {
 	GetAccountByEmail(ctx context.Context, email string) (apiaccess.Account, error)
 	SetAccountStatus(ctx context.Context, id int64, status string) error
 	ListAccounts(ctx context.Context) ([]apiaccess.Account, error)
-	CreateKey(ctx context.Context, accountID int64, label string) (string, apiaccess.Key, error)
+	CreateKey(ctx context.Context, accountID int64, label string, kind apiaccess.KeyKind) (string, apiaccess.Key, error)
 	RevokeKeyByPrefix(ctx context.Context, prefix string) (apiaccess.Key, error)
 	ListKeys(ctx context.Context, accountID int64) ([]apiaccess.Key, error)
 	AddEntitlement(ctx context.Context, e apiaccess.Entitlement) (apiaccess.Entitlement, error)
@@ -198,13 +198,17 @@ func runAdmin(ctx context.Context, store adminStore, knownStores, knownGames []s
 		if !ok {
 			return exitFor(*email)
 		}
-		plain, k, err := store.CreateKey(ctx, a.ID, *label)
+		kind, err := keyKindFor(ctx, store, a.ID)
+		if err != nil {
+			return fail(err)
+		}
+		plain, k, err := store.CreateKey(ctx, a.ID, *label, kind)
 		if err != nil {
 			return fail(err)
 		}
 		audit("key create", a.ID, k.Prefix, *label)
 		notify()
-		fmt.Fprintf(stdout, "key created for %s (prefix %s). Shown once, copy it now:\n\n    %s\n\n", a.Email, k.Prefix, plain)
+		fmt.Fprintf(stdout, "key created for %s (%s, prefix %s). Shown once, copy it now:\n\n    %s\n\n", a.Email, kind, k.Prefix, plain)
 		return 0
 	case "key revoke":
 		if !need("prefix", *prefix) {
@@ -351,6 +355,18 @@ func adminUsageCmd(ctx context.Context, store adminStore, args []string, stdout,
 		fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%d\n", r.Email, r.Game, r.Requests, r.Bytes, r.Errors)
 	}
 	return flushTab(tw)
+}
+
+// keyKindFor is live when the account has an active Stripe entitlement, else demo.
+func keyKindFor(ctx context.Context, store adminStore, accountID int64) (apiaccess.KeyKind, error) {
+	ents, err := store.ListEntitlements(ctx, accountID)
+	if err != nil {
+		return "", err
+	}
+	if apiaccess.HasActiveStripePlan(ents, time.Now()) {
+		return apiaccess.KeyLive, nil
+	}
+	return apiaccess.KeyDemo, nil
 }
 
 func exitFor(email string) int {

@@ -122,13 +122,7 @@ func (s *Server) hasActiveStripePlan(r *http.Request, accountID int64) (bool, er
 	if err != nil {
 		return false, err
 	}
-	now := s.now()
-	for _, e := range ents {
-		if e.Source == "stripe" && e.ActiveAt(now) {
-			return true, nil
-		}
-	}
-	return false, nil
+	return apiaccess.HasActiveStripePlan(ents, s.now()), nil
 }
 
 // currentIntervalFor pins a plan change to the subscription's own interval,
@@ -273,7 +267,7 @@ func (s *Server) success(w http.ResponseWriter, r *http.Request, sess session.Se
 		s.logf("success %s: %v", a.Email, err)
 	}
 	for _, e := range ents {
-		if e.Source == "stripe" && e.ActiveAt(s.now()) {
+		if e.IsActiveStripePlan(s.now()) {
 			d.Entitlements = append(d.Entitlements, s.describeEntitlement(e))
 		}
 	}
