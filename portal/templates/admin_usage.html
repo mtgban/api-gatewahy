@@ -13,5 +13,23 @@
   <thead><tr><th>Email</th><th>Game</th><th>Requests</th><th>Bytes</th><th>Errors</th></tr></thead>
   <tbody>{{range .Rows}}<tr><td>{{.Email}}</td><td>{{.Game}}</td><td>{{.Requests}}</td><td>{{.Bytes}}</td><td>{{.Errors}}</td></tr>{{end}}</tbody>
 </table>
+
+<h2>By key</h2>
+{{if .ByKey}}
+<p class="dim">Rows here cover every game; the game filter applies to the totals above.</p>
+<table class="nowrap">
+  <thead><tr><th>Key</th><th>Label</th><th>Day</th><th>Requests</th><th>Bytes</th><th>Errors</th></tr></thead>
+  <tbody>{{range .ByKey}}<tr><td><a href="/admin/usage?since={{$.Data.Since}}&until={{$.Data.Until}}&email={{$.Data.Email}}&game={{$.Data.Game}}&key={{.Prefix}}"><code>{{.Prefix}}</code></a></td><td>{{.Label}}</td><td>{{date .Day}}</td><td>{{.Requests}}</td><td>{{.Bytes}}</td><td>{{.Errors}}</td></tr>{{end}}</tbody>
+</table>
+{{else}}<p class="dim">No requests in this range.</p>{{end}}
+{{if .KeyPrefix}}
+{{if .Paths}}
+<h2>Paths for <code>{{.KeyPrefix}}</code></h2>
+<table>
+  <thead><tr><th>Path</th><th>Requests</th><th>Errors</th></tr></thead>
+  <tbody>{{range .Paths}}<tr><td><code>{{.Path}}</code></td><td>{{.Requests}}</td><td>{{.Errors}}</td></tr>{{end}}</tbody>
+</table>
+{{else}}<p class="dim">No requests for this key in this range.</p>{{end}}
+{{end}}
 {{end}}
 {{template "footer" .}}

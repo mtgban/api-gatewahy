@@ -31,6 +31,7 @@ type adminAccountData struct {
 	NewInvite    string
 	StripeURL    string
 	Actions      []apiaccess.AdminAction
+	Usage        []apiaccess.KeyUsageRow
 }
 
 type adminEntitlement struct {
@@ -40,7 +41,10 @@ type adminEntitlement struct {
 
 type adminUsageData struct {
 	Since, Until, Email, Game string
+	KeyPrefix                 string
 	Rows                      []apiaccess.UsageRow
+	ByKey                     []apiaccess.KeyUsageRow
+	Paths                     []apiaccess.PathUsageRow
 }
 
 func (s *Server) registerAdmin(mux *http.ServeMux) {
@@ -160,6 +164,15 @@ func (s *Server) renderAdminAccount(w http.ResponseWriter, r *http.Request, sess
 		}
 	}
 	d.Actions = actions
+	now := s.now()
+	usage, err := s.Store.UsageByKey(ctx, monthStart(now), now, a.ID)
+	if err != nil {
+		s.logf("admin account %d: usage: %v", a.ID, err)
+		if errMsg == "" {
+			errMsg = tryAgainMsg
+		}
+	}
+	d.Usage = usage
 	p := s.pageFor(&sess, "Account "+a.Email)
 	p.Wide = true
 	p.Notice = notice
@@ -346,7 +359,8 @@ func (s *Server) adminInvite(w http.ResponseWriter, r *http.Request, sess sessio
 
 func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess session.Session, _ apiaccess.Account) {
 	now := s.now()
-	d := adminUsageData{Since: r.FormValue("since"), Until: r.FormValue("until"), Email: strings.TrimSpace(r.FormValue("email")), Game: r.FormValue("game")}
+	d := adminUsageData{Since: r.FormValue("since"), Until: r.FormValue("until"), Email: strings.TrimSpace(r.FormValue("email")),
+		Game: r.FormValue("game"), KeyPrefix: strings.TrimSpace(r.FormValue("key"))}
 	from, to := now.AddDate(0, 0, -30), now.AddDate(0, 0, 1)
 	var err error
 	if d.Since != "" {
@@ -394,8 +408,29 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess session
 			d.Rows = append(d.Rows, row)
 		}
 	}
+	var errMsg string
+	byKey, err := s.Store.UsageByKey(r.Context(), from, to, accountID)
+	if err != nil {
+		s.logf("admin usage by key: %v", err)
+		errMsg = tryAgainMsg
+	}
+	d.ByKey = byKey
+	if d.KeyPrefix != "" {
+		for _, row := range byKey {
+			if row.Prefix == d.KeyPrefix {
+				paths, err := s.Store.TopPaths(r.Context(), from, to, row.KeyID, 20)
+				if err != nil {
+					s.logf("admin usage paths: %v", err)
+					errMsg = tryAgainMsg
+				}
+				d.Paths = paths
+				break
+			}
+		}
+	}
 	p := s.pageFor(&sess, "Usage")
 	p.Wide = true
+	p.Error = errMsg
 	p.Data = d
 	s.render(w, http.StatusOK, "admin_usage.html", p)
 }

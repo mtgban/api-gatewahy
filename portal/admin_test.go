@@ -341,3 +341,31 @@ func TestAdminHomeListsDemoAccess(t *testing.T) {
 		}
 	}
 }
+
+func TestAdminUsageByKeyAndPaths(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, _ := ts.signIn(t, "admin@example.com")
+	ctx := context.Background()
+	a, _ := ts.store.GetOrCreateAccount(ctx, "u@example.com", "")
+	_, k, _ := ts.store.CreateKey(ctx, a.ID, "laptop", apiaccess.KeyLive)
+	ts.store.addUsage(a.ID, k.ID, "magic", "/retail/ZEN.json", 200, ts.now.Add(-time.Hour))
+	ts.store.addUsage(a.ID, k.ID, "magic", "/sets.json", 404, ts.now.Add(-time.Hour))
+	since, until := ts.now.Add(-48*time.Hour).Format("2006-01-02"), ts.now.Add(24*time.Hour).Format("2006-01-02")
+	body := ts.do("GET", "/admin/usage?since="+since+"&until="+until+"&key="+k.Prefix, "", ck).Body.String()
+	for _, want := range []string{"By key", k.Prefix, "laptop", "/retail/ZEN.json", "/sets.json"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("usage page lacks %q", want)
+		}
+	}
+	body = ts.do("GET", "/admin/accounts/"+strconv.FormatInt(a.ID, 10), "", ck).Body.String()
+	if !strings.Contains(body, "Usage this month") || !strings.Contains(body, k.Prefix) {
+		t.Error("account page lacks the per-key usage")
+	}
+	if strings.Contains(body, "No requests this month.") {
+		t.Error("account page reports no usage for a month with two requests")
+	}
+	// Only the usage table renders the day's two requests and one error.
+	if !strings.Contains(body, "<td>2</td><td>1</td>") {
+		t.Error("account page lacks the request and error counts")
+	}
+}
