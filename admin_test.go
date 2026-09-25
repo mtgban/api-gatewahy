@@ -44,8 +44,8 @@ func (m *memStore) SetAccountStatus(_ context.Context, id int64, status string) 
 	return apiaccess.ErrNotFound
 }
 func (m *memStore) ListAccounts(context.Context) ([]apiaccess.Account, error) { return m.accounts, nil }
-func (m *memStore) CreateKey(_ context.Context, accountID int64, label string) (string, apiaccess.Key, error) {
-	plain, hash, prefix, _ := apiaccess.GenerateKey()
+func (m *memStore) CreateKey(_ context.Context, accountID int64, label string, kind apiaccess.KeyKind) (string, apiaccess.Key, error) {
+	plain, hash, prefix, _ := apiaccess.GenerateKey(kind)
 	k := apiaccess.Key{ID: int64(len(m.keys) + 1), AccountID: accountID, Hash: hash, Prefix: prefix, Label: label}
 	m.keys = append(m.keys, k)
 	return plain, k, nil
@@ -159,11 +159,11 @@ func TestAdminKeys(t *testing.T) {
 	s := &memStore{}
 	admin(t, s, "account", "add", "-email", "ck@example.com")
 	code, out, errb := admin(t, s, "key", "create", "-email", "ck@example.com", "-label", "prod")
-	if code != 0 || !strings.Contains(out, "mtgban_live_") {
+	if code != 0 || !strings.Contains(out, "ban_demo_") || !strings.Contains(out, "(ban_demo, prefix") {
 		t.Fatalf("create: %d %q %q", code, out, errb)
 	}
 	prefix := s.keys[0].Prefix
-	if code, out, _ := admin(t, s, "key", "list", "-email", "ck@example.com"); code != 0 || !strings.Contains(out, prefix) || strings.Contains(out, "mtgban_live_") {
+	if code, out, _ := admin(t, s, "key", "list", "-email", "ck@example.com"); code != 0 || !strings.Contains(out, prefix) || strings.Contains(out, "ban_") {
 		t.Fatalf("list leaked or missed: %d %q", code, out)
 	}
 	if code, _, _ := admin(t, s, "key", "revoke", "-prefix", prefix); code != 0 || s.keys[0].RevokedAt == nil {

@@ -46,6 +46,21 @@ func (e Entitlement) ActiveAt(now time.Time) bool {
 	return e.ValidUntil == nil || now.Before(*e.ValidUntil)
 }
 
+// IsActiveStripePlan reports whether e is a currently active Stripe entitlement.
+func (e Entitlement) IsActiveStripePlan(now time.Time) bool {
+	return e.Source == "stripe" && e.ActiveAt(now)
+}
+
+// HasActiveStripePlan reports whether ents includes an active Stripe entitlement.
+func HasActiveStripePlan(ents []Entitlement, now time.Time) bool {
+	for _, e := range ents {
+		if e.IsActiveStripePlan(now) {
+			return true
+		}
+	}
+	return false
+}
+
 // ValidateStoreScope canonicalizes a preset or a store list against knownStores.
 func ValidateStoreScope(scope string, knownStores []string) (string, error) {
 	return canonicalStoreScope(scope, knownStores, true)

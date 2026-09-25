@@ -10,7 +10,7 @@ func TestUsageInsertSummarizePrune(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
 	a, _ := c.CreateAccount(ctx, "u@example.com", "")
-	_, k, _ := c.CreateKey(ctx, a.ID, "")
+	_, k, _ := c.CreateKey(ctx, a.ID, "", KeyLive)
 	now := time.Now().UTC()
 
 	rows := []Usage{
@@ -47,7 +47,7 @@ func TestInsertUsageDropsUnparseableIP(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
 	a, _ := c.CreateAccount(ctx, "ip@example.com", "")
-	_, k, _ := c.CreateKey(ctx, a.ID, "")
+	_, k, _ := c.CreateKey(ctx, a.ID, "", KeyLive)
 	now := time.Now().UTC()
 
 	rows := []Usage{

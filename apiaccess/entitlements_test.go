@@ -63,6 +63,27 @@ func TestActiveAt(t *testing.T) {
 	}
 }
 
+func TestHasActiveStripePlan(t *testing.T) {
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	past := now.Add(-time.Hour)
+	cases := []struct {
+		name string
+		ents []Entitlement
+		want bool
+	}{
+		{"none", nil, false},
+		{"active stripe", []Entitlement{{Source: "stripe", Status: "active", ValidFrom: past}}, true},
+		{"active manual only", []Entitlement{{Source: "manual", Status: "active", ValidFrom: past}}, false},
+		{"ended stripe", []Entitlement{{Source: "stripe", Status: "ended", ValidFrom: past}}, false},
+		{"manual then stripe", []Entitlement{{Source: "manual", Status: "active", ValidFrom: past}, {Source: "stripe", Status: "active", ValidFrom: past}}, true},
+	}
+	for _, c := range cases {
+		if got := HasActiveStripePlan(c.ents, now); got != c.want {
+			t.Errorf("%s: got %v", c.name, got)
+		}
+	}
+}
+
 func TestEntitlementsRoundTrip(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()

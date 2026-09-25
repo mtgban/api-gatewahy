@@ -10,21 +10,32 @@ import (
 )
 
 func TestGenerateKeyShape(t *testing.T) {
-	plain, hash, prefix, err := GenerateKey()
-	if err != nil {
-		t.Fatal(err)
+	for kind, want := range map[KeyKind]string{KeyLive: `^ban_live_[a-z0-9]{32}$`, KeyDemo: `^ban_demo_[a-z0-9]{32}$`} {
+		plain, hash, prefix, err := GenerateKey(kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !regexp.MustCompile(want).MatchString(plain) {
+			t.Errorf("%s key %q", kind, plain)
+		}
+		if hash != HashKey(plain) || len(prefix) != 8 || !strings.HasPrefix(plain, string(kind)+"_"+prefix) {
+			t.Errorf("hash %q prefix %q for %q", hash, prefix, plain)
+		}
+		if !LooksLikeKey(plain) {
+			t.Errorf("%q does not look like a key", plain)
+		}
 	}
-	if !regexp.MustCompile(`^mtgban_live_[a-z0-9]{32}$`).MatchString(plain) {
-		t.Errorf("plaintext %q", plain)
+	for _, bad := range []string{"", "ban_live_short", "ban_test_" + strings.Repeat("a", 32), "BAN_LIVE_" + strings.Repeat("a", 32)} {
+		if LooksLikeKey(bad) {
+			t.Errorf("%q accepted", bad)
+		}
 	}
-	if hash != HashKey(plain) || len(hash) != 64 {
-		t.Errorf("hash %q", hash)
+	// Keys minted before the rename keep working.
+	if !LooksLikeKey("mtgban_live_" + strings.Repeat("a", 32)) {
+		t.Error("legacy prefix refused")
 	}
-	if prefix != strings.TrimPrefix(plain, KeyPrefix)[:8] {
-		t.Errorf("prefix %q", prefix)
-	}
-	if !LooksLikeKey(plain) || LooksLikeKey("mtgban_live_short") || LooksLikeKey("") {
-		t.Error("LooksLikeKey wrong")
+	if _, _, _, err := GenerateKey(KeyKind("bogus")); err == nil {
+		t.Error("invalid kind accepted")
 	}
 }
 
@@ -39,7 +50,7 @@ func TestKeysRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	plain, k, err := c.CreateKey(ctx, a.ID, "prod")
+	plain, k, err := c.CreateKey(ctx, a.ID, "prod", KeyLive)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +104,7 @@ func TestCreateKeyRetriesTakenPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taken, takenHash, takenPrefix, err := GenerateKey()
+	taken, takenHash, takenPrefix, err := GenerateKey(KeyLive)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,8 +117,8 @@ func TestCreateKeyRetriesTakenPrefix(t *testing.T) {
 	orig := generateKey
 	t.Cleanup(func() { generateKey = orig })
 	collided := false
-	generateKey = func() (string, string, string, error) {
-		plain, hash, prefix, err := orig()
+	generateKey = func(kind KeyKind) (string, string, string, error) {
+		plain, hash, prefix, err := orig(kind)
 		if !collided {
 			collided = true
 			return plain, hash, takenPrefix, err
@@ -115,7 +126,7 @@ func TestCreateKeyRetriesTakenPrefix(t *testing.T) {
 		return plain, hash, prefix, err
 	}
 
-	plain, k, err := c.CreateKey(ctx, a.ID, "second")
+	plain, k, err := c.CreateKey(ctx, a.ID, "second", KeyLive)
 	if err != nil {
 		t.Fatalf("create after collision: %v", err)
 	}

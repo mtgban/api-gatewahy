@@ -127,7 +127,17 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request, sess session.
 	if runes := []rune(label); len(runes) > 64 {
 		label = string(runes[:64])
 	}
-	plain, k, err := s.Store.CreateKey(r.Context(), a.ID, label)
+	hasPlan, err := s.hasActiveStripePlan(r, a.ID)
+	if err != nil {
+		s.logf("key kind %s: %v", a.Email, err)
+		s.renderAccount(w, r, http.StatusInternalServerError, sess, a, "", "", tryAgainMsg)
+		return
+	}
+	kind := apiaccess.KeyDemo
+	if hasPlan {
+		kind = apiaccess.KeyLive
+	}
+	plain, k, err := s.Store.CreateKey(r.Context(), a.ID, label, kind)
 	if err != nil {
 		s.logf("create key %s: %v", a.Email, err)
 		s.renderAccount(w, r, http.StatusInternalServerError, sess, a, "", "", tryAgainMsg)

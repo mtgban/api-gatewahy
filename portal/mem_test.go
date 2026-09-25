@@ -195,10 +195,10 @@ func (m *memStore) DeleteMagicLink(_ context.Context, token string) error {
 	return nil
 }
 
-func (m *memStore) CreateKey(_ context.Context, accountID int64, label string) (string, apiaccess.Key, error) {
+func (m *memStore) CreateKey(_ context.Context, accountID int64, label string, kind apiaccess.KeyKind) (string, apiaccess.Key, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	plain, hash, prefix, err := apiaccess.GenerateKey()
+	plain, hash, prefix, err := apiaccess.GenerateKey(kind)
 	if err != nil {
 		return "", apiaccess.Key{}, err
 	}
