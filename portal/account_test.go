@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -165,9 +166,9 @@ func TestCreateKeyCapsLabelByRunes(t *testing.T) {
 
 func TestCreateKeyRateLimit(t *testing.T) {
 	ts := newTestServer(t)
-	_, ck, csrf := ts.signIn(t, "many@example.com")
+	a, ck, csrf := ts.signIn(t, "many@example.com")
 	for i := 0; i < 11; i++ {
-		rec := ts.do("POST", "/account/keys", "csrf="+csrf, ck)
+		rec := ts.do("POST", "/account/keys", "csrf="+csrf+"&label=k"+strconv.Itoa(i), ck)
 		want := 200
 		if i == 10 {
 			want = 429
@@ -178,6 +179,29 @@ func TestCreateKeyRateLimit(t *testing.T) {
 		if i == 10 && !strings.Contains(rec.Body.String(), "Too many keys") {
 			t.Errorf("eleventh body: %s", rec.Body.String())
 		}
+		if rec.Code == 200 {
+			// Revoke right away so the active-key cap never interferes with this rate-limit test.
+			keys, _ := ts.store.ListKeys(context.Background(), a.ID)
+			_, _ = ts.store.RevokeKey(context.Background(), keys[len(keys)-1].ID, a.ID)
+		}
+	}
+}
+
+func TestKeyNeedsALabelAndAccountsHoldFive(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, csrf := ts.signIn(t, "ann@example.com")
+	rec := ts.do("POST", "/account/keys", "csrf="+csrf+"&label=", ck)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "Give the key a label") {
+		t.Fatalf("empty label: %d %s", rec.Code, rec.Body.String())
+	}
+	for i := 0; i < maxActiveKeys; i++ {
+		if rec := ts.do("POST", "/account/keys", "csrf="+csrf+"&label=k"+strconv.Itoa(i), ck); rec.Code != 200 {
+			t.Fatalf("key %d: %d", i, rec.Code)
+		}
+	}
+	rec = ts.do("POST", "/account/keys", "csrf="+csrf+"&label=one-too-many", ck)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "Revoke one you no longer use") {
+		t.Fatalf("sixth key: %d %s", rec.Code, rec.Body.String())
 	}
 }
 

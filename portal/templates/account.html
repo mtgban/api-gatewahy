@@ -55,7 +55,7 @@
 <form method="POST" action="/account/keys" class="row-form">
   <input type="hidden" name="csrf" value="{{$.CSRF}}">
   <label for="label">New key</label>
-  <input id="label" type="text" name="label" maxlength="64" placeholder="label, optional: laptop, spreadsheet, prod">
+  <input id="label" type="text" name="label" maxlength="64" placeholder="laptop, spreadsheet, prod" required>
   <button type="submit" class="btn">Create key</button>
 </form>
 <p class="dim note">A key is shown once, on creation. Refreshing that page afterwards creates another one.</p>
