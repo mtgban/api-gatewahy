@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -288,5 +289,35 @@ func TestAdminUsageAndReconcile(t *testing.T) {
 	ts.ReconcileAll = func(context.Context) (billing.Result, error) { return billing.Result{}, errors.New("stripe down") }
 	if rec := ts.do("POST", "/admin/reconcile", "csrf="+csrf, ck); rec.Code != 502 {
 		t.Errorf("reconcile failure: %d", rec.Code)
+	}
+}
+
+func TestAdminDestructiveButtonsConfirm(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, _ := ts.signIn(t, "admin@example.com")
+	a, _ := ts.store.GetOrCreateAccount(context.Background(), "cust@example.com", "")
+	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "manual", "BASE_ACCESS"))
+	_, _, _ = ts.store.CreateKey(context.Background(), a.ID, "k", apiaccess.KeyLive)
+	body := ts.do("GET", "/admin/accounts/"+strconv.FormatInt(a.ID, 10), "", ck).Body.String()
+	for _, action := range []string{"/status", "/revoke", "/end"} {
+		i := strings.Index(body, `action="/admin/accounts/`+strconv.FormatInt(a.ID, 10))
+		if i < 0 {
+			t.Fatalf("no form for %s", action)
+		}
+	}
+	if strings.Count(body, "onsubmit=\"return confirm(") < 3 {
+		t.Errorf("expected a confirm on suspend, revoke, and end; got %d", strings.Count(body, "onsubmit=\"return confirm("))
+	}
+}
+
+func TestInvitePanelExplainsTheSchedule(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, _ := ts.signIn(t, "admin@example.com")
+	a, _ := ts.store.GetOrCreateAccount(context.Background(), "cust@example.com", "")
+	body := ts.do("GET", "/admin/accounts/"+strconv.FormatInt(a.ID, 10), "", ck).Body.String()
+	for _, want := range []string{"Invite to a billing schedule", "invite-only", "Billing schedule", "every 3 months"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("invite panel lacks %q", want)
+		}
 	}
 }
