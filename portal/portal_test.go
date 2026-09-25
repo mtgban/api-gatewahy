@@ -31,6 +31,7 @@ func newTestServer(t *testing.T) *testServer {
 	t.Helper()
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	store := newMemStore()
+	store.clock = func() time.Time { return now }
 	var mailBuf bytes.Buffer
 	s := &Server{
 		Store:             store,

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
 	"github.com/mtgban/api-gatewahy/billing"
@@ -318,6 +319,25 @@ func TestInvitePanelExplainsTheSchedule(t *testing.T) {
 	for _, want := range []string{"Invite to a billing schedule", "invite-only", "Billing schedule", "every 3 months"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("invite panel lacks %q", want)
+		}
+	}
+}
+
+func TestAdminHomeListsDemoAccess(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, _ := ts.signIn(t, "admin@example.com")
+	ctx := context.Background()
+	a, _ := ts.store.GetOrCreateAccount(ctx, "trial@example.com", "")
+	ends := ts.now.Add(15 * 24 * time.Hour)
+	e := entitlementFor(a.ID, "trial", "ALL_ACCESS")
+	e.ValidUntil = &ends
+	_, _ = ts.store.AddEntitlement(ctx, e)
+	_, _ = ts.store.CreateTrial(ctx, "patron@example.com", a.ID, ends, ts.now.Add(-time.Hour))
+	_, _, _ = ts.store.CreateKey(ctx, a.ID, "k", apiaccess.KeyDemo)
+	body := ts.do("GET", "/admin", "", ck).Body.String()
+	for _, want := range []string{"Demo access", "trial@example.com", "patron@example.com", "<td>1</td>"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("admin home lacks %q", want)
 		}
 	}
 }

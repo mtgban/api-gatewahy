@@ -39,6 +39,8 @@ type memStore struct {
 	notified []string
 	nonces   map[string]time.Time
 	actions  []apiaccess.AdminAction
+	// clock is the test server's frozen clock; nil means real time.
+	clock func() time.Time
 
 	// entitlementErr, when set, is what AddEntitlement returns instead of succeeding.
 	entitlementErr error
@@ -55,6 +57,14 @@ func newMemStore() *memStore {
 }
 
 func (m *memStore) id() int64 { m.nextID++; return m.nextID }
+
+// nowOr returns the frozen clock when the test server set one.
+func (m *memStore) nowOr() time.Time {
+	if m.clock != nil {
+		return m.clock()
+	}
+	return time.Now()
+}
 
 func (m *memStore) GetAccount(_ context.Context, id int64) (apiaccess.Account, error) {
 	m.mu.Lock()
@@ -443,6 +453,48 @@ func (m *memStore) ListAdminActions(_ context.Context, accountID int64, limit in
 		}
 		out = append(out, a)
 	}
+	return out, nil
+}
+
+// ListDemoAccess mirrors the store query: active trial and manual rows, newest first.
+func (m *memStore) ListDemoAccess(context.Context) ([]apiaccess.DemoAccess, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := m.nowOr()
+	var out []apiaccess.DemoAccess
+	for _, e := range m.ents {
+		if e.Status != "active" || (e.Source != "trial" && e.Source != "manual") {
+			continue
+		}
+		if e.ValidUntil != nil && !e.ValidUntil.After(now) {
+			continue
+		}
+		d := apiaccess.DemoAccess{AccountID: e.AccountID, Email: m.accounts[e.AccountID].Email,
+			Source: e.Source, Note: e.Note, GrantedAt: e.ValidFrom, EndsAt: e.ValidUntil}
+		if e.Source == "trial" {
+			var latest *apiaccess.Trial
+			for _, t := range m.trials {
+				if t.AccountID == e.AccountID && (latest == nil || t.GrantedAt.After(latest.GrantedAt)) {
+					latest = t
+				}
+			}
+			if latest != nil {
+				d.Requester = latest.PatreonEmail
+			}
+		}
+		for _, k := range m.keys {
+			if k.AccountID != e.AccountID || k.RevokedAt != nil {
+				continue
+			}
+			d.Keys++
+			if k.LastUsedAt != nil && (d.LastUsed == nil || k.LastUsedAt.After(*d.LastUsed)) {
+				last := *k.LastUsedAt
+				d.LastUsed = &last
+			}
+		}
+		out = append(out, d)
+	}
+	slices.SortFunc(out, func(a, b apiaccess.DemoAccess) int { return b.GrantedAt.Compare(a.GrantedAt) })
 	return out, nil
 }
 

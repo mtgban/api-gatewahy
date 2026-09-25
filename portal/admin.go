@@ -16,6 +16,7 @@ import (
 type adminHomeData struct {
 	Query     string
 	Accounts  []apiaccess.Account
+	Demo      []apiaccess.DemoAccess
 	HasStripe bool
 	Actions   []apiaccess.AdminAction
 }
@@ -70,6 +71,10 @@ func (s *Server) renderAdminHome(w http.ResponseWriter, r *http.Request, sess se
 		s.logf("admin accounts: %v", err)
 		errMsg = tryAgainMsg
 	}
+	demo, err := s.Store.ListDemoAccess(r.Context())
+	if err != nil {
+		s.logf("admin demo list: %v", err)
+	}
 	actions, err := s.Store.ListAdminActions(r.Context(), 0, 20)
 	if err != nil {
 		s.logf("admin actions: %v", err)
@@ -81,7 +86,7 @@ func (s *Server) renderAdminHome(w http.ResponseWriter, r *http.Request, sess se
 	p.Wide = true
 	p.Notice = notice
 	p.Error = errMsg
-	p.Data = adminHomeData{Query: q, Accounts: accounts, HasStripe: s.ReconcileAll != nil, Actions: actions}
+	p.Data = adminHomeData{Query: q, Accounts: accounts, Demo: demo, HasStripe: s.ReconcileAll != nil, Actions: actions}
 	s.render(w, status, "admin_home.html", p)
 }
 
