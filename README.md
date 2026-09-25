@@ -74,7 +74,7 @@ only static asset.
 | `POST /logout` | session + CSRF | Clears the cookie and bumps the account's session epoch, so every cookie issued before it stops working. |
 | `GET /account`, `POST /account/keys`, `POST /account/keys/{id}/revoke`, `POST /account/plan`, `GET /portal` | session (+ CSRF on POST) | Keys, usage, entitlements, Stripe portal, plan change. |
 | `GET /trial`, `POST /trial`, `GET /session`, `POST /session` | signed handoff token | `GET /trial` and `GET /session` show a confirm page; `POST /trial` grants the Patreon trial and `POST /session` signs in. Each handoff token is single-use (its nonce is burned on accept). |
-| `GET /admin/...` | session, email in `admin_emails` | Accounts, entitlements, invites, usage, reconcile. Each account page shows an activity log of admin actions taken on it, from the web admin and from the CLI alike. |
+| `GET /admin/...` | session, email in `admin_emails` | Accounts, entitlements, invites, usage, reconcile. The usage page also shows usage per key by day, and the paths a key requests. Each account page shows an activity log of admin actions taken on it, from the web admin and from the CLI alike. |
 
 A key needs a label, an account holds at most five unrevoked keys, and the
 request limit applies to the account, so extra keys do not add throughput.

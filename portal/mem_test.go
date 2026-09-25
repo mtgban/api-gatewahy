@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -20,8 +21,10 @@ type memLink struct {
 
 // memUsage pairs a usage row with the timestamp SummarizeUsage filters on.
 type memUsage struct {
-	Ts  time.Time
-	Row apiaccess.UsageRow
+	Ts    time.Time
+	KeyID int64
+	Path  string
+	Row   apiaccess.UsageRow
 }
 
 var _ billing.Store = (*memStore)(nil)
@@ -328,6 +331,100 @@ func (m *memStore) SummarizeUsage(_ context.Context, since, until time.Time, acc
 		if (accountID == 0 || u.Row.AccountID == accountID) && !u.Ts.Before(since) && u.Ts.Before(until) {
 			out = append(out, u.Row)
 		}
+	}
+	return out, nil
+}
+
+// addUsage records one proxied request the way the gateway would.
+func (m *memStore) addUsage(accountID, keyID int64, game, path string, status int, ts time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row := apiaccess.UsageRow{AccountID: accountID, Email: m.accounts[accountID].Email, Game: game, Requests: 1}
+	if status >= 400 {
+		row.Errors = 1
+	}
+	m.usage = append(m.usage, memUsage{Ts: ts, KeyID: keyID, Path: path, Row: row})
+}
+
+// UsageByKey mirrors the store query: one row per key per UTC day, ordered by key then day.
+func (m *memStore) UsageByKey(_ context.Context, since, until time.Time, accountID int64) ([]apiaccess.KeyUsageRow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.usageErr != nil {
+		return nil, m.usageErr
+	}
+	type bucket struct {
+		keyID int64
+		day   time.Time
+	}
+	rows := map[bucket]*apiaccess.KeyUsageRow{}
+	for _, u := range m.usage {
+		k := m.keys[u.KeyID]
+		if k == nil || u.Ts.Before(since) || !u.Ts.Before(until) {
+			continue
+		}
+		if accountID != 0 && u.Row.AccountID != accountID {
+			continue
+		}
+		ts := u.Ts.UTC()
+		b := bucket{u.KeyID, time.Date(ts.Year(), ts.Month(), ts.Day(), 0, 0, 0, 0, time.UTC)}
+		r := rows[b]
+		if r == nil {
+			r = &apiaccess.KeyUsageRow{KeyID: k.ID, Prefix: k.Prefix, Label: k.Label, Day: b.day}
+			rows[b] = r
+		}
+		r.Requests += u.Row.Requests
+		r.Bytes += u.Row.Bytes
+		r.Errors += u.Row.Errors
+	}
+	out := make([]apiaccess.KeyUsageRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, *r)
+	}
+	slices.SortFunc(out, func(a, b apiaccess.KeyUsageRow) int {
+		if a.KeyID != b.KeyID {
+			return cmp.Compare(a.KeyID, b.KeyID)
+		}
+		return a.Day.Compare(b.Day)
+	})
+	return out, nil
+}
+
+// TopPaths mirrors the store query: one key's paths, most requested first.
+func (m *memStore) TopPaths(_ context.Context, since, until time.Time, keyID int64, limit int) ([]apiaccess.PathUsageRow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.usageErr != nil {
+		return nil, m.usageErr
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	rows := map[string]*apiaccess.PathUsageRow{}
+	for _, u := range m.usage {
+		if u.KeyID != keyID || u.Ts.Before(since) || !u.Ts.Before(until) {
+			continue
+		}
+		r := rows[u.Path]
+		if r == nil {
+			r = &apiaccess.PathUsageRow{Path: u.Path}
+			rows[u.Path] = r
+		}
+		r.Requests += u.Row.Requests
+		r.Errors += u.Row.Errors
+	}
+	out := make([]apiaccess.PathUsageRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, *r)
+	}
+	slices.SortFunc(out, func(a, b apiaccess.PathUsageRow) int {
+		if a.Requests != b.Requests {
+			return cmp.Compare(b.Requests, a.Requests)
+		}
+		return cmp.Compare(a.Path, b.Path)
+	})
+	if len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }

@@ -75,6 +75,20 @@
 </div>
 </section>
 
+<section class="section">
+<h2>Usage this month</h2>
+<div class="card scroll">
+{{if .Usage}}
+<table class="nowrap">
+  <thead><tr><th>Key</th><th>Label</th><th>Day</th><th>Requests</th><th>Errors</th></tr></thead>
+  <tbody>{{range .Usage}}<tr><td><code>{{.Prefix}}</code></td><td>{{.Label}}</td><td>{{date .Day}}</td><td>{{.Requests}}</td><td>{{.Errors}}</td></tr>{{end}}</tbody>
+</table>
+{{else}}
+<p class="dim" style="margin:0">No requests this month.</p>
+{{end}}
+</div>
+</section>
+
 </div>
 <aside class="admin-side">
 

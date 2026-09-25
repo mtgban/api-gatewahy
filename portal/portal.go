@@ -48,6 +48,8 @@ type Store interface {
 	AddEntitlement(ctx context.Context, e apiaccess.Entitlement) (apiaccess.Entitlement, error)
 	EndEntitlement(ctx context.Context, id int64, at time.Time) error
 	SummarizeUsage(ctx context.Context, since, until time.Time, accountID int64) ([]apiaccess.UsageRow, error)
+	UsageByKey(ctx context.Context, since, until time.Time, accountID int64) ([]apiaccess.KeyUsageRow, error)
+	TopPaths(ctx context.Context, since, until time.Time, keyID int64, limit int) ([]apiaccess.PathUsageRow, error)
 	CreateTrial(ctx context.Context, email string, accountID int64, endsAt, notBefore time.Time) (apiaccess.Trial, error)
 	DeleteTrial(ctx context.Context, id int64) error
 	LastTrial(ctx context.Context, email string) (apiaccess.Trial, error)
@@ -187,6 +189,12 @@ func (s *Server) now() time.Time {
 		return s.Now()
 	}
 	return time.Now()
+}
+
+// monthStart is the first instant of now's month in UTC.
+func monthStart(now time.Time) time.Time {
+	utc := now.UTC()
+	return time.Date(utc.Year(), utc.Month(), 1, 0, 0, 0, 0, time.UTC)
 }
 
 func (s *Server) logf(format string, args ...any) {

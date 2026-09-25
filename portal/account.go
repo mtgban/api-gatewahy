@@ -87,8 +87,7 @@ func (s *Server) renderAccount(w http.ResponseWriter, r *http.Request, status in
 		}
 		d.Keys = append(d.Keys, kv)
 	}
-	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	if rows, err := s.Store.SummarizeUsage(ctx, monthStart, now.Add(time.Second), a.ID); err == nil {
+	if rows, err := s.Store.SummarizeUsage(ctx, monthStart(now), now.Add(time.Second), a.ID); err == nil {
 		d.Usage = rows
 	} else {
 		s.logf("account %s: usage: %v", a.Email, err)
