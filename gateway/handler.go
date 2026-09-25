@@ -39,8 +39,9 @@ type Options struct {
 	GatewayEmail   string
 	Link           string
 	ClientIPHeader string
-	PerKeyRate     float64
-	PerKeyBurst    int
+	// PerKeyRate and PerKeyBurst throttle per account, so extra keys on one account share the allowance.
+	PerKeyRate  float64
+	PerKeyBurst int
 	// PerIPRate and PerIPBurst throttle by client address before any key is looked up.
 	PerIPRate       float64
 	PerIPBurst      int
@@ -56,20 +57,20 @@ type Handler struct {
 	proxies map[string]*httputil.ReverseProxy
 	res     *Resolver
 	meter   Meter
-	limiter *keyLimiter
+	limiter *accountLimiter
 	// ipLimiter runs first, so forged keys cannot drive the database.
 	ipLimiter *ratelimit.Limiter
 	now       func() time.Time
 }
 
-// keyLimiter throttles per key hash and remembers its rate for the response header.
-type keyLimiter struct {
+// accountLimiter throttles per account and remembers its rate for the response header.
+type accountLimiter struct {
 	*ratelimit.Limiter
 	perSec int
 }
 
-func newLimiter(perSec float64, burst int) *keyLimiter {
-	return &keyLimiter{Limiter: ratelimit.NewLimiter(rate.Limit(perSec), burst), perSec: int(perSec)}
+func newLimiter(perSec float64, burst int) *accountLimiter {
+	return &accountLimiter{Limiter: ratelimit.NewLimiter(rate.Limit(perSec), burst), perSec: int(perSec)}
 }
 
 // New builds a handler with one reverse proxy per game.
@@ -349,7 +350,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("RateLimit-Limit", strconv.Itoa(h.limiter.perSec))
-	if !h.limiter.Allow(hash) {
+	if !h.limiter.Allow("account:" + strconv.FormatInt(lk.Account.ID, 10)) {
 		writeError(w, http.StatusTooManyRequests, "too many requests", "")
 		return
 	}

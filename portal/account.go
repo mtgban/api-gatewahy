@@ -117,6 +117,9 @@ func mergeQuery(pricingURL string, q url.Values) string {
 // keysPerHour caps how many keys one account can mint in a sliding hour.
 const keysPerHour = 10
 
+// maxActiveKeys caps unrevoked keys per account; one per integration is plenty.
+const maxActiveKeys = 5
+
 // createKey mints a key and shows it once.
 func (s *Server) createKey(w http.ResponseWriter, r *http.Request, sess session.Session, a apiaccess.Account) {
 	if !s.limit.allow("keys:"+itoa(a.ID), keysPerHour, s.now()) {
@@ -126,6 +129,26 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request, sess session.
 	label := strings.TrimSpace(r.FormValue("label"))
 	if runes := []rune(label); len(runes) > 64 {
 		label = string(runes[:64])
+	}
+	if label == "" {
+		s.renderAccount(w, r, http.StatusBadRequest, sess, a, "", "", "Give the key a label, such as the machine or spreadsheet that will use it.")
+		return
+	}
+	keys, err := s.Store.ListKeys(r.Context(), a.ID)
+	if err != nil {
+		s.logf("list keys %s: %v", a.Email, err)
+		s.renderAccount(w, r, http.StatusInternalServerError, sess, a, "", "", tryAgainMsg)
+		return
+	}
+	active := 0
+	for _, k := range keys {
+		if k.RevokedAt == nil {
+			active++
+		}
+	}
+	if active >= maxActiveKeys {
+		s.renderAccount(w, r, http.StatusBadRequest, sess, a, "", "", "This account already has "+itoa(int64(maxActiveKeys))+" keys. Revoke one you no longer use before creating another.")
+		return
 	}
 	hasPlan, err := s.hasActiveStripePlan(r, a.ID)
 	if err != nil {

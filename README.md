@@ -46,7 +46,7 @@ A request with neither returns 401. Errors are JSON:
 | 403 | Key valid, but the plan lacks the game or the mode. Body names which. |
 | 404 | Unknown game or path. |
 | 405 | A method other than `GET` under `/v1/`. |
-| 429 | Per-key limit exceeded. Carries `RateLimit-Limit` like the backend does. |
+| 429 | Per-account limit exceeded. Carries `RateLimit-Limit` like the backend does. |
 | 502 | Upstream unreachable, returned any status outside 2xx except 304 (redirects included), or is misconfigured. |
 | 503 | Database unavailable and the key was not in cache. |
 | 504 | Upstream exceeded the timeout. |
@@ -75,6 +75,9 @@ only static asset.
 | `GET /account`, `POST /account/keys`, `POST /account/keys/{id}/revoke`, `POST /account/plan`, `GET /portal` | session (+ CSRF on POST) | Keys, usage, entitlements, Stripe portal, plan change. |
 | `GET /trial`, `POST /trial`, `GET /session`, `POST /session` | signed handoff token | `GET /trial` and `GET /session` show a confirm page; `POST /trial` grants the Patreon trial and `POST /session` signs in. Each handoff token is single-use (its nonce is burned on accept). |
 | `GET /admin/...` | session, email in `admin_emails` | Accounts, entitlements, invites, usage, reconcile. Each account page shows an activity log of admin actions taken on it, from the web admin and from the CLI alike. |
+
+A key needs a label, an account holds at most five unrevoked keys, and the
+request limit applies to the account, so extra keys do not add throughput.
 
 Sessions are a signed cookie (`ban_session`, 30 days, host-only); suspending
 an account ends its sessions on the next request. The trial lasts
@@ -230,7 +233,8 @@ configured header itself is stripped before forwarding.
 
 Requests are throttled per address (`per_ip_requests_per_sec`, `per_ip_burst`)
 before any key is read, so a stream of forged keys cannot turn into database
-lookups. The per-key limit applies after the key resolves. Usage rows are
+lookups. The per account limit (`per_key_requests_per_sec`, `per_key_burst`)
+applies after the key resolves. Usage rows are
 buffered and dropped rather than blocking a request when the buffer is full;
 the drop count is logged each flush interval.
 
