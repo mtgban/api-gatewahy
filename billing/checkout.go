@@ -17,6 +17,7 @@ type Checkout struct {
 	Store      Store
 	API        API
 	Catalog    *apiproductlist.ProductList
+	Stores     StoreLister
 	Games      []string
 	SuccessURL string
 	CancelURL  string
@@ -29,6 +30,8 @@ type Request struct {
 	Account apiaccess.Account
 	Plan    Plan
 	Invite  string
+	// Resolved is the caller's Resolve of Plan, reused so a request resolves once.
+	Resolved *ResolvedPlan
 }
 
 // ErrPriceNotSeeded means Stripe has no active Price for a lookup key.
@@ -57,6 +60,11 @@ func (c *Checkout) Create(ctx context.Context, req Request) (sess Session, err e
 	plan, err := req.Plan.Validate(c.Catalog, c.Games, req.Invite != "")
 	if err != nil {
 		return Session{}, err
+	}
+	if req.Resolved == nil || !req.Resolved.equal(plan) {
+		if _, err := plan.Resolve(ctx, c.Catalog, c.Stores); err != nil {
+			return Session{}, err
+		}
 	}
 	if iv, _ := c.Catalog.Interval(plan.Interval); !iv.Public {
 		// Assigned, not declared, so the deferred release sees this err.

@@ -15,11 +15,11 @@ var (
 )
 
 func TestNormalizeCanonicalizes(t *testing.T) {
-	p, err := Plan{Package: "starter", Interval: "monthly", Games: []string{"Pokemon", "magic", "pokemon"}, Stores: []string{"scg", "CK", "ck"}}.Normalize(testCatalog)
+	p, err := Plan{Package: "starter", Interval: "monthly", Games: []string{"Pokemon", "magic", "pokemon"}, Stores: []string{"starcitygames", "CardKingdom", "cardkingdom"}}.Normalize(testCatalog)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"CK", "SCG"}}
+	want := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom", "starcitygames"}}
 	if !reflect.DeepEqual(p, want) {
 		t.Errorf("got %+v want %+v", p, want)
 	}
@@ -41,9 +41,7 @@ func TestNormalizeRejects(t *testing.T) {
 		{"unknown package", Plan{Package: "gold", Interval: "monthly", Games: []string{"magic"}}, "package"},
 		{"unknown interval", Plan{Package: "all_data", Interval: "weekly", Games: []string{"magic"}}, "interval"},
 		{"starter without stores", Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}}, "store"},
-		{"starter with TCG", Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"TCG"}}, "not selectable"},
-		{"starter unknown store", Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"XYZ"}}, "not selectable"},
-		{"preset with stores", Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"CK"}}, "store list"},
+		{"preset with stores", Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}}, "store list"},
 	}
 	for _, c := range cases {
 		_, err := c.plan.Normalize(testCatalog)
@@ -77,13 +75,13 @@ func TestLineItemsAndTotal(t *testing.T) {
 	}{
 		{
 			"starter one store",
-			Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"CK"}},
+			Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}},
 			[]LineItem{{"starter", "starter_monthly", 1, 20000}},
 			20000,
 		},
 		{
 			"starter three stores two games",
-			Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"CK", "SCG", "CSI"}},
+			Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom", "starcitygames", "coolstuffinc"}},
 			[]LineItem{{"starter", "starter_monthly", 1, 20000}, {"extra_store", "extra_store_monthly", 2, 15000}, {"extra_game", "extra_game_monthly", 1, 15000}},
 			65000,
 		},
@@ -115,9 +113,9 @@ func TestLineItemsAndTotal(t *testing.T) {
 }
 
 func TestMetadataRoundTrip(t *testing.T) {
-	p, _ := Plan{Package: "starter", Interval: "quarterly", Games: []string{"magic", "pokemon"}, Stores: []string{"CK", "SCG"}}.Normalize(testCatalog)
+	p, _ := Plan{Package: "starter", Interval: "quarterly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom", "starcitygames"}}.Normalize(testCatalog)
 	m := p.Metadata(42)
-	want := map[string]string{"package": "starter", "interval": "quarterly", "games": "magic,pokemon", "stores": "CK,SCG", "account_id": "42"}
+	want := map[string]string{"package": "starter", "interval": "quarterly", "games": "magic,pokemon", "stores": "cardkingdom,starcitygames", "account_id": "42"}
 	if !reflect.DeepEqual(m, want) {
 		t.Errorf("metadata %v", m)
 	}
@@ -138,23 +136,12 @@ func TestMetadataRoundTrip(t *testing.T) {
 	}
 }
 
-func TestEntitlementAndAddons(t *testing.T) {
-	starter, _ := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"SCG", "CK"}}.Normalize(testCatalog)
-	scope, modes := starter.Entitlement(testCatalog)
-	if scope != "TCGLow,TCGMarket,TCGDirect,TCGDirectNet,TCGPlayer,CK,SCG" || !reflect.DeepEqual(modes, []string{"retail", "buylist"}) {
-		t.Errorf("starter entitlement %q %v", scope, modes)
-	}
-	if keys := starter.StoreKeys(testCatalog); !reflect.DeepEqual(keys, []string{"TCG", "CK", "SCG"}) {
-		t.Errorf("starter store keys %v", keys)
-	}
+func TestAddons(t *testing.T) {
+	starter, _ := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"starcitygames", "cardkingdom"}}.Normalize(testCatalog)
 	if got := starter.Addons(testCatalog); !reflect.DeepEqual(got, []string{"extra_store:1", "extra_game:1"}) {
 		t.Errorf("starter addons %v", got)
 	}
 	allData, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
-	scope, modes = allData.Entitlement(testCatalog)
-	if scope != "ALL_ACCESS" || len(modes) != 3 {
-		t.Errorf("all_data entitlement %q %v", scope, modes)
-	}
 	if got := allData.Addons(testCatalog); len(got) != 0 {
 		t.Errorf("all_data addons %v", got)
 	}
@@ -165,8 +152,7 @@ func TestNormalizeErrorsAreValidationErrors(t *testing.T) {
 		{Package: "nope", Interval: "monthly", Games: []string{"magic"}},
 		{Package: "starter", Interval: "weekly", Games: []string{"magic"}},
 		{Package: "starter", Interval: "monthly", Games: []string{"magic"}},
-		{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"TCG"}},
-		{Package: "all_data", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"CK"}},
+		{Package: "all_data", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}},
 	}
 	for _, p := range bad {
 		if _, err := p.Normalize(testCatalog); !IsValidation(err) {
@@ -185,9 +171,9 @@ func TestNormalizeErrorsAreValidationErrors(t *testing.T) {
 }
 
 func TestDescribeAndDollars(t *testing.T) {
-	p, _ := Plan{Package: "starter", Interval: "quarterly", Games: []string{"magic", "pokemon"}, Stores: []string{"CK"}}.Normalize(testCatalog)
+	p, _ := Plan{Package: "starter", Interval: "quarterly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom"}}.Normalize(testCatalog)
 	got := p.Describe(testCatalog)
-	for _, want := range []string{"À la carte", "magic,pokemon", "TCG,CK", "quarterly", "$1,050"} {
+	for _, want := range []string{"À la carte", "magic,pokemon", "stores cardkingdom", "quarterly", "$1,050"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("describe %q lacks %q", got, want)
 		}

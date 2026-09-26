@@ -26,7 +26,7 @@ var testAccount = apiaccess.Account{ID: 7, Email: "ck@example.com", Status: "act
 
 func newTestCheckout(f *fakeAPI, s *memStore) *Checkout {
 	return &Checkout{
-		Store: s, API: f, Catalog: testCatalog, Games: testGames,
+		Store: s, API: f, Catalog: testCatalog, Stores: newFakeStores(), Games: testGames,
 		SuccessURL: "https://api.mtgban.com/checkout/success", CancelURL: "https://api.mtgban.com/checkout/cancel",
 		Now: func() time.Time { return time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC) },
 	}
@@ -38,7 +38,7 @@ func TestCheckoutCreatesSessionAndCustomer(t *testing.T) {
 	co := newTestCheckout(f, s)
 	ctx := context.Background()
 
-	sess, err := co.Create(ctx, Request{Account: testAccount, Plan: Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"CK", "SCG"}}})
+	sess, err := co.Create(ctx, Request{Account: testAccount, Plan: Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom", "starcitygames"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestCheckoutCreatesSessionAndCustomer(t *testing.T) {
 		}
 	}
 	md := p.SubscriptionData.Metadata
-	if md["package"] != "starter" || md["interval"] != "monthly" || md["games"] != "magic,pokemon" || md["stores"] != "CK,SCG" || md["account_id"] != "7" {
+	if md["package"] != "starter" || md["interval"] != "monthly" || md["games"] != "magic,pokemon" || md["stores"] != "cardkingdom,starcitygames" || md["account_id"] != "7" {
 		t.Errorf("metadata %v", md)
 	}
 
@@ -171,7 +171,7 @@ func TestCheckoutEveryPackage(t *testing.T) {
 	for _, pkg := range testCatalog.Packages {
 		plan := Plan{Package: pkg.Key, Interval: "monthly", Games: []string{"magic"}}
 		if pkg.StoreScope == apiproductlist.StoreScopeExplicit {
-			plan.Stores = []string{"CK"}
+			plan.Stores = []string{"cardkingdom"}
 		}
 		if _, err := co.Create(context.Background(), Request{Account: testAccount, Plan: plan}); err != nil {
 			t.Errorf("%s: %v", pkg.Key, err)
@@ -228,5 +228,62 @@ func TestAbandonReleasesInviteOnlyWhenStripeExpiresTheSession(t *testing.T) {
 	}
 	if s.invites["outage"].UsedAt == nil {
 		t.Error("invite released although Stripe did not confirm the expiry")
+	}
+}
+
+func TestCheckoutResolvesStoresBeforeStripe(t *testing.T) {
+	f := seededFake(t)
+	s := newMemStore(testAccount)
+	co := newTestCheckout(f, s)
+	lister := newFakeStores()
+	co.Stores = lister
+	ctx := context.Background()
+	s.addInvite("held", "quarterly", "", co.Now().Add(time.Hour))
+
+	unknown := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"trollandtoad"}}
+	var ve *ValidationError
+	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: unknown}); !errors.As(err, &ve) || ve.Msg != "Store trollandtoad is not available for the games you picked." {
+		t.Errorf("unknown key: %v", err)
+	}
+	lister.fail = errors.New("connection refused")
+	down := Plan{Package: "starter", Interval: "quarterly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}}
+	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: down, Invite: "held"}); !errors.Is(err, ErrStoresUnavailable) {
+		t.Errorf("site down: %v", err)
+	}
+	if f.calls["CreateCustomer"] != 0 || f.calls["CreateCheckoutSession"] != 0 || s.invites["held"].UsedAt != nil {
+		t.Errorf("stripe or the invite was touched: %v used %v", f.calls, s.invites["held"].UsedAt)
+	}
+}
+
+func TestCheckoutWithOneSiteDown(t *testing.T) {
+	f := seededFake(t)
+	co := newTestCheckout(f, newMemStore(testAccount))
+	lister := newFakeStores()
+	lister.down = map[string]bool{"pokemon": true}
+	co.Stores = lister
+	plan := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom"}}
+	if _, err := co.Create(context.Background(), Request{Account: testAccount, Plan: plan}); !errors.Is(err, ErrStoresUnavailable) {
+		t.Errorf("pokemon down: %v", err)
+	}
+	if f.calls["CreateCheckoutSession"] != 0 || f.calls["CreateCustomer"] != 0 {
+		t.Errorf("stripe touched: %v", f.calls)
+	}
+}
+
+func TestCheckoutReusesTheCallersResolve(t *testing.T) {
+	f := seededFake(t)
+	co := newTestCheckout(f, newMemStore(testAccount))
+	lister := newFakeStores()
+	co.Stores = lister
+	plan, _ := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}}.Validate(testCatalog, testGames, false)
+	resolved, err := plan.Resolve(context.Background(), testCatalog, lister)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Create(context.Background(), Request{Account: testAccount, Plan: plan, Resolved: &resolved}); err != nil {
+		t.Fatal(err)
+	}
+	if lister.calls != 1 {
+		t.Errorf("%d site lookups, want the caller's one", lister.calls)
 	}
 }

@@ -16,6 +16,7 @@ import (
 const billingOffMsg = "Billing is not available right now. Try again later or contact administrator@mtgban.com."
 const alreadyHasPlanMsg = "You already have a plan. Use Change plan on your account page to switch."
 const manySubscriptionsMsg = "Your account has more than one subscription. Contact administrator@mtgban.com and we will sort it out."
+const storesUnavailableMsg = "The store list could not be loaded. Try again in a minute."
 
 // confirmData is confirm.html's payload: the plan in words and the POST fields.
 type confirmData struct {
@@ -69,6 +70,15 @@ func (s *Server) checkoutGet(w http.ResponseWriter, r *http.Request) {
 		plan.Stores = nil
 	}
 	plan, err := plan.Validate(s.Catalog, s.Games, invite != "")
+	var resolved billing.ResolvedPlan
+	if err == nil {
+		resolved, err = plan.Resolve(r.Context(), s.Catalog, s.Stores)
+	}
+	if errors.Is(err, billing.ErrStoresUnavailable) {
+		s.logf("checkout stores: %v", err)
+		s.fail(w, r, http.StatusServiceUnavailable, storesUnavailableMsg)
+		return
+	}
 	if err != nil {
 		s.Sessions.ClearPending(w)
 		p := s.pageFor(nil, "That plan does not work")
@@ -107,13 +117,13 @@ func (s *Server) checkoutGet(w http.ResponseWriter, r *http.Request) {
 	if change {
 		var status int
 		var msg string
-		plan, status, msg = s.currentIntervalFor(r, sess, plan)
+		resolved.Plan, status, msg = s.currentIntervalFor(r, sess, plan)
 		if msg != "" {
 			s.fail(w, r, status, msg)
 			return
 		}
 	}
-	s.renderConfirm(w, r, http.StatusOK, sess, plan, invite, returnTo, change, "", hasPlan)
+	s.renderConfirm(w, r, http.StatusOK, sess, resolved, invite, returnTo, change, "", hasPlan)
 }
 
 // hasActiveStripePlan reports whether the account already has an active Stripe entitlement.
@@ -160,7 +170,8 @@ func (s *Server) currentIntervalFor(r *http.Request, sess session.Session, plan 
 }
 
 // renderConfirm draws the plan in words with the POST button.
-func (s *Server) renderConfirm(w http.ResponseWriter, r *http.Request, status int, sess session.Session, plan billing.Plan, invite, returnTo string, change bool, errMsg string, hasPlan bool) {
+func (s *Server) renderConfirm(w http.ResponseWriter, r *http.Request, status int, sess session.Session, resolved billing.ResolvedPlan, invite, returnTo string, change bool, errMsg string, hasPlan bool) {
+	plan := resolved.Plan
 	pkg, _ := s.Catalog.Package(plan.Package)
 	iv, _ := s.Catalog.Interval(plan.Interval)
 	total, err := plan.Total(s.Catalog)
@@ -171,7 +182,10 @@ func (s *Server) renderConfirm(w http.ResponseWriter, r *http.Request, status in
 	}
 	d := confirmData{Package: pkg.Name, Games: strings.Join(plan.Games, ", "), Total: billing.Dollars(total), Change: change, Invite: invite, ReturnTo: returnTo, Action: "/checkout", BillingOff: s.Stripe == nil, HasPlan: hasPlan}
 	if pkg.StoreScope == apiproductlist.StoreScopeExplicit {
-		d.Stores = storeNamesByKey(s.Catalog, plan.StoreKeys(s.Catalog))
+		d.Stores = strings.Join(plan.Stores, ", ")
+		if len(resolved.Names) > 0 {
+			d.Stores = strings.Join(resolved.StoreNames(), ", ")
+		}
 	}
 	if iv.Count == 1 {
 		d.Interval = "every month"
@@ -216,14 +230,19 @@ func (s *Server) checkoutPost(w http.ResponseWriter, r *http.Request, sess sessi
 	invite := r.FormValue("invite")
 	returnTo := validReturnTo(r.FormValue("return_to"), s.PricingURL)
 	plan, err := planFromValues(r.Form).Validate(s.Catalog, s.Games, invite != "")
-	if err != nil {
-		s.fail(w, r, http.StatusBadRequest, checkoutError(err))
-		return
+	var resolved billing.ResolvedPlan
+	if err == nil {
+		resolved, err = plan.Resolve(r.Context(), s.Catalog, s.Stores)
 	}
-	cs, err := s.Checkout.Create(r.Context(), billing.Request{Account: a, Plan: plan, Invite: invite})
 	if err != nil {
 		s.logf("checkout for %s: %v", a.Email, err)
-		s.renderConfirm(w, r, http.StatusBadGateway, sess, plan, invite, returnTo, false, checkoutError(err), false)
+		s.fail(w, r, planErrorStatus(err), checkoutError(err))
+		return
+	}
+	cs, err := s.Checkout.Create(r.Context(), billing.Request{Account: a, Plan: plan, Invite: invite, Resolved: &resolved})
+	if err != nil {
+		s.logf("checkout for %s: %v", a.Email, err)
+		s.renderConfirm(w, r, http.StatusBadGateway, sess, resolved, invite, returnTo, false, checkoutError(err), false)
 		return
 	}
 	// Keep the invite and the session id, so a cancelled checkout can expire the session and resume with the invite.
@@ -246,9 +265,15 @@ func checkoutError(err error) string {
 		return "That invite is invalid, already used, or expired."
 	case errors.Is(err, billing.ErrPriceNotSeeded):
 		return "That plan is not set up for sale yet. Contact administrator@mtgban.com."
+	case errors.Is(err, billing.ErrStoresUnavailable):
+		return storesUnavailableMsg
 	}
 	var ve *billing.ValidationError
 	if errors.As(err, &ve) {
+		// A message that is already a sentence stands on its own.
+		if strings.HasSuffix(ve.Msg, ".") {
+			return ve.Msg
+		}
 		return "That plan is not valid: " + ve.Msg + "."
 	}
 	return "Could not start checkout. Try again in a minute."
@@ -266,9 +291,10 @@ func (s *Server) success(w http.ResponseWriter, r *http.Request, sess session.Se
 	if err != nil {
 		s.logf("success %s: %v", a.Email, err)
 	}
+	sites := s.newSiteLookup(r.Context())
 	for _, e := range ents {
 		if e.IsActiveStripePlan(s.now()) {
-			d.Entitlements = append(d.Entitlements, s.describeEntitlement(e))
+			d.Entitlements = append(d.Entitlements, s.describeEntitlement(sites, e))
 		}
 	}
 	keys, _ := s.Store.ListKeys(r.Context(), a.ID)
@@ -309,17 +335,12 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "cancel.html", p)
 }
 
-// storeNamesByKey maps catalog store keys to names.
-func storeNamesByKey(cat *apiproductlist.ProductList, keys []string) string {
-	var names []string
-	for _, k := range keys {
-		if st, ok := cat.Store(k); ok {
-			names = append(names, st.Name)
-		} else {
-			names = append(names, k)
-		}
+// planErrorStatus is 503 while a site's store list is down and 400 for a plan that is wrong.
+func planErrorStatus(err error) int {
+	if errors.Is(err, billing.ErrStoresUnavailable) {
+		return http.StatusServiceUnavailable
 	}
-	return strings.Join(names, ", ")
+	return http.StatusBadRequest
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }

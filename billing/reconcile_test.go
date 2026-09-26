@@ -20,7 +20,7 @@ var (
 
 func newTestReconciler(f *fakeAPI, s *memStore, alerts *[]string) *Reconciler {
 	return &Reconciler{
-		Store: s, API: f, Catalog: testCatalog, Grace: 10 * 24 * time.Hour,
+		Store: s, API: f, Catalog: testCatalog, Stores: newFakeStores(), Grace: 10 * 24 * time.Hour,
 		Alert: func(msg string) { *alerts = append(*alerts, msg) },
 		Now:   func() time.Time { return reconNow },
 	}
@@ -57,7 +57,7 @@ func TestReconcileWritesTheRow(t *testing.T) {
 	s := newMemStore(testAccount)
 	var alerts []string
 	r := newTestReconciler(f, s, &alerts)
-	plan, _ := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"CK", "SCG"}}.Normalize(testCatalog)
+	plan, _ := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom", "starcitygames"}}.Normalize(testCatalog)
 	f.addSub(t, "sub_1", "cus_x", stripe.SubscriptionStatusActive, plan.Metadata(7), periodEnd,
 		fakeItem{"starter_monthly", 1}, fakeItem{"extra_store_monthly", 1}, fakeItem{"extra_game_monthly", 1})
 
@@ -69,7 +69,7 @@ func TestReconcileWritesTheRow(t *testing.T) {
 		t.Fatal("no row written")
 	}
 	if e.AccountID != 7 || e.Source != "stripe" || e.Status != "active" || e.ValidUntil != nil || e.ExternalRef != "sub_1" ||
-		!reflect.DeepEqual(e.Games, []string{"magic", "pokemon"}) || e.StoreScope != "TCGLow,TCGMarket,TCGDirect,TCGDirectNet,TCGPlayer,CK,SCG" ||
+		!reflect.DeepEqual(e.Games, []string{"magic", "pokemon"}) || e.StoreScope != "CK,CKBLLast,SCG,TCGDirect,TCGDirectNet,TCGLow,TCGMarket,TCGPlayer" ||
 		!reflect.DeepEqual(e.Modes, []string{"retail", "buylist"}) || !reflect.DeepEqual(e.Addons, []string{"extra_store:1", "extra_game:1"}) ||
 		!strings.Contains(e.Note, "À la carte") {
 		t.Errorf("row %+v", e)
@@ -284,5 +284,34 @@ func TestReconcileToleratesReplacedPrice(t *testing.T) {
 	}
 	if got := priceLookupKey(&stripe.Price{}); got != "" {
 		t.Errorf("priceLookupKey with neither lookup key nor metadata: %q", got)
+	}
+}
+
+func TestReconcileWhenStoresDoNotResolve(t *testing.T) {
+	f := seededFake(t)
+	s := newMemStore(testAccount)
+	var alerts []string
+	r := newTestReconciler(f, s, &alerts)
+	lister := newFakeStores()
+	lister.fail = errors.New("connection refused")
+	r.Stores = lister
+	plan, _ := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}}.Normalize(testCatalog)
+	f.addSub(t, "sub_live", "cus_x", stripe.SubscriptionStatusActive, plan.Metadata(7), periodEnd, fakeItem{"starter_monthly", 1})
+	f.addSub(t, "sub_gone", "cus_x", stripe.SubscriptionStatusCanceled, plan.Metadata(7), periodEnd, fakeItem{"starter_monthly", 1})
+
+	if err := r.Subscription(context.Background(), "sub_live"); !errors.Is(err, ErrStoresUnavailable) {
+		t.Errorf("active with the site down: %v", err)
+	}
+	if _, ok := s.ents["sub_live"]; ok {
+		t.Error("a row was written without a resolved scope")
+	}
+	if err := r.Subscription(context.Background(), "sub_gone"); err != nil {
+		t.Fatalf("cancelled with the site down: %v", err)
+	}
+	if e := s.ents["sub_gone"]; e.Status != "ended" || e.StoreScope != "cardkingdom" {
+		t.Errorf("cancelled row %+v", e)
+	}
+	if len(alerts) != 2 {
+		t.Errorf("alerts %v", alerts)
 	}
 }

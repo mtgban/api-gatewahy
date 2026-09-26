@@ -62,16 +62,17 @@ func (s *Server) renderAccount(w http.ResponseWriter, r *http.Request, status in
 	if err != nil {
 		s.logf("account %s: entitlements: %v", a.Email, err)
 	}
+	sites := s.newSiteLookup(ctx)
 	for _, e := range ents {
 		if !e.ActiveAt(now) {
 			continue
 		}
-		d.Entitlements = append(d.Entitlements, s.describeEntitlement(e))
+		d.Entitlements = append(d.Entitlements, s.describeEntitlement(sites, e))
 		if e.Source == "trial" && e.ValidUntil != nil {
 			d.TrialEnds = e.ValidUntil.Format("January 2, 2006")
 		}
 		if e.Source == "stripe" && d.ChangeURL == "" && s.Stripe != nil {
-			d.ChangeURL = mergeQuery(s.PricingURL, prefillQuery(s.Catalog, e))
+			d.ChangeURL = mergeQuery(s.PricingURL, s.prefillQuery(sites, e))
 		}
 	}
 	keys, err := s.Store.ListKeys(ctx, a.ID)
@@ -249,9 +250,17 @@ func (s *Server) changePlan(w http.ResponseWriter, r *http.Request, sess session
 		s.fail(w, r, http.StatusBadRequest, "You have no active subscription to change. Start a new plan from the pricing page instead.")
 		return
 	}
-	if _, err := billing.ChangePlan(r.Context(), s.Stripe, s.Catalog, s.Games, a, subID, plan, s.Reconcile); err != nil {
+	resolved, err := billing.ChangePlan(r.Context(), s.Stripe, s.Catalog, s.Stores, s.Games, a, subID, plan, s.Reconcile)
+	if err != nil {
 		s.logf("plan change %s: %v", a.Email, err)
-		s.renderConfirm(w, r, http.StatusBadGateway, sess, plan, "", s.PricingURL, true, checkoutError(err), false)
+		if billing.IsValidation(err) || errors.Is(err, billing.ErrStoresUnavailable) {
+			s.fail(w, r, planErrorStatus(err), checkoutError(err))
+			return
+		}
+		if resolved.Package == "" {
+			resolved = billing.ResolvedPlan{Plan: plan}
+		}
+		s.renderConfirm(w, r, http.StatusBadGateway, sess, resolved, "", s.PricingURL, true, checkoutError(err), false)
 		return
 	}
 	http.Redirect(w, r, "/account?notice=plan", http.StatusFound)

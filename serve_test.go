@@ -252,22 +252,6 @@ func TestMuxWithoutBilling(t *testing.T) {
 	}
 }
 
-func TestCheckCatalogStores(t *testing.T) {
-	cat := &apiproductlist.ProductList{Stores: []apiproductlist.Store{
-		{Key: "CK", Shorthands: []string{"CK"}},
-		{Key: "SCG", Shorthands: []string{"SCG", "StarCityGames"}},
-	}}
-	if err := checkCatalogStores(cat, nil); err != nil {
-		t.Errorf("empty known: %v", err)
-	}
-	if err := checkCatalogStores(cat, []string{"CK", "SCG", "StarCityGames"}); err != nil {
-		t.Errorf("every shorthand known: %v", err)
-	}
-	err := checkCatalogStores(cat, []string{"CK", "SCG"})
-	if err == nil || !strings.Contains(err.Error(), `"StarCityGames"`) {
-		t.Errorf("missing shorthand: %v", err)
-	}
-}
 func TestMuxMountsPortal(t *testing.T) {
 	web := &portal.Server{
 		Catalog: apiproductlist.MustLoad(), Games: []string{"magic"},

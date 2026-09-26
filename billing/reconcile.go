@@ -19,6 +19,7 @@ type Reconciler struct {
 	Store   Store
 	API     API
 	Catalog *apiproductlist.ProductList
+	Stores  StoreLister
 	Grace   time.Duration
 	Alert   func(string)
 	Now     func() time.Time
@@ -143,13 +144,23 @@ func (r *Reconciler) apply(ctx context.Context, sub *stripe.Subscription, notify
 	}
 	now := r.now()
 	status, until := MapStatus(sub.Status, subPeriodEnd(sub, now), r.Grace, now)
-	scope, modes := plan.Entitlement(r.Catalog)
+	resolved, err := plan.Resolve(ctx, r.Catalog, r.Stores)
+	if err != nil {
+		r.alertf("subscription %s: %v", sub.ID, err)
+		// Without keys there is nothing to stand in for the scope, so the row cannot be written.
+		if status != "ended" || len(plan.Stores) == 0 {
+			return err
+		}
+		// An ended row grants nothing, so the keys stand in for the scope and access still ends.
+		pkg, _ := r.Catalog.Package(plan.Package)
+		resolved = ResolvedPlan{Plan: plan, Scope: strings.Join(plan.Stores, ","), Modes: pkg.Modes}
+	}
 	e := apiaccess.Entitlement{
 		AccountID:   account.ID,
 		Source:      "stripe",
 		Games:       plan.Games,
-		StoreScope:  scope,
-		Modes:       modes,
+		StoreScope:  resolved.Scope,
+		Modes:       resolved.Modes,
 		Addons:      plan.Addons(r.Catalog),
 		Status:      status,
 		ValidUntil:  until,

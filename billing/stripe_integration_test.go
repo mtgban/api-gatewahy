@@ -64,13 +64,13 @@ func TestCheckoutSessionPerPackageAgainstStripe(t *testing.T) {
 	}
 	account := apiaccess.Account{ID: 1, Email: "integration@example.com", Status: "active", StripeCustomerID: cust.ID}
 	co := &Checkout{
-		Store: newMemStore(account), API: api, Catalog: testCatalog, Games: []string{"magic", "pokemon"},
+		Store: newMemStore(account), API: api, Catalog: testCatalog, Stores: newFakeStores(), Games: []string{"magic", "pokemon"},
 		SuccessURL: "https://api.mtgban.com/checkout/success", CancelURL: "https://api.mtgban.com/checkout/cancel",
 	}
 	for _, pkg := range testCatalog.Packages {
 		plan := Plan{Package: pkg.Key, Interval: "monthly", Games: []string{"magic", "pokemon"}}
 		if pkg.StoreScope == apiproductlist.StoreScopeExplicit {
-			plan.Stores = []string{"CK", "SCG"}
+			plan.Stores = []string{"cardkingdom", "starcitygames"}
 		}
 		sess, err := co.Create(ctx, Request{Account: account, Plan: plan})
 		if err != nil {

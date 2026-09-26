@@ -16,7 +16,7 @@ import (
 	"github.com/stripe/stripe-go/v84"
 )
 
-const starterQuery = "/checkout?package=starter&interval=monthly&games=magic&games=pokemon&stores=CK&stores=SCG&return_to=https%3A%2F%2Fpokemon.mtgban.com%2Fapi-plans"
+const starterQuery = "/checkout?package=starter&interval=monthly&games=magic&games=pokemon&stores=cardkingdom&stores=starcitygames&return_to=https%3A%2F%2Fpokemon.mtgban.com%2Fapi-plans"
 
 func TestCheckoutWithoutSessionShowsLoginAndKeepsThePlan(t *testing.T) {
 	ts := newTestServer(t)
@@ -30,14 +30,14 @@ func TestCheckoutWithoutSessionShowsLoginAndKeepsThePlan(t *testing.T) {
 		t.Fatal("no pending cookie")
 	}
 	pv, err := ts.Sessions.Open(ck.Value)
-	if err != nil || pv.Get("package") != "starter" || pv.Get("stores") != "CK,SCG" || pv.Get("return_to") != "https://pokemon.mtgban.com/api-plans" {
+	if err != nil || pv.Get("package") != "starter" || pv.Get("stores") != "cardkingdom,starcitygames" || pv.Get("return_to") != "https://pokemon.mtgban.com/api-plans" {
 		t.Errorf("pending %v %v", pv, err)
 	}
 }
 
 func TestCheckoutRejectsAnInvalidPlan(t *testing.T) {
 	ts := newTestServer(t)
-	for _, q := range []string{"/checkout?package=nope&games=magic", "/checkout?package=starter&games=magic", "/checkout?package=all_data&games=chess", "/checkout?package=starter&games=magic&stores=CK&interval=quarterly"} {
+	for _, q := range []string{"/checkout?package=nope&games=magic", "/checkout?package=starter&games=magic", "/checkout?package=all_data&games=chess", "/checkout?package=starter&games=magic&stores=cardkingdom&interval=quarterly"} {
 		if rec := ts.do("GET", q, ""); rec.Code != 400 {
 			t.Errorf("%s: %d", q, rec.Code)
 		}
@@ -56,7 +56,7 @@ func TestCheckoutConfirmAndPost(t *testing.T) {
 	if rec.Code != 200 || !strings.Contains(body, "$500") || !strings.Contains(body, "Card Kingdom") || !strings.Contains(body, "pokemon") || !strings.Contains(body, `name="csrf" value="`+csrf+`"`) {
 		t.Fatalf("confirm: %d %s", rec.Code, body)
 	}
-	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"monthly"}, "games": {"magic,pokemon"}, "stores": {"CK,SCG"}, "return_to": {"https://pokemon.mtgban.com/api-plans"}}
+	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"monthly"}, "games": {"magic,pokemon"}, "stores": {"cardkingdom,starcitygames"}, "return_to": {"https://pokemon.mtgban.com/api-plans"}}
 	rec = ts.do("POST", "/checkout", form.Encode(), ck)
 	if rec.Code != 303 || rec.Header().Get("Location") != "https://checkout.stripe.com/c/pay/cs_test_1" || f.checkouts != 1 {
 		t.Fatalf("post: %d %q %d", rec.Code, rec.Header().Get("Location"), f.checkouts)
@@ -92,7 +92,7 @@ func TestCheckoutBlocksSecondSubscription(t *testing.T) {
 		t.Fatalf("confirm with existing plan: %d %s", rec.Code, body)
 	}
 
-	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"monthly"}, "games": {"magic,pokemon"}, "stores": {"CK,SCG"}}
+	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"monthly"}, "games": {"magic,pokemon"}, "stores": {"cardkingdom,starcitygames"}}
 	rec = ts.do("POST", "/checkout", form.Encode(), ck)
 	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "You already have a plan") {
 		t.Errorf("post with existing plan: %d %s", rec.Code, rec.Body.String())
@@ -130,11 +130,11 @@ func TestCancelReleasesInvite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	query := "/checkout?package=starter&interval=quarterly&games=magic&games=pokemon&stores=CK&stores=SCG&invite=" + token
+	query := "/checkout?package=starter&interval=quarterly&games=magic&games=pokemon&stores=cardkingdom&stores=starcitygames&invite=" + token
 	if rec := ts.do("GET", query, "", ck); rec.Code != 200 {
 		t.Fatalf("confirm: %d", rec.Code)
 	}
-	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"quarterly"}, "games": {"magic,pokemon"}, "stores": {"CK,SCG"}, "invite": {token}}
+	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"quarterly"}, "games": {"magic,pokemon"}, "stores": {"cardkingdom,starcitygames"}, "invite": {token}}
 	rec := ts.do("POST", "/checkout", form.Encode(), ck)
 	if rec.Code != 303 {
 		t.Fatalf("post: %d %s", rec.Code, rec.Body.String())
@@ -169,7 +169,7 @@ func TestCheckoutGetFailsClosedOnEntitlementListError(t *testing.T) {
 func TestCheckoutDropsStoresForNonExplicitPackage(t *testing.T) {
 	ts := newTestServer(t)
 	_, ck, _ := ts.signIn(t, "ann@example.com")
-	rec := ts.do("GET", "/checkout?package=all_data&games=magic&stores=CK", "", ck)
+	rec := ts.do("GET", "/checkout?package=all_data&games=magic&stores=cardkingdom", "", ck)
 	if rec.Code != 200 || strings.Contains(rec.Body.String(), "does not take a store list") {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
@@ -258,7 +258,7 @@ func startInviteCheckout(t *testing.T, ts *testServer) (token string, ck, pendin
 	if err != nil {
 		t.Fatal(err)
 	}
-	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"quarterly"}, "games": {"magic"}, "stores": {"CK"}, "invite": {token}}
+	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"quarterly"}, "games": {"magic"}, "stores": {"cardkingdom"}, "invite": {token}}
 	rec := ts.do("POST", "/checkout", form.Encode(), ck)
 	if rec.Code != 303 {
 		t.Fatalf("post: %d %s", rec.Code, rec.Body.String())
@@ -291,5 +291,52 @@ func TestCancelWithoutSessionIDKeepsInvite(t *testing.T) {
 	}
 	if inv := ts.store.invites[apiaccess.HashKey(token)]; inv.UsedAt == nil {
 		t.Error("invite released without expiring its session")
+	}
+}
+
+func TestCheckoutConfirmNamesImpliedAndPickedStores(t *testing.T) {
+	ts := newTestServer(t)
+	ts.withStripe()
+	_, ck, _ := ts.signIn(t, "ann@example.com")
+	rec := ts.do("GET", starterQuery, "", ck)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "TCGplayer, Card Kingdom, Star City Games") {
+		t.Fatalf("confirm: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCheckoutRejectsAStoreTheSitesDoNotSell(t *testing.T) {
+	ts := newTestServer(t)
+	f := ts.withStripe()
+	_, ck, csrf := ts.signIn(t, "ann@example.com")
+	const want = "Store trollandtoad is not available for the games you picked."
+	rec := ts.do("GET", "/checkout?package=starter&interval=monthly&games=magic&stores=trollandtoad", "", ck)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("get: %d %s", rec.Code, rec.Body.String())
+	}
+	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"monthly"}, "games": {"magic"}, "stores": {"trollandtoad"}}
+	rec = ts.do("POST", "/checkout", form.Encode(), ck)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), want) || f.checkouts != 0 {
+		t.Errorf("post: %d %d %s", rec.Code, f.checkouts, rec.Body.String())
+	}
+}
+
+func TestCheckoutWithTheSiteDownAsksToTryAgain(t *testing.T) {
+	ts := newTestServer(t)
+	f := ts.withStripe()
+	a, ck, csrf := ts.signIn(t, "ann@example.com")
+	ts.Stores.(*fakeStores).fail = errors.New("connection refused")
+	rec := ts.do("GET", starterQuery, "", ck)
+	if rec.Code != 503 || !strings.Contains(rec.Body.String(), storesUnavailableMsg) {
+		t.Errorf("get: %d %s", rec.Code, rec.Body.String())
+	}
+	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"monthly"}, "games": {"magic"}, "stores": {"cardkingdom"}}
+	rec = ts.do("POST", "/checkout", form.Encode(), ck)
+	if rec.Code != 503 || !strings.Contains(rec.Body.String(), storesUnavailableMsg) {
+		t.Errorf("post: %d %s", rec.Code, rec.Body.String())
+	}
+	ents, _ := ts.store.ListEntitlements(context.Background(), a.ID)
+	got, _ := ts.store.GetAccountByEmail(context.Background(), "ann@example.com")
+	if f.checkouts != 0 || len(ents) != 0 || got.StripeCustomerID != "" {
+		t.Errorf("checkouts %d entitlements %d customer %q", f.checkouts, len(ents), got.StripeCustomerID)
 	}
 }

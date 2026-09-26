@@ -158,8 +158,9 @@ func (s *Server) renderAdminAccount(w http.ResponseWriter, r *http.Request, sess
 			errMsg = tryAgainMsg
 		}
 	}
+	sites := s.newSiteLookup(r.Context())
 	for _, e := range ents {
-		d.Entitlements = append(d.Entitlements, adminEntitlement{Entitlement: e, View: s.describeEntitlement(e)})
+		d.Entitlements = append(d.Entitlements, adminEntitlement{Entitlement: e, View: s.describeEntitlement(sites, e)})
 	}
 	actions, err := s.Store.ListAdminActions(ctx, a.ID, 20)
 	if err != nil {
@@ -274,7 +275,7 @@ func (s *Server) adminAddEntitlement(w http.ResponseWriter, r *http.Request, ses
 			return
 		}
 	}
-	scope, err := apiaccess.ValidateStoreScope(r.FormValue("stores"), s.KnownStores)
+	scope, err := apiaccess.ValidateStoreScope(r.FormValue("stores"))
 	if err != nil {
 		bad("Stores: " + err.Error())
 		return

@@ -36,7 +36,7 @@ func init() {
 						fmt.Fprintln(stderr, "api-gatewahy:", err)
 						return 1
 					}
-					return runBilling(ctx, billingDeps{store: store, api: api, cfg: cfg, cat: apiproductlist.MustLoad()}, name, rest, stdout, stderr)
+					return runBilling(ctx, billingDeps{store: store, api: api, cfg: cfg, cat: apiproductlist.MustLoad(), stores: billing.NewSiteStoreClient(cfg, func(msg string) { fmt.Fprintln(stderr, "alert:", msg) })}, name, rest, stdout, stderr)
 				})
 			},
 		}
@@ -46,10 +46,11 @@ func init() {
 // billingDeps is what the billing verbs need; tests leave store and api nil
 // for the paths that fail before reaching them.
 type billingDeps struct {
-	store *apiaccess.Client
-	api   billing.API
-	cfg   *config.Config
-	cat   *apiproductlist.ProductList
+	store  *apiaccess.Client
+	api    billing.API
+	cfg    *config.Config
+	cat    *apiproductlist.ProductList
+	stores billing.StoreLister
 }
 
 // stripeFromEnv builds the Stripe client; the key never lives in the config file.
@@ -61,13 +62,13 @@ func stripeFromEnv() (billing.API, error) {
 	return billing.NewClient(key), nil
 }
 
-func newCheckout(store billing.Store, api billing.API, cfg *config.Config, cat *apiproductlist.ProductList) *billing.Checkout {
+func newCheckout(store billing.Store, api billing.API, cfg *config.Config, cat *apiproductlist.ProductList, stores billing.StoreLister) *billing.Checkout {
 	success, cancel := cfg.CheckoutURLs()
-	return &billing.Checkout{Store: store, API: api, Catalog: cat, Games: cfg.GameNames(), SuccessURL: success, CancelURL: cancel}
+	return &billing.Checkout{Store: store, API: api, Catalog: cat, Stores: stores, Games: cfg.GameNames(), SuccessURL: success, CancelURL: cancel}
 }
 
-func newReconciler(store billing.Store, api billing.API, cfg *config.Config, cat *apiproductlist.ProductList, alert func(string)) *billing.Reconciler {
-	return &billing.Reconciler{Store: store, API: api, Catalog: cat, Grace: time.Duration(cfg.Stripe.GraceDays) * 24 * time.Hour, Alert: alert}
+func newReconciler(store billing.Store, api billing.API, cfg *config.Config, cat *apiproductlist.ProductList, stores billing.StoreLister, alert func(string)) *billing.Reconciler {
+	return &billing.Reconciler{Store: store, API: api, Catalog: cat, Stores: stores, Grace: time.Duration(cfg.Stripe.GraceDays) * 24 * time.Hour, Alert: alert}
 }
 
 // runBilling dispatches one billing verb. Exit codes: 0 ok, 1 error, 2 usage.
@@ -89,7 +90,7 @@ func runBilling(ctx context.Context, d billingDeps, cmd string, args []string, s
 	email := fs.String("email", "", "account email")
 	pkg := fs.String("package", "", "package key from the catalog")
 	games := fs.String("games", "magic", "comma-separated games")
-	stores := fs.String("stores", "", "comma-separated stores, starter only")
+	stores := fs.String("stores", "", "comma-separated store family keys, starter only")
 	interval := fs.String("interval", "monthly", "interval key")
 	invite := fs.String("invite", "", "invite token for a non-public interval")
 	days := fs.Int("days", 14, "invite lifetime in days")
@@ -151,7 +152,7 @@ func runBilling(ctx context.Context, d billingDeps, cmd string, args []string, s
 		if !ok {
 			return 1
 		}
-		url, err := newCheckout(d.store, d.api, d.cfg, d.cat).Create(ctx, billing.Request{Account: a, Plan: plan(), Invite: *invite})
+		url, err := newCheckout(d.store, d.api, d.cfg, d.cat, d.stores).Create(ctx, billing.Request{Account: a, Plan: plan(), Invite: *invite})
 		if err != nil {
 			return fail(err)
 		}
@@ -181,7 +182,7 @@ func runBilling(ctx context.Context, d billingDeps, cmd string, args []string, s
 		return 0
 
 	case "stripe reconcile":
-		rec := newReconciler(d.store, d.api, d.cfg, d.cat, alert)
+		rec := newReconciler(d.store, d.api, d.cfg, d.cat, d.stores, alert)
 		if *sub != "" {
 			if err := rec.Subscription(ctx, *sub); err != nil {
 				return fail(err)
@@ -233,8 +234,8 @@ func runBilling(ctx context.Context, d billingDeps, cmd string, args []string, s
 				return fail(err)
 			}
 		}
-		rec := newReconciler(d.store, d.api, d.cfg, d.cat, alert)
-		newPlan, err := billing.ChangePlan(ctx, d.api, d.cat, d.cfg.GameNames(), a, subID, plan(), rec.Subscription)
+		rec := newReconciler(d.store, d.api, d.cfg, d.cat, d.stores, alert)
+		newPlan, err := billing.ChangePlan(ctx, d.api, d.cat, d.stores, d.cfg.GameNames(), a, subID, plan(), rec.Subscription)
 		if err != nil {
 			return fail(err)
 		}

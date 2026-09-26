@@ -34,7 +34,7 @@ func sqlConfigFromDSN(dsn string) (timeseries.SQLConfig, error) {
 	}, nil
 }
 
-// TestCatalogEntitlementRoundtrip runs Plan.Entitlement for every catalog
+// TestCatalogEntitlementRoundtrip runs Plan.Resolve for every catalog
 // package through real apiaccess validation, so a scope or mode change that
 // apiaccess would reject is caught here rather than in production.
 func TestCatalogEntitlementRoundtrip(t *testing.T) {
@@ -51,12 +51,6 @@ func TestCatalogEntitlementRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = client.Close() }()
-
-	var known []string
-	for _, s := range testCatalog.Stores {
-		known = append(known, s.Shorthands...)
-	}
-	client.SetKnownStores(known)
 
 	// apiaccess's own DB tests wipe these tables between runs, so leave no
 	// rows behind for them to trip over.
@@ -88,13 +82,17 @@ func TestCatalogEntitlementRoundtrip(t *testing.T) {
 	for _, pkg := range testCatalog.Packages {
 		plan := Plan{Package: pkg.Key, Interval: "monthly", Games: []string{"magic"}}
 		if pkg.StoreScope == apiproductlist.StoreScopeExplicit {
-			plan.Stores = []string{"CK", "SCG"}
+			plan.Stores = []string{"cardkingdom", "starcitygames"}
 		}
 		plan, err := plan.Normalize(testCatalog)
 		if err != nil {
 			t.Fatalf("%s: normalize: %v", pkg.Key, err)
 		}
-		scope, modes := plan.Entitlement(testCatalog)
+		resolved, err := plan.Resolve(ctx, testCatalog, newFakeStores())
+		if err != nil {
+			t.Fatalf("%s: resolve: %v", pkg.Key, err)
+		}
+		scope, modes := resolved.Scope, resolved.Modes
 		e := apiaccess.Entitlement{
 			AccountID:   acct.ID,
 			Source:      "stripe",
@@ -107,7 +105,7 @@ func TestCatalogEntitlementRoundtrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: upsert: %v", pkg.Key, err)
 		}
-		want, err := apiaccess.ValidateStoreScope(scope, known)
+		want, err := apiaccess.ValidateStoreScope(scope)
 		if err != nil {
 			t.Fatalf("%s: validate scope: %v", pkg.Key, err)
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -276,4 +277,47 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// fakeStores is a StoreLister over two fixed game sites; fail makes every call error.
+type fakeStores struct {
+	mu    sync.Mutex
+	sites map[string]SiteStores
+	fail  error
+	down  map[string]bool
+	calls int
+}
+
+var _ StoreLister = (*fakeStores)(nil)
+
+func newFakeStores() *fakeStores {
+	tcg := StoreFamily{Key: "tcgplayer", Name: "TCGplayer", Shorthands: []string{"TCGLow", "TCGMarket", "TCGDirect", "TCGDirectNet", "TCGPlayer"}}
+	return &fakeStores{sites: map[string]SiteStores{
+		"magic": {Game: "magic", Implied: []StoreFamily{tcg}, Stores: []StoreFamily{
+			{Key: "cardkingdom", Name: "Card Kingdom", Shorthands: []string{"CK"}},
+			{Key: "coolstuffinc", Name: "CoolStuffInc", Shorthands: []string{"CSI"}},
+			{Key: "starcitygames", Name: "Star City Games", Shorthands: []string{"SCG"}},
+		}},
+		"pokemon": {Game: "pokemon", Implied: []StoreFamily{tcg}, Stores: []StoreFamily{
+			{Key: "cardkingdom", Name: "Card Kingdom", Shorthands: []string{"CK", "CKBLLast"}},
+			{Key: "trollandtoad", Name: "Troll and Toad", Shorthands: []string{"TNT"}},
+		}},
+	}}
+}
+
+func (f *fakeStores) SiteStores(_ context.Context, game string) (SiteStores, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.fail != nil {
+		return SiteStores{}, f.fail
+	}
+	if f.down[game] {
+		return SiteStores{}, fmt.Errorf("fake stores: %s is down", game)
+	}
+	site, ok := f.sites[game]
+	if !ok {
+		return SiteStores{}, fmt.Errorf("fake stores: no site for %s", game)
+	}
+	return site, nil
 }

@@ -109,7 +109,7 @@ func TestLoginContinuesPendingCheckout(t *testing.T) {
 	ts := newTestServer(t)
 	ts.do("POST", "/login", "email=ann%40example.com")
 	m := linkRe.FindStringSubmatch(ts.mail.String())
-	pending := cookieFor(ts, map[string][]string{"package": {"starter"}, "interval": {"monthly"}, "games": {"magic"}, "stores": {"CK"}, "return_to": {"https://mtgban.com/api-plans"}})
+	pending := cookieFor(ts, map[string][]string{"package": {"starter"}, "interval": {"monthly"}, "games": {"magic"}, "stores": {"cardkingdom"}, "return_to": {"https://mtgban.com/api-plans"}})
 	rec := ts.do("POST", "/login/"+m[1], "", pending)
 	if rec.Code != 302 || rec.Header().Get("Location") != "/checkout" {
 		t.Errorf("%d %q", rec.Code, rec.Header().Get("Location"))
