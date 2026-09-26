@@ -30,6 +30,7 @@ type accountData struct {
 type keyView struct {
 	ID       int64
 	Prefix   string
+	Kind     string
 	Label    string
 	Created  string
 	LastUsed string
@@ -81,7 +82,7 @@ func (s *Server) renderAccount(w http.ResponseWriter, r *http.Request, status in
 		if k.RevokedAt != nil {
 			continue
 		}
-		kv := keyView{ID: k.ID, Prefix: k.Prefix, Label: k.Label, Created: k.CreatedAt.Format("2006-01-02"), LastUsed: "never"}
+		kv := keyView{ID: k.ID, Prefix: k.Prefix, Kind: string(k.Kind), Label: k.Label, Created: k.CreatedAt.Format("2006-01-02"), LastUsed: "never"}
 		if k.LastUsedAt != nil {
 			kv.LastUsed = k.LastUsedAt.Format("2006-01-02")
 		}

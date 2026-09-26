@@ -134,3 +134,41 @@ func TestCreateKeyRetriesTakenPrefix(t *testing.T) {
 		t.Errorf("collided %v, created %+v", collided, k)
 	}
 }
+
+func TestKeyKindRoundTrip(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	a, _ := c.CreateAccount(ctx, "kind@example.com", "")
+
+	plain, live, err := c.CreateKey(ctx, a.ID, "live", KeyLive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live.Kind != KeyLive {
+		t.Errorf("created live key kind %q", live.Kind)
+	}
+	demoPlain, demo, err := c.CreateKey(ctx, a.ID, "demo", KeyDemo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if demo.Kind != KeyDemo {
+		t.Errorf("created demo key kind %q", demo.Kind)
+	}
+
+	lk, err := c.LookupKey(ctx, HashKey(plain))
+	if err != nil || lk.Key.Kind != KeyLive {
+		t.Fatalf("live lookup %+v %v", lk.Key, err)
+	}
+	lk, err = c.LookupKey(ctx, HashKey(demoPlain))
+	if err != nil || lk.Key.Kind != KeyDemo {
+		t.Fatalf("demo lookup %+v %v", lk.Key, err)
+	}
+
+	list, err := c.ListKeys(ctx, a.ID)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("list %d %v", len(list), err)
+	}
+	if list[0].Kind != KeyLive || list[1].Kind != KeyDemo {
+		t.Errorf("listed kinds %q %q", list[0].Kind, list[1].Kind)
+	}
+}

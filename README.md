@@ -30,9 +30,11 @@ Authenticate with either:
    access logs, proxy logs, and browser history; prefer the header wherever
    the caller can send one.
 
-A key starts with `ban_live_` when the account has a paid plan and
-`ban_demo_` for a trial or manual access; the gateway treats both alike and
-still accepts keys minted with the old `mtgban_live_` prefix.
+A key's prefix records the kind of access the account had when the key was
+minted: `ban_live_` for a paid plan and `ban_demo_` for a trial or manual
+access. Both kinds work the same way, the kind is stored with the key, and an
+admin can see it on the account page. The gateway still accepts keys minted
+with the old `mtgban_live_` prefix.
 
 A request with neither returns 401. Errors are JSON:
 

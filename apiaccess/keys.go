@@ -41,6 +41,7 @@ type Key struct {
 	Hash       string
 	Prefix     string
 	Label      string
+	Kind       KeyKind
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
 	RevokedAt  *time.Time
@@ -85,7 +86,7 @@ func LooksLikeKey(s string) bool {
 	return keyPattern.MatchString(s)
 }
 
-const keyCols = "id, account_id, key_hash, prefix, label, created_at, last_used_at, revoked_at"
+const keyCols = "id, account_id, key_hash, prefix, label, kind, created_at, last_used_at, revoked_at"
 
 func nullTimePtr(n sql.NullTime) *time.Time {
 	if !n.Valid {
@@ -98,7 +99,7 @@ func nullTimePtr(n sql.NullTime) *time.Time {
 func scanKey(row scanner) (Key, error) {
 	var k Key
 	var last, revoked sql.NullTime
-	err := row.Scan(&k.ID, &k.AccountID, &k.Hash, &k.Prefix, &k.Label, &k.CreatedAt, &last, &revoked)
+	err := row.Scan(&k.ID, &k.AccountID, &k.Hash, &k.Prefix, &k.Label, &k.Kind, &k.CreatedAt, &last, &revoked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Key{}, ErrNotFound
 	}
@@ -125,8 +126,8 @@ func (c *Client) CreateKey(ctx context.Context, accountID int64, label string, k
 		}
 		var k Key
 		k, err = scanKey(c.db.QueryRowContext(ctx,
-			`INSERT INTO api_keys (account_id, key_hash, prefix, label) VALUES ($1, $2, $3, $4) RETURNING `+keyCols,
-			accountID, hash, prefix, label))
+			`INSERT INTO api_keys (account_id, key_hash, prefix, label, kind) VALUES ($1, $2, $3, $4, $5) RETURNING `+keyCols,
+			accountID, hash, prefix, label, string(kind)))
 		if err == nil {
 			return plaintext, k, nil
 		}
@@ -156,11 +157,11 @@ func (c *Client) LookupKey(ctx context.Context, hash string) (Lookup, error) {
 	var lk Lookup
 	var last, revoked sql.NullTime
 	err := c.db.QueryRowContext(ctx,
-		`SELECT k.id, k.account_id, k.key_hash, k.prefix, k.label, k.created_at, k.last_used_at, k.revoked_at,
+		`SELECT k.id, k.account_id, k.key_hash, k.prefix, k.label, k.kind, k.created_at, k.last_used_at, k.revoked_at,
 		        a.id, a.email, a.status, a.created_at, a.note
 		   FROM api_keys k JOIN accounts a ON a.id = k.account_id
 		  WHERE k.key_hash = $1`, hash).Scan(
-		&lk.Key.ID, &lk.Key.AccountID, &lk.Key.Hash, &lk.Key.Prefix, &lk.Key.Label, &lk.Key.CreatedAt, &last, &revoked,
+		&lk.Key.ID, &lk.Key.AccountID, &lk.Key.Hash, &lk.Key.Prefix, &lk.Key.Label, &lk.Key.Kind, &lk.Key.CreatedAt, &last, &revoked,
 		&lk.Account.ID, &lk.Account.Email, &lk.Account.Status, &lk.Account.CreatedAt, &lk.Account.Note)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Lookup{}, ErrNotFound

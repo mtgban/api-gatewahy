@@ -230,3 +230,21 @@ func TestNewKeyPageExplainsUse(t *testing.T) {
 		}
 	}
 }
+
+func TestAccountPageShowsKeyKind(t *testing.T) {
+	ts := newTestServer(t)
+	a, ck, _ := ts.signIn(t, "ann@example.com")
+	ctx := context.Background()
+	if _, _, err := ts.store.CreateKey(ctx, a.ID, "laptop", apiaccess.KeyDemo); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ts.store.CreateKey(ctx, a.ID, "server", apiaccess.KeyLive); err != nil {
+		t.Fatal(err)
+	}
+	body := ts.do("GET", "/account", "", ck).Body.String()
+	for _, want := range []string{"ban_demo", "ban_live"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("account page lacks the key kind %q", want)
+		}
+	}
+}

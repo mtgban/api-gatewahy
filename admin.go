@@ -206,7 +206,7 @@ func runAdmin(ctx context.Context, store adminStore, knownStores, knownGames []s
 		if err != nil {
 			return fail(err)
 		}
-		audit("key create", a.ID, k.Prefix, *label)
+		audit("key create", a.ID, k.Prefix, strings.TrimSpace(string(kind)+" "+*label))
 		notify()
 		fmt.Fprintf(stdout, "key created for %s (%s, prefix %s). Shown once, copy it now:\n\n    %s\n\n", a.Email, kind, k.Prefix, plain)
 		return 0
@@ -232,9 +232,9 @@ func runAdmin(ctx context.Context, store adminStore, knownStores, knownGames []s
 			return fail(err)
 		}
 		tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "PREFIX\tLABEL\tCREATED\tLAST USED\tREVOKED")
+		fmt.Fprintln(tw, "PREFIX\tKIND\tLABEL\tCREATED\tLAST USED\tREVOKED")
 		for _, k := range keys {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", k.Prefix, k.Label, k.CreatedAt.Format("2006-01-02"), fmtTime(k.LastUsedAt), fmtTime(k.RevokedAt))
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", k.Prefix, k.Kind, k.Label, k.CreatedAt.Format("2006-01-02"), fmtTime(k.LastUsedAt), fmtTime(k.RevokedAt))
 		}
 		return flushTab(tw)
 	case "grant add":

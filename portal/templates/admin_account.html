@@ -30,9 +30,9 @@
 <div class="card scroll">
 {{if .Keys}}
 <table class="nowrap">
-  <thead><tr><th>Prefix</th><th>Label</th><th>Created</th><th>Last used</th><th>Revoked</th><th></th></tr></thead>
+  <thead><tr><th>Prefix</th><th>Kind</th><th>Label</th><th>Created</th><th>Last used</th><th>Revoked</th><th></th></tr></thead>
   <tbody>
-  {{range .Keys}}<tr><td><code>{{.Prefix}}</code></td><td>{{.Label}}</td><td>{{date .CreatedAt}}</td><td>{{if .LastUsedAt}}{{date .LastUsedAt}}{{else}}-{{end}}</td><td>{{if .RevokedAt}}{{date .RevokedAt}}{{else}}-{{end}}</td>
+  {{range .Keys}}<tr><td><code>{{.Prefix}}</code></td><td><code>{{.Kind}}</code></td><td>{{.Label}}</td><td>{{date .CreatedAt}}</td><td>{{if .LastUsedAt}}{{date .LastUsedAt}}{{else}}-{{end}}</td><td>{{if .RevokedAt}}{{date .RevokedAt}}{{else}}-{{end}}</td>
     <td class="right">{{if not .RevokedAt}}<form method="POST" action="/admin/accounts/{{$.Data.Account.ID}}/keys/{{.ID}}/revoke" class="inline" onsubmit="return confirm('Revoke this key? It cannot be undone; anything using it stops working within a minute.')"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="btn btn-danger btn-small">Revoke</button></form>{{end}}</td></tr>{{end}}
   </tbody>
 </table>
