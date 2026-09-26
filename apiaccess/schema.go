@@ -52,6 +52,7 @@ var schemaStatements = []string{
 )`,
 	`CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage (ts)`,
 	`CREATE INDEX IF NOT EXISTS idx_usage_account_ts ON usage (account_id, ts)`,
+	`CREATE INDEX IF NOT EXISTS idx_usage_key_ts ON usage (key_id, ts)`,
 	// Appended so an existing database picks it up on the next start.
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_live_prefix ON api_keys (prefix) WHERE revoked_at IS NULL`,
 	// Phase 2: Stripe.

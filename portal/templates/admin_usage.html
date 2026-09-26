@@ -7,6 +7,7 @@
   <label for="until">Until (exclusive)</label><input id="until" type="date" name="until" value="{{.Until}}">
   <label for="email">Account email</label><input id="email" type="text" name="email" value="{{.Email}}">
   <label for="game">Game</label><input id="game" type="text" name="game" value="{{.Game}}">
+  <input type="hidden" name="key" value="{{.KeyPrefix}}">
   <p><button type="submit" class="btn">Filter</button></p>
 </form>
 <table>
@@ -15,7 +16,7 @@
 </table>
 
 <h2>By key</h2>
-{{if .ByKey}}
+{{if not .ByAccount}}<p class="dim">Filter by account to see requests per key.</p>{{else if .ByKey}}
 <p class="dim">Rows here cover every game; the game filter applies to the totals above.</p>
 <table class="nowrap">
   <thead><tr><th>Key</th><th>Label</th><th>Day</th><th>Requests</th><th>Bytes</th><th>Errors</th></tr></thead>
@@ -23,8 +24,8 @@
 </table>
 {{else}}<p class="dim">No requests in this range.</p>{{end}}
 {{if .KeyPrefix}}
+<h2>Paths for <code>{{.KeyPrefix}}</code> <a class="dim" href="/admin/usage?since={{.Since}}&until={{.Until}}&email={{.Email}}&game={{.Game}}">clear</a></h2>
 {{if .Paths}}
-<h2>Paths for <code>{{.KeyPrefix}}</code></h2>
 <table>
   <thead><tr><th>Path</th><th>Requests</th><th>Errors</th></tr></thead>
   <tbody>{{range .Paths}}<tr><td><code>{{.Path}}</code></td><td>{{.Requests}}</td><td>{{.Errors}}</td></tr>{{end}}</tbody>

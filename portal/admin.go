@@ -43,8 +43,10 @@ type adminUsageData struct {
 	Since, Until, Email, Game string
 	KeyPrefix                 string
 	Rows                      []apiaccess.UsageRow
-	ByKey                     []apiaccess.KeyUsageRow
-	Paths                     []apiaccess.PathUsageRow
+	// ByAccount reports whether an account filter narrowed the by-key rows.
+	ByAccount bool
+	ByKey     []apiaccess.KeyUsageRow
+	Paths     []apiaccess.PathUsageRow
 }
 
 func (s *Server) registerAdmin(mux *http.ServeMux) {
@@ -409,11 +411,16 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess session
 		}
 	}
 	var errMsg string
-	byKey, err := s.Store.UsageByKey(r.Context(), from, to, accountID)
-	if err != nil {
-		s.logf("admin usage by key: %v", err)
-		errMsg = tryAgainMsg
+	var byKey []apiaccess.KeyUsageRow
+	// Without an account the by-key query sorts the whole usage table, so ask for one first.
+	if accountID != 0 {
+		byKey, err = s.Store.UsageByKey(r.Context(), from, to, accountID)
+		if err != nil {
+			s.logf("admin usage by key: %v", err)
+			errMsg = tryAgainMsg
+		}
 	}
+	d.ByAccount = accountID != 0
 	d.ByKey = byKey
 	if d.KeyPrefix != "" {
 		for _, row := range byKey {
