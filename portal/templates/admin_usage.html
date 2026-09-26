@@ -23,7 +23,7 @@
   <tbody>{{range .ByKey}}<tr><td><a href="/admin/usage?since={{$.Data.Since}}&until={{$.Data.Until}}&email={{$.Data.Email}}&game={{$.Data.Game}}&key={{.Prefix}}"><code>{{.Prefix}}</code></a></td><td>{{.Label}}</td><td>{{date .Day}}</td><td>{{.Requests}}</td><td>{{.Bytes}}</td><td>{{.Errors}}</td></tr>{{end}}</tbody>
 </table>
 {{else}}<p class="dim">No requests in this range.</p>{{end}}
-{{if .KeyPrefix}}
+{{if and .ByAccount .KeyPrefix}}
 <h2>Paths for <code>{{.KeyPrefix}}</code> <a class="dim" href="/admin/usage?since={{.Since}}&until={{.Until}}&email={{.Email}}&game={{.Game}}">clear</a></h2>
 {{if .Paths}}
 <table>

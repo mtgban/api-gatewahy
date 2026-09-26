@@ -78,8 +78,10 @@ only static asset.
 | `GET /trial`, `POST /trial`, `GET /session`, `POST /session` | signed handoff token | `GET /trial` and `GET /session` show a confirm page; `POST /trial` grants the Patreon trial and `POST /session` signs in. Each handoff token is single-use (its nonce is burned on accept). |
 | `GET /admin/...` | session, email in `admin_emails` | Accounts, entitlements, invites, usage, reconcile. The usage page also shows usage per key by day, and the paths a key requests. Each account page shows an activity log of admin actions taken on it, from the web admin and from the CLI alike. |
 
-A key needs a label, an account holds at most five unrevoked keys, and the
-request limit applies to the account, so extra keys do not add throughput.
+The account page asks for a label on every key and holds an account to at most
+five unrevoked keys; `admin key create` is the operator escape hatch and skips
+both rules. The request limit applies to the account, so extra keys do not add
+throughput.
 
 Sessions are a signed cookie (`ban_session`, 30 days, host-only); suspending
 an account ends its sessions on the next request. The trial lasts

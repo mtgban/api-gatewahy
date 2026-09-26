@@ -430,7 +430,8 @@ func TestHandlerRateLimitSharedByAccount(t *testing.T) {
 	be := fakeBackend(t, "s3cret")
 	defer be.Close()
 	h, _ := testHandler(t, be, "s3cret")
-	h.limiter = newLimiter(1, 2)
+	// A token takes 100 seconds to refill, so a slow run cannot let the third request through.
+	h.limiter = newLimiter(0.01, 2)
 	// goodKey and goodKey2 sit on the same account, so their burst is shared.
 	do(h, "GET", "/v1/magic/mtgban/retail.json", goodKey)
 	do(h, "GET", "/v1/magic/mtgban/retail.json", goodKey2)

@@ -182,6 +182,20 @@ func TestAdminKeys(t *testing.T) {
 	}
 }
 
+func TestAdminKeyCreateIsLiveOnAStripePlan(t *testing.T) {
+	s := &memStore{}
+	admin(t, s, "account", "add", "-email", "ck@example.com")
+	s.ents = append(s.ents, apiaccess.Entitlement{ID: 1, AccountID: s.accounts[0].ID, Source: "stripe", Status: "active",
+		Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}, ValidFrom: time.Now().Add(-time.Hour)})
+	code, out, errb := admin(t, s, "key", "create", "-email", "ck@example.com", "-label", "prod")
+	if code != 0 || !strings.Contains(out, "ban_live_") || !strings.Contains(out, "(ban_live, prefix") {
+		t.Fatalf("create: %d %q %q", code, out, errb)
+	}
+	if len(s.keys) != 1 || s.keys[0].Kind != apiaccess.KeyLive {
+		t.Errorf("stored keys %+v, want one live key", s.keys)
+	}
+}
+
 func TestAdminGrants(t *testing.T) {
 	s := &memStore{}
 	admin(t, s, "account", "add", "-email", "ck@example.com")
