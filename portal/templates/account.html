@@ -49,10 +49,10 @@
 <div class="card">
 {{if .Keys}}
 <table>
-  <thead><tr><th>Key</th><th>Label</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+  <thead><tr><th>Key</th><th>Kind</th><th>Label</th><th>Created</th><th>Last used</th><th></th></tr></thead>
   <tbody>
   {{range .Keys}}<tr>
-    <td><code>{{.Prefix}}&hellip;</code></td><td>{{.Label}}</td><td>{{.Created}}</td><td>{{.LastUsed}}</td>
+    <td><code>{{.Prefix}}&hellip;</code></td><td><code>{{.Kind}}</code></td><td>{{.Label}}</td><td>{{.Created}}</td><td>{{.LastUsed}}</td>
     <td class="right"><form method="POST" action="/account/keys/{{.ID}}/revoke" class="inline" onsubmit="return confirm('Revoke this key? Anything using it stops working within a minute.')"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="btn btn-danger btn-small">Revoke</button></form></td>
   </tr>{{end}}
   </tbody>

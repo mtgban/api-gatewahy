@@ -215,7 +215,7 @@ func (m *memStore) CreateKey(_ context.Context, accountID int64, label string, k
 	if err != nil {
 		return "", apiaccess.Key{}, err
 	}
-	k := &apiaccess.Key{ID: m.id(), AccountID: accountID, Hash: hash, Prefix: prefix, Label: label, CreatedAt: time.Now()}
+	k := &apiaccess.Key{ID: m.id(), AccountID: accountID, Hash: hash, Prefix: prefix, Label: label, Kind: kind, CreatedAt: time.Now()}
 	m.keys[k.ID] = k
 	return plain, *k, nil
 }

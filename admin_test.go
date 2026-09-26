@@ -46,7 +46,7 @@ func (m *memStore) SetAccountStatus(_ context.Context, id int64, status string) 
 func (m *memStore) ListAccounts(context.Context) ([]apiaccess.Account, error) { return m.accounts, nil }
 func (m *memStore) CreateKey(_ context.Context, accountID int64, label string, kind apiaccess.KeyKind) (string, apiaccess.Key, error) {
 	plain, hash, prefix, _ := apiaccess.GenerateKey(kind)
-	k := apiaccess.Key{ID: int64(len(m.keys) + 1), AccountID: accountID, Hash: hash, Prefix: prefix, Label: label}
+	k := apiaccess.Key{ID: int64(len(m.keys) + 1), AccountID: accountID, Hash: hash, Prefix: prefix, Label: label, Kind: kind}
 	m.keys = append(m.keys, k)
 	return plain, k, nil
 }
@@ -163,8 +163,13 @@ func TestAdminKeys(t *testing.T) {
 		t.Fatalf("create: %d %q %q", code, out, errb)
 	}
 	prefix := s.keys[0].Prefix
-	if code, out, _ := admin(t, s, "key", "list", "-email", "ck@example.com"); code != 0 || !strings.Contains(out, prefix) || strings.Contains(out, "ban_") {
+	// The kind column prints ban_demo; only a leaked plaintext carries the underscore.
+	code, out, _ = admin(t, s, "key", "list", "-email", "ck@example.com")
+	if code != 0 || !strings.Contains(out, prefix) || strings.Contains(out, "ban_demo_") {
 		t.Fatalf("list leaked or missed: %d %q", code, out)
+	}
+	if !strings.Contains(out, "ban_demo") {
+		t.Errorf("list does not show the key kind: %q", out)
 	}
 	if code, _, _ := admin(t, s, "key", "revoke", "-prefix", prefix); code != 0 || s.keys[0].RevokedAt == nil {
 		t.Fatalf("revoke: %d", code)
