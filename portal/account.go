@@ -30,6 +30,7 @@ type accountData struct {
 type keyView struct {
 	ID       int64
 	Prefix   string
+	Kind     string
 	Label    string
 	Created  string
 	LastUsed string
@@ -61,16 +62,17 @@ func (s *Server) renderAccount(w http.ResponseWriter, r *http.Request, status in
 	if err != nil {
 		s.logf("account %s: entitlements: %v", a.Email, err)
 	}
+	sites := s.newSiteLookup(ctx)
 	for _, e := range ents {
 		if !e.ActiveAt(now) {
 			continue
 		}
-		d.Entitlements = append(d.Entitlements, s.describeEntitlement(e))
+		d.Entitlements = append(d.Entitlements, s.describeEntitlement(sites, e))
 		if e.Source == "trial" && e.ValidUntil != nil {
 			d.TrialEnds = e.ValidUntil.Format("January 2, 2006")
 		}
 		if e.Source == "stripe" && d.ChangeURL == "" && s.Stripe != nil {
-			d.ChangeURL = mergeQuery(s.PricingURL, prefillQuery(s.Catalog, e))
+			d.ChangeURL = mergeQuery(s.PricingURL, s.prefillQuery(sites, e))
 		}
 	}
 	keys, err := s.Store.ListKeys(ctx, a.ID)
@@ -81,14 +83,13 @@ func (s *Server) renderAccount(w http.ResponseWriter, r *http.Request, status in
 		if k.RevokedAt != nil {
 			continue
 		}
-		kv := keyView{ID: k.ID, Prefix: k.Prefix, Label: k.Label, Created: k.CreatedAt.Format("2006-01-02"), LastUsed: "never"}
+		kv := keyView{ID: k.ID, Prefix: k.Prefix, Kind: string(k.Kind), Label: k.Label, Created: k.CreatedAt.Format("2006-01-02"), LastUsed: "never"}
 		if k.LastUsedAt != nil {
 			kv.LastUsed = k.LastUsedAt.Format("2006-01-02")
 		}
 		d.Keys = append(d.Keys, kv)
 	}
-	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	if rows, err := s.Store.SummarizeUsage(ctx, monthStart, now.Add(time.Second), a.ID); err == nil {
+	if rows, err := s.Store.SummarizeUsage(ctx, monthStart(now), now.Add(time.Second), a.ID); err == nil {
 		d.Usage = rows
 	} else {
 		s.logf("account %s: usage: %v", a.Email, err)
@@ -117,17 +118,58 @@ func mergeQuery(pricingURL string, q url.Values) string {
 // keysPerHour caps how many keys one account can mint in a sliding hour.
 const keysPerHour = 10
 
+// keyAttemptsPerHour bounds the key form itself, so rejected posts cannot hammer the store.
+const keyAttemptsPerHour = 60
+
+// maxActiveKeys caps unrevoked keys per account; one per integration is plenty.
+const maxActiveKeys = 5
+
 // createKey mints a key and shows it once.
 func (s *Server) createKey(w http.ResponseWriter, r *http.Request, sess session.Session, a apiaccess.Account) {
-	if !s.limit.allow("keys:"+itoa(a.ID), keysPerHour, s.now()) {
-		s.renderAccount(w, r, http.StatusTooManyRequests, sess, a, "", "", "Too many keys created in the last hour. Try again later.")
+	if !s.limit.allow("keyattempts:"+itoa(a.ID), keyAttemptsPerHour, s.now()) {
+		s.renderAccount(w, r, http.StatusTooManyRequests, sess, a, "", "", "Too many key requests in the last hour. Try again later.")
 		return
 	}
 	label := strings.TrimSpace(r.FormValue("label"))
 	if runes := []rune(label); len(runes) > 64 {
 		label = string(runes[:64])
 	}
-	plain, k, err := s.Store.CreateKey(r.Context(), a.ID, label)
+	if label == "" {
+		s.renderAccount(w, r, http.StatusBadRequest, sess, a, "", "", "Give the key a label, such as the machine or spreadsheet that will use it.")
+		return
+	}
+	keys, err := s.Store.ListKeys(r.Context(), a.ID)
+	if err != nil {
+		s.logf("list keys %s: %v", a.Email, err)
+		s.renderAccount(w, r, http.StatusInternalServerError, sess, a, "", "", tryAgainMsg)
+		return
+	}
+	// The count can go stale before the insert; the hourly quota bounds the overshoot.
+	active := 0
+	for _, k := range keys {
+		if k.RevokedAt == nil {
+			active++
+		}
+	}
+	if active >= maxActiveKeys {
+		s.renderAccount(w, r, http.StatusBadRequest, sess, a, "", "", "This account already has "+itoa(int64(maxActiveKeys))+" keys. Revoke one you no longer use before creating another.")
+		return
+	}
+	hasPlan, err := s.hasActiveStripePlan(r, a.ID)
+	if err != nil {
+		s.logf("key kind %s: %v", a.Email, err)
+		s.renderAccount(w, r, http.StatusInternalServerError, sess, a, "", "", tryAgainMsg)
+		return
+	}
+	kind := apiaccess.KeyDemo
+	if hasPlan {
+		kind = apiaccess.KeyLive
+	}
+	if !s.limit.allow("keys:"+itoa(a.ID), keysPerHour, s.now()) {
+		s.renderAccount(w, r, http.StatusTooManyRequests, sess, a, "", "", "Too many keys created in the last hour. Try again later.")
+		return
+	}
+	plain, k, err := s.Store.CreateKey(r.Context(), a.ID, label, kind)
 	if err != nil {
 		s.logf("create key %s: %v", a.Email, err)
 		s.renderAccount(w, r, http.StatusInternalServerError, sess, a, "", "", tryAgainMsg)
@@ -208,9 +250,17 @@ func (s *Server) changePlan(w http.ResponseWriter, r *http.Request, sess session
 		s.fail(w, r, http.StatusBadRequest, "You have no active subscription to change. Start a new plan from the pricing page instead.")
 		return
 	}
-	if _, err := billing.ChangePlan(r.Context(), s.Stripe, s.Catalog, s.Games, a, subID, plan, s.Reconcile); err != nil {
+	resolved, err := billing.ChangePlan(r.Context(), s.Stripe, s.Catalog, s.Stores, s.Games, a, subID, plan, s.Reconcile)
+	if err != nil {
 		s.logf("plan change %s: %v", a.Email, err)
-		s.renderConfirm(w, r, http.StatusBadGateway, sess, plan, "", s.PricingURL, true, checkoutError(err), false)
+		if billing.IsValidation(err) || errors.Is(err, billing.ErrStoresUnavailable) {
+			s.fail(w, r, planErrorStatus(err), checkoutError(err))
+			return
+		}
+		if resolved.Package == "" {
+			resolved = billing.ResolvedPlan{Plan: plan}
+		}
+		s.renderConfirm(w, r, http.StatusBadGateway, sess, resolved, "", s.PricingURL, true, checkoutError(err), false)
 		return
 	}
 	http.Redirect(w, r, "/account?notice=plan", http.StatusFound)

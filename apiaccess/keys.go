@@ -15,12 +15,24 @@ import (
 	"github.com/lib/pq"
 )
 
-// KeyPrefix starts every customer key.
-const KeyPrefix = "mtgban_live_"
+// KeyKind is the prefix a key is minted with: it says what kind of access
+// created it and nothing more; the gateway treats both the same.
+type KeyKind string
+
+const (
+	KeyLive KeyKind = "ban_live"
+	KeyDemo KeyKind = "ban_demo"
+)
+
+// valid reports whether k is a kind GenerateKey accepts.
+func (k KeyKind) valid() bool {
+	return k == KeyLive || k == KeyDemo
+}
 
 const keyAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
 
-var keyPattern = regexp.MustCompile(`^mtgban_live_[a-z0-9]{32}$`)
+// keyPattern also admits the prefix keys carried before the rename.
+var keyPattern = regexp.MustCompile(`^(mtgban_live|ban_live|ban_demo)_[a-z0-9]{32}$`)
 
 // Key is one bearer credential. The plaintext is never stored.
 type Key struct {
@@ -29,6 +41,7 @@ type Key struct {
 	Hash       string
 	Prefix     string
 	Label      string
+	Kind       KeyKind
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
 	RevokedAt  *time.Time
@@ -41,20 +54,25 @@ type Lookup struct {
 	Entitlements []Entitlement // active status rows only; callers still check ActiveAt
 }
 
-// GenerateKey returns a new plaintext key with its hash and display prefix.
-func GenerateKey() (plaintext, hash, prefix string, err error) {
+// GenerateKey returns a new plaintext key of the given kind with its hash and display prefix.
+func GenerateKey(kind KeyKind) (plaintext, hash, prefix string, err error) {
+	if !kind.valid() {
+		return "", "", "", fmt.Errorf("apiaccess: invalid key kind %q", kind)
+	}
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		return "", "", "", err
 	}
 	var b strings.Builder
-	b.WriteString(KeyPrefix)
+	b.WriteString(string(kind))
+	b.WriteByte('_')
 	for _, x := range buf {
 		// Modulo bias is under 2% per char; irrelevant at 32 chars.
 		b.WriteByte(keyAlphabet[int(x)%len(keyAlphabet)])
 	}
 	plaintext = b.String()
-	return plaintext, HashKey(plaintext), plaintext[len(KeyPrefix) : len(KeyPrefix)+8], nil
+	start := len(kind) + 1
+	return plaintext, HashKey(plaintext), plaintext[start : start+8], nil
 }
 
 // HashKey is the hex sha256 stored in place of the plaintext.
@@ -68,7 +86,7 @@ func LooksLikeKey(s string) bool {
 	return keyPattern.MatchString(s)
 }
 
-const keyCols = "id, account_id, key_hash, prefix, label, created_at, last_used_at, revoked_at"
+const keyCols = "id, account_id, key_hash, prefix, label, kind, created_at, last_used_at, revoked_at"
 
 func nullTimePtr(n sql.NullTime) *time.Time {
 	if !n.Valid {
@@ -81,7 +99,7 @@ func nullTimePtr(n sql.NullTime) *time.Time {
 func scanKey(row scanner) (Key, error) {
 	var k Key
 	var last, revoked sql.NullTime
-	err := row.Scan(&k.ID, &k.AccountID, &k.Hash, &k.Prefix, &k.Label, &k.CreatedAt, &last, &revoked)
+	err := row.Scan(&k.ID, &k.AccountID, &k.Hash, &k.Prefix, &k.Label, &k.Kind, &k.CreatedAt, &last, &revoked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Key{}, ErrNotFound
 	}
@@ -96,20 +114,20 @@ var generateKey = GenerateKey
 // createKeyAttempts is the first insert plus three regenerations.
 const createKeyAttempts = 4
 
-// CreateKey mints a key for the account and returns the plaintext once.
+// CreateKey mints a key of kind for the account and returns the plaintext once.
 // A prefix the live-prefix index already holds is regenerated.
-func (c *Client) CreateKey(ctx context.Context, accountID int64, label string) (string, Key, error) {
+func (c *Client) CreateKey(ctx context.Context, accountID int64, label string, kind KeyKind) (string, Key, error) {
 	var err error
 	for attempt := 0; attempt < createKeyAttempts; attempt++ {
 		var plaintext, hash, prefix string
-		plaintext, hash, prefix, err = generateKey()
+		plaintext, hash, prefix, err = generateKey(kind)
 		if err != nil {
 			return "", Key{}, err
 		}
 		var k Key
 		k, err = scanKey(c.db.QueryRowContext(ctx,
-			`INSERT INTO api_keys (account_id, key_hash, prefix, label) VALUES ($1, $2, $3, $4) RETURNING `+keyCols,
-			accountID, hash, prefix, label))
+			`INSERT INTO api_keys (account_id, key_hash, prefix, label, kind) VALUES ($1, $2, $3, $4, $5) RETURNING `+keyCols,
+			accountID, hash, prefix, label, string(kind)))
 		if err == nil {
 			return plaintext, k, nil
 		}
@@ -139,11 +157,11 @@ func (c *Client) LookupKey(ctx context.Context, hash string) (Lookup, error) {
 	var lk Lookup
 	var last, revoked sql.NullTime
 	err := c.db.QueryRowContext(ctx,
-		`SELECT k.id, k.account_id, k.key_hash, k.prefix, k.label, k.created_at, k.last_used_at, k.revoked_at,
+		`SELECT k.id, k.account_id, k.key_hash, k.prefix, k.label, k.kind, k.created_at, k.last_used_at, k.revoked_at,
 		        a.id, a.email, a.status, a.created_at, a.note
 		   FROM api_keys k JOIN accounts a ON a.id = k.account_id
 		  WHERE k.key_hash = $1`, hash).Scan(
-		&lk.Key.ID, &lk.Key.AccountID, &lk.Key.Hash, &lk.Key.Prefix, &lk.Key.Label, &lk.Key.CreatedAt, &last, &revoked,
+		&lk.Key.ID, &lk.Key.AccountID, &lk.Key.Hash, &lk.Key.Prefix, &lk.Key.Label, &lk.Key.Kind, &lk.Key.CreatedAt, &last, &revoked,
 		&lk.Account.ID, &lk.Account.Email, &lk.Account.Status, &lk.Account.CreatedAt, &lk.Account.Note)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Lookup{}, ErrNotFound

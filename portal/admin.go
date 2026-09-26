@@ -16,6 +16,7 @@ import (
 type adminHomeData struct {
 	Query     string
 	Accounts  []apiaccess.Account
+	Demo      []apiaccess.DemoAccess
 	HasStripe bool
 	Actions   []apiaccess.AdminAction
 }
@@ -30,6 +31,7 @@ type adminAccountData struct {
 	NewInvite    string
 	StripeURL    string
 	Actions      []apiaccess.AdminAction
+	Usage        []apiaccess.KeyUsageRow
 }
 
 type adminEntitlement struct {
@@ -39,7 +41,12 @@ type adminEntitlement struct {
 
 type adminUsageData struct {
 	Since, Until, Email, Game string
+	KeyPrefix                 string
 	Rows                      []apiaccess.UsageRow
+	// ByAccount reports whether an account filter narrowed the by-key rows.
+	ByAccount bool
+	ByKey     []apiaccess.KeyUsageRow
+	Paths     []apiaccess.PathUsageRow
 }
 
 func (s *Server) registerAdmin(mux *http.ServeMux) {
@@ -70,6 +77,13 @@ func (s *Server) renderAdminHome(w http.ResponseWriter, r *http.Request, sess se
 		s.logf("admin accounts: %v", err)
 		errMsg = tryAgainMsg
 	}
+	demo, err := s.Store.ListDemoAccess(r.Context())
+	if err != nil {
+		s.logf("admin demo list: %v", err)
+		if errMsg == "" {
+			errMsg = tryAgainMsg
+		}
+	}
 	actions, err := s.Store.ListAdminActions(r.Context(), 0, 20)
 	if err != nil {
 		s.logf("admin actions: %v", err)
@@ -81,7 +95,7 @@ func (s *Server) renderAdminHome(w http.ResponseWriter, r *http.Request, sess se
 	p.Wide = true
 	p.Notice = notice
 	p.Error = errMsg
-	p.Data = adminHomeData{Query: q, Accounts: accounts, HasStripe: s.ReconcileAll != nil, Actions: actions}
+	p.Data = adminHomeData{Query: q, Accounts: accounts, Demo: demo, HasStripe: s.ReconcileAll != nil, Actions: actions}
 	s.render(w, status, "admin_home.html", p)
 }
 
@@ -144,8 +158,9 @@ func (s *Server) renderAdminAccount(w http.ResponseWriter, r *http.Request, sess
 			errMsg = tryAgainMsg
 		}
 	}
+	sites := s.newSiteLookup(r.Context())
 	for _, e := range ents {
-		d.Entitlements = append(d.Entitlements, adminEntitlement{Entitlement: e, View: s.describeEntitlement(e)})
+		d.Entitlements = append(d.Entitlements, adminEntitlement{Entitlement: e, View: s.describeEntitlement(sites, e)})
 	}
 	actions, err := s.Store.ListAdminActions(ctx, a.ID, 20)
 	if err != nil {
@@ -155,6 +170,15 @@ func (s *Server) renderAdminAccount(w http.ResponseWriter, r *http.Request, sess
 		}
 	}
 	d.Actions = actions
+	now := s.now()
+	usage, err := s.Store.UsageByKey(ctx, monthStart(now), now, a.ID)
+	if err != nil {
+		s.logf("admin account %d: usage: %v", a.ID, err)
+		if errMsg == "" {
+			errMsg = tryAgainMsg
+		}
+	}
+	d.Usage = usage
 	p := s.pageFor(&sess, "Account "+a.Email)
 	p.Wide = true
 	p.Notice = notice
@@ -251,7 +275,7 @@ func (s *Server) adminAddEntitlement(w http.ResponseWriter, r *http.Request, ses
 			return
 		}
 	}
-	scope, err := apiaccess.ValidateStoreScope(r.FormValue("stores"), s.KnownStores)
+	scope, err := apiaccess.ValidateStoreScope(r.FormValue("stores"))
 	if err != nil {
 		bad("Stores: " + err.Error())
 		return
@@ -341,7 +365,8 @@ func (s *Server) adminInvite(w http.ResponseWriter, r *http.Request, sess sessio
 
 func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess session.Session, _ apiaccess.Account) {
 	now := s.now()
-	d := adminUsageData{Since: r.FormValue("since"), Until: r.FormValue("until"), Email: strings.TrimSpace(r.FormValue("email")), Game: r.FormValue("game")}
+	d := adminUsageData{Since: r.FormValue("since"), Until: r.FormValue("until"), Email: strings.TrimSpace(r.FormValue("email")),
+		Game: r.FormValue("game"), KeyPrefix: strings.TrimSpace(r.FormValue("key"))}
 	from, to := now.AddDate(0, 0, -30), now.AddDate(0, 0, 1)
 	var err error
 	if d.Since != "" {
@@ -389,8 +414,34 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess session
 			d.Rows = append(d.Rows, row)
 		}
 	}
+	var errMsg string
+	var byKey []apiaccess.KeyUsageRow
+	// Without an account the by-key query sorts the whole usage table, so ask for one first.
+	if accountID != 0 {
+		byKey, err = s.Store.UsageByKey(r.Context(), from, to, accountID)
+		if err != nil {
+			s.logf("admin usage by key: %v", err)
+			errMsg = tryAgainMsg
+		}
+	}
+	d.ByAccount = accountID != 0
+	d.ByKey = byKey
+	if d.KeyPrefix != "" {
+		for _, row := range byKey {
+			if row.Prefix == d.KeyPrefix {
+				paths, err := s.Store.TopPaths(r.Context(), from, to, row.KeyID, 20)
+				if err != nil {
+					s.logf("admin usage paths: %v", err)
+					errMsg = tryAgainMsg
+				}
+				d.Paths = paths
+				break
+			}
+		}
+	}
 	p := s.pageFor(&sess, "Usage")
 	p.Wide = true
+	p.Error = errMsg
 	p.Data = d
 	s.render(w, http.StatusOK, "admin_usage.html", p)
 }

@@ -83,6 +83,7 @@ const testClientIPHeader = "DO-Connecting-IP"
 
 const (
 	goodKey    = "mtgban_live_abcdefghijklmnopqrstuvwxyz012345"
+	goodKey2   = "mtgban_live_zyxwvutsrqponmlkjihgfedcba098765"
 	revokedKey = "mtgban_live_revokedrevokedrevokedrevoked1234"
 	suspKey    = "mtgban_live_suspendedsuspendedsuspended12345"
 	unknownKey = "mtgban_live_00000000000000000000000000000000"
@@ -100,6 +101,13 @@ func testHandler(t *testing.T, backend *httptest.Server, secret string) (*Handle
 			Entitlements: []apiaccess.Entitlement{
 				ent([]string{"magic"}, "BASE_ACCESS", "retail", "buylist"),
 				ent([]string{"pokemon"}, "CK,TCG", "retail"),
+			},
+		},
+		apiaccess.HashKey(goodKey2): {
+			Key:     apiaccess.Key{ID: 11},
+			Account: apiaccess.Account{ID: 3, Status: "active"},
+			Entitlements: []apiaccess.Entitlement{
+				ent([]string{"magic"}, "BASE_ACCESS", "retail", "buylist"),
 			},
 		},
 		apiaccess.HashKey(revokedKey): {
@@ -415,6 +423,21 @@ func TestHandlerRateLimit(t *testing.T) {
 	rec, _ := do(h, "GET", "/v1/magic/mtgban/retail.json", goodKey)
 	if rec.Code != 429 || rec.Header().Get("RateLimit-Limit") != "1" {
 		t.Errorf("status %d headers %v", rec.Code, rec.Header())
+	}
+}
+
+func TestHandlerRateLimitSharedByAccount(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, _ := testHandler(t, be, "s3cret")
+	// A token takes 100 seconds to refill, so a slow run cannot let the third request through.
+	h.limiter = newLimiter(0.01, 2)
+	// goodKey and goodKey2 sit on the same account, so their burst is shared.
+	do(h, "GET", "/v1/magic/mtgban/retail.json", goodKey)
+	do(h, "GET", "/v1/magic/mtgban/retail.json", goodKey2)
+	rec, _ := do(h, "GET", "/v1/magic/mtgban/retail.json", goodKey)
+	if rec.Code != 429 {
+		t.Errorf("third request across two keys on one account: status %d", rec.Code)
 	}
 }
 

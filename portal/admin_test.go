@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
 	"github.com/mtgban/api-gatewahy/billing"
@@ -30,7 +32,7 @@ func TestAdminAccountsAndActions(t *testing.T) {
 	_, ck, csrf := ts.signIn(t, "Admin@Example.com")
 	cust, _ := ts.store.GetOrCreateAccount(ctx, "cust@example.com", "")
 	_, _ = ts.store.SetStripeCustomerID(ctx, cust.ID, "cus_42")
-	_, key, _ := ts.store.CreateKey(ctx, cust.ID, "old")
+	_, key, _ := ts.store.CreateKey(ctx, cust.ID, "old", apiaccess.KeyLive)
 	id := itoa(cust.ID)
 
 	rec := ts.do("GET", "/admin?q=cust", "", ck)
@@ -247,7 +249,7 @@ func TestAdminRevokeKeyCrossAccountFails(t *testing.T) {
 	_, ck, csrf := ts.signIn(t, "admin@example.com")
 	a1, _ := ts.store.GetOrCreateAccount(ctx, "a1@example.com", "")
 	a2, _ := ts.store.GetOrCreateAccount(ctx, "a2@example.com", "")
-	_, key, _ := ts.store.CreateKey(ctx, a2.ID, "b-key")
+	_, key, _ := ts.store.CreateKey(ctx, a2.ID, "b-key", apiaccess.KeyLive)
 
 	rec := ts.do("POST", "/admin/accounts/"+itoa(a1.ID)+"/keys/"+itoa(key.ID)+"/revoke", "csrf="+csrf, ck)
 	if rec.Code != 404 {
@@ -288,5 +290,110 @@ func TestAdminUsageAndReconcile(t *testing.T) {
 	ts.ReconcileAll = func(context.Context) (billing.Result, error) { return billing.Result{}, errors.New("stripe down") }
 	if rec := ts.do("POST", "/admin/reconcile", "csrf="+csrf, ck); rec.Code != 502 {
 		t.Errorf("reconcile failure: %d", rec.Code)
+	}
+}
+
+func TestAdminDestructiveButtonsConfirm(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, _ := ts.signIn(t, "admin@example.com")
+	a, _ := ts.store.GetOrCreateAccount(context.Background(), "cust@example.com", "")
+	e, _ := ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "manual", "BASE_ACCESS"))
+	_, k, _ := ts.store.CreateKey(context.Background(), a.ID, "k", apiaccess.KeyLive)
+	id := strconv.FormatInt(a.ID, 10)
+	body := ts.do("GET", "/admin/accounts/"+id, "", ck).Body.String()
+	for _, action := range []string{
+		"/admin/accounts/" + id + "/status",
+		"/admin/accounts/" + id + "/keys/" + strconv.FormatInt(k.ID, 10) + "/revoke",
+		"/admin/accounts/" + id + "/entitlements/" + strconv.FormatInt(e.ID, 10) + "/end",
+	} {
+		if !strings.Contains(body, `action="`+action+`" class="inline" onsubmit="return confirm(`) {
+			t.Errorf("no confirming form for %s", action)
+		}
+	}
+	if strings.Count(body, "onsubmit=\"return confirm(") < 3 {
+		t.Errorf("expected a confirm on suspend, revoke, and end; got %d", strings.Count(body, "onsubmit=\"return confirm("))
+	}
+}
+
+func TestInvitePanelExplainsTheSchedule(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, _ := ts.signIn(t, "admin@example.com")
+	a, _ := ts.store.GetOrCreateAccount(context.Background(), "cust@example.com", "")
+	body := ts.do("GET", "/admin/accounts/"+strconv.FormatInt(a.ID, 10), "", ck).Body.String()
+	for _, want := range []string{"Invite to a billing schedule", "invite-only", "Billing schedule", "every 3 months"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("invite panel lacks %q", want)
+		}
+	}
+}
+
+func TestAdminHomeListsDemoAccess(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, _ := ts.signIn(t, "admin@example.com")
+	ctx := context.Background()
+	a, _ := ts.store.GetOrCreateAccount(ctx, "trial@example.com", "")
+	ends := ts.now.Add(15 * 24 * time.Hour)
+	e := entitlementFor(a.ID, "trial", "ALL_ACCESS")
+	e.ValidUntil = &ends
+	_, _ = ts.store.AddEntitlement(ctx, e)
+	_, _ = ts.store.CreateTrial(ctx, "patron@example.com", a.ID, ends, ts.now.Add(-time.Hour))
+	_, _, _ = ts.store.CreateKey(ctx, a.ID, "k", apiaccess.KeyDemo)
+	body := ts.do("GET", "/admin", "", ck).Body.String()
+	for _, want := range []string{"Demo access", "trial@example.com", "patron@example.com", "<td>1</td>"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("admin home lacks %q", want)
+		}
+	}
+}
+
+func TestAdminUsageByKeyAndPaths(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, _ := ts.signIn(t, "admin@example.com")
+	ctx := context.Background()
+	a, _ := ts.store.GetOrCreateAccount(ctx, "u@example.com", "")
+	_, k, _ := ts.store.CreateKey(ctx, a.ID, "laptop", apiaccess.KeyLive)
+	ts.store.addUsage(a.ID, k.ID, "magic", "/retail/ZEN.json", 200, ts.now.Add(-time.Hour))
+	ts.store.addUsage(a.ID, k.ID, "magic", "/sets.json", 404, ts.now.Add(-time.Hour))
+	since, until := ts.now.Add(-48*time.Hour).Format("2006-01-02"), ts.now.Add(24*time.Hour).Format("2006-01-02")
+	filters := "since=" + since + "&until=" + until + "&email=u@example.com"
+	body := ts.do("GET", "/admin/usage?"+filters+"&key="+k.Prefix, "", ck).Body.String()
+	for _, want := range []string{"By key", k.Prefix, "laptop", "/retail/ZEN.json", "/sets.json"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("usage page lacks %q", want)
+		}
+	}
+	if !strings.Contains(body, `<input type="hidden" name="key" value="`+k.Prefix+`">`) {
+		t.Error("the filter form does not carry the key filter")
+	}
+	body = ts.do("GET", "/admin/accounts/"+strconv.FormatInt(a.ID, 10), "", ck).Body.String()
+	if !strings.Contains(body, "Usage this month") || !strings.Contains(body, k.Prefix) {
+		t.Error("account page lacks the per-key usage")
+	}
+	if strings.Contains(body, "No requests this month.") {
+		t.Error("account page reports no usage for a month with two requests")
+	}
+	// Only the usage table renders the day's two requests and one error.
+	if !strings.Contains(body, "<td>2</td><td>1</td>") {
+		t.Error("account page lacks the request and error counts")
+	}
+}
+
+func TestAdminUsageByKeyNeedsAnAccount(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, _ := ts.signIn(t, "admin@example.com")
+	ctx := context.Background()
+	a, _ := ts.store.GetOrCreateAccount(ctx, "u@example.com", "")
+	_, k, _ := ts.store.CreateKey(ctx, a.ID, "laptop", apiaccess.KeyLive)
+	ts.store.addUsage(a.ID, k.ID, "magic", "/retail/ZEN.json", 200, ts.now.Add(-time.Hour))
+
+	body := ts.do("GET", "/admin/usage", "", ck).Body.String()
+	if !strings.Contains(body, "Filter by account to see requests per key.") {
+		t.Error("the usage page does not say how to see requests per key")
+	}
+	if strings.Contains(body, "<th>Key</th>") {
+		t.Error("the by-key table rendered without an account filter")
+	}
+	if n := ts.store.usageByKeyCalls; n != 0 {
+		t.Errorf("UsageByKey ran %d times without an account filter", n)
 	}
 }

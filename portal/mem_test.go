@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -20,8 +21,10 @@ type memLink struct {
 
 // memUsage pairs a usage row with the timestamp SummarizeUsage filters on.
 type memUsage struct {
-	Ts  time.Time
-	Row apiaccess.UsageRow
+	Ts    time.Time
+	KeyID int64
+	Path  string
+	Row   apiaccess.UsageRow
 }
 
 var _ billing.Store = (*memStore)(nil)
@@ -39,6 +42,8 @@ type memStore struct {
 	notified []string
 	nonces   map[string]time.Time
 	actions  []apiaccess.AdminAction
+	// clock is the test server's frozen clock; nil means real time.
+	clock func() time.Time
 
 	// entitlementErr, when set, is what AddEntitlement returns instead of succeeding.
 	entitlementErr error
@@ -47,6 +52,8 @@ type memStore struct {
 	listEntitlementsErr error
 	listActionsErr      error
 	usageErr            error
+	// usageByKeyCalls counts UsageByKey calls, so a test can prove it stayed unrun.
+	usageByKeyCalls int
 }
 
 func newMemStore() *memStore {
@@ -55,6 +62,14 @@ func newMemStore() *memStore {
 }
 
 func (m *memStore) id() int64 { m.nextID++; return m.nextID }
+
+// nowOr returns the frozen clock when the test server set one.
+func (m *memStore) nowOr() time.Time {
+	if m.clock != nil {
+		return m.clock()
+	}
+	return time.Now()
+}
 
 func (m *memStore) GetAccount(_ context.Context, id int64) (apiaccess.Account, error) {
 	m.mu.Lock()
@@ -195,14 +210,14 @@ func (m *memStore) DeleteMagicLink(_ context.Context, token string) error {
 	return nil
 }
 
-func (m *memStore) CreateKey(_ context.Context, accountID int64, label string) (string, apiaccess.Key, error) {
+func (m *memStore) CreateKey(_ context.Context, accountID int64, label string, kind apiaccess.KeyKind) (string, apiaccess.Key, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	plain, hash, prefix, err := apiaccess.GenerateKey()
+	plain, hash, prefix, err := apiaccess.GenerateKey(kind)
 	if err != nil {
 		return "", apiaccess.Key{}, err
 	}
-	k := &apiaccess.Key{ID: m.id(), AccountID: accountID, Hash: hash, Prefix: prefix, Label: label, CreatedAt: time.Now()}
+	k := &apiaccess.Key{ID: m.id(), AccountID: accountID, Hash: hash, Prefix: prefix, Label: label, Kind: kind, CreatedAt: time.Now()}
 	m.keys[k.ID] = k
 	return plain, *k, nil
 }
@@ -318,6 +333,101 @@ func (m *memStore) SummarizeUsage(_ context.Context, since, until time.Time, acc
 		if (accountID == 0 || u.Row.AccountID == accountID) && !u.Ts.Before(since) && u.Ts.Before(until) {
 			out = append(out, u.Row)
 		}
+	}
+	return out, nil
+}
+
+// addUsage records one proxied request the way the gateway would.
+func (m *memStore) addUsage(accountID, keyID int64, game, path string, status int, ts time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row := apiaccess.UsageRow{AccountID: accountID, Email: m.accounts[accountID].Email, Game: game, Requests: 1}
+	if status >= 400 {
+		row.Errors = 1
+	}
+	m.usage = append(m.usage, memUsage{Ts: ts, KeyID: keyID, Path: path, Row: row})
+}
+
+// UsageByKey mirrors the store query: one row per key per UTC day, ordered by key then day.
+func (m *memStore) UsageByKey(_ context.Context, since, until time.Time, accountID int64) ([]apiaccess.KeyUsageRow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.usageByKeyCalls++
+	if m.usageErr != nil {
+		return nil, m.usageErr
+	}
+	type bucket struct {
+		keyID int64
+		day   time.Time
+	}
+	rows := map[bucket]*apiaccess.KeyUsageRow{}
+	for _, u := range m.usage {
+		k := m.keys[u.KeyID]
+		if k == nil || u.Ts.Before(since) || !u.Ts.Before(until) {
+			continue
+		}
+		if accountID != 0 && u.Row.AccountID != accountID {
+			continue
+		}
+		ts := u.Ts.UTC()
+		b := bucket{u.KeyID, time.Date(ts.Year(), ts.Month(), ts.Day(), 0, 0, 0, 0, time.UTC)}
+		r := rows[b]
+		if r == nil {
+			r = &apiaccess.KeyUsageRow{KeyID: k.ID, Prefix: k.Prefix, Label: k.Label, Day: b.day}
+			rows[b] = r
+		}
+		r.Requests += u.Row.Requests
+		r.Bytes += u.Row.Bytes
+		r.Errors += u.Row.Errors
+	}
+	out := make([]apiaccess.KeyUsageRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, *r)
+	}
+	slices.SortFunc(out, func(a, b apiaccess.KeyUsageRow) int {
+		if a.KeyID != b.KeyID {
+			return cmp.Compare(a.KeyID, b.KeyID)
+		}
+		return a.Day.Compare(b.Day)
+	})
+	return out, nil
+}
+
+// TopPaths mirrors the store query: one key's paths, most requested first.
+func (m *memStore) TopPaths(_ context.Context, since, until time.Time, keyID int64, limit int) ([]apiaccess.PathUsageRow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.usageErr != nil {
+		return nil, m.usageErr
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	rows := map[string]*apiaccess.PathUsageRow{}
+	for _, u := range m.usage {
+		if u.KeyID != keyID || u.Ts.Before(since) || !u.Ts.Before(until) {
+			continue
+		}
+		r := rows[u.Path]
+		if r == nil {
+			r = &apiaccess.PathUsageRow{Path: u.Path}
+			rows[u.Path] = r
+		}
+		r.Requests += u.Row.Requests
+		r.Errors += u.Row.Errors
+	}
+	out := make([]apiaccess.PathUsageRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, *r)
+	}
+	slices.SortFunc(out, func(a, b apiaccess.PathUsageRow) int {
+		if a.Requests != b.Requests {
+			return cmp.Compare(b.Requests, a.Requests)
+		}
+		return cmp.Compare(a.Path, b.Path)
+	})
+	if len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }
@@ -443,6 +553,48 @@ func (m *memStore) ListAdminActions(_ context.Context, accountID int64, limit in
 		}
 		out = append(out, a)
 	}
+	return out, nil
+}
+
+// ListDemoAccess mirrors the store query: active trial and manual rows, newest first.
+func (m *memStore) ListDemoAccess(context.Context) ([]apiaccess.DemoAccess, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := m.nowOr()
+	var out []apiaccess.DemoAccess
+	for _, e := range m.ents {
+		if e.Status != "active" || (e.Source != "trial" && e.Source != "manual") {
+			continue
+		}
+		if e.ValidUntil != nil && !e.ValidUntil.After(now) {
+			continue
+		}
+		d := apiaccess.DemoAccess{AccountID: e.AccountID, Email: m.accounts[e.AccountID].Email,
+			Source: e.Source, Note: e.Note, GrantedAt: e.ValidFrom, EndsAt: e.ValidUntil}
+		if e.Source == "trial" {
+			var latest *apiaccess.Trial
+			for _, t := range m.trials {
+				if t.AccountID == e.AccountID && (latest == nil || t.GrantedAt.After(latest.GrantedAt)) {
+					latest = t
+				}
+			}
+			if latest != nil {
+				d.Requester = latest.PatreonEmail
+			}
+		}
+		for _, k := range m.keys {
+			if k.AccountID != e.AccountID || k.RevokedAt != nil {
+				continue
+			}
+			d.Keys++
+			if k.LastUsedAt != nil && (d.LastUsed == nil || k.LastUsedAt.After(*d.LastUsed)) {
+				last := *k.LastUsedAt
+				d.LastUsed = &last
+			}
+		}
+		out = append(out, d)
+	}
+	slices.SortFunc(out, func(a, b apiaccess.DemoAccess) int { return b.GrantedAt.Compare(a.GrantedAt) })
 	return out, nil
 }
 

@@ -31,12 +31,13 @@ func newTestServer(t *testing.T) *testServer {
 	t.Helper()
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	store := newMemStore()
+	store.clock = func() time.Time { return now }
 	var mailBuf bytes.Buffer
 	s := &Server{
 		Store:             store,
 		Catalog:           apiproductlist.MustLoad(),
 		Games:             []string{"magic", "pokemon"},
-		KnownStores:       nil,
+		Stores:            newFakeStores(),
 		Sessions:          &session.Codec{Secret: []byte("0123456789abcdef0123456789abcdef"), Now: func() time.Time { return now }},
 		Mail:              &mailer.Log{Out: &mailBuf},
 		PublicURL:         "https://api.test",
@@ -214,15 +215,15 @@ func TestDescribeEntitlement(t *testing.T) {
 			entitlementView{Source: "Arranged with MTGBAN", Package: "À la carte", Games: "magic", Stores: "TCGplayer, Card Kingdom, ZZZ", Modes: "retail"}},
 	}
 	for _, tc := range cases {
-		if got := ts.describeEntitlement(tc.e); got != tc.want {
+		if got := ts.describeEntitlement(ts.newSiteLookup(context.Background()), tc.e); got != tc.want {
 			t.Errorf("\n got %+v\nwant %+v", got, tc.want)
 		}
 	}
 }
 
 func TestPlanValuesRoundTrip(t *testing.T) {
-	v := planValues(planFromValues(map[string][]string{"package": {"starter"}, "interval": {"monthly"}, "games": {"magic,pokemon"}, "stores": {"CK", "SCG"}}))
-	if v.Get("package") != "starter" || v.Get("interval") != "monthly" || v.Get("games") != "magic,pokemon" || v.Get("stores") != "CK,SCG" {
+	v := planValues(planFromValues(map[string][]string{"package": {"starter"}, "interval": {"monthly"}, "games": {"magic,pokemon"}, "stores": {"cardkingdom", "starcitygames"}}))
+	if v.Get("package") != "starter" || v.Get("interval") != "monthly" || v.Get("games") != "magic,pokemon" || v.Get("stores") != "cardkingdom,starcitygames" {
 		t.Errorf("%v", v)
 	}
 }

@@ -56,8 +56,8 @@ func invalid(format string, args ...any) error {
 
 // Normalize canonicalizes the plan against the catalog: package and interval
 // exist, at least one game is named, games are lowercase and sorted, stores
-// are uppercase, sorted, selectable, and only on an explicit package, and
-// every implied add-on applies to the package.
+// are lowercase family keys, sorted, and only on an explicit package, and
+// every implied add-on applies to the package. Resolve checks the keys exist.
 func (p Plan) Normalize(cat *apiproductlist.ProductList) (Plan, error) {
 	pkg, ok := cat.Package(p.Package)
 	if !ok {
@@ -71,17 +71,12 @@ func (p Plan) Normalize(cat *apiproductlist.ProductList) (Plan, error) {
 		return Plan{}, invalid("pick at least one game")
 	}
 	slices.Sort(games)
-	stores := dedupe(p.Stores, strings.ToUpper)
+	stores := dedupe(p.Stores, strings.ToLower)
 	slices.Sort(stores)
 	out := Plan{Package: pkg.Key, Interval: p.Interval, Games: games, Stores: stores}
 	if pkg.StoreScope == apiproductlist.StoreScopeExplicit {
 		if len(stores) == 0 {
 			return Plan{}, invalid("pick at least one store")
-		}
-		for _, s := range stores {
-			if st, ok := cat.Store(s); !ok || st.Implied {
-				return Plan{}, invalid("store %q is not selectable", s)
-			}
 		}
 	} else if len(stores) > 0 {
 		return Plan{}, invalid("package %s does not take a store list", pkg.Key)
@@ -175,31 +170,9 @@ func PlanFromMetadata(m map[string]string) (Plan, int64, error) {
 	}, accountID, nil
 }
 
-// Entitlement is the store scope and modes the plan grants. An explicit
-// scope is the backend shorthands of the implied stores and the picked ones.
-func (p Plan) Entitlement(cat *apiproductlist.ProductList) (string, []string) {
-	pkg, _ := cat.Package(p.Package)
-	if pkg.StoreScope != apiproductlist.StoreScopeExplicit {
-		return pkg.StoreScope, pkg.Modes
-	}
-	var shorthands []string
-	for _, s := range cat.ImpliedStores() {
-		shorthands = append(shorthands, s.Shorthands...)
-	}
-	for _, key := range p.Stores {
-		s, _ := cat.Store(key)
-		shorthands = append(shorthands, s.Shorthands...)
-	}
-	return strings.Join(shorthands, ","), pkg.Modes
-}
-
-// StoreKeys lists the implied and picked store keys, for people rather than the backend.
-func (p Plan) StoreKeys(cat *apiproductlist.ProductList) []string {
-	var keys []string
-	for _, s := range cat.ImpliedStores() {
-		keys = append(keys, s.Key)
-	}
-	return append(keys, p.Stores...)
+// equal reports whether p and q name the same package, interval, games, and stores.
+func (p Plan) equal(q Plan) bool {
+	return p.Package == q.Package && p.Interval == q.Interval && slices.Equal(p.Games, q.Games) && slices.Equal(p.Stores, q.Stores)
 }
 
 // Addons lists the add-ons with quantities for the entitlement's addons column.
@@ -219,7 +192,7 @@ func (p Plan) Describe(cat *apiproductlist.ProductList) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s, games %s", pkg.Name, strings.Join(p.Games, ","))
 	if pkg.StoreScope == apiproductlist.StoreScopeExplicit {
-		fmt.Fprintf(&b, ", stores %s", strings.Join(p.StoreKeys(cat), ","))
+		fmt.Fprintf(&b, ", stores %s", strings.Join(p.Stores, ","))
 	}
 	fmt.Fprintf(&b, ", %s", p.Interval)
 	if total, err := p.Total(cat); err == nil {

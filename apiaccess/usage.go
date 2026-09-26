@@ -102,3 +102,76 @@ func (c *Client) PruneUsage(ctx context.Context, before time.Time) (int64, error
 	}
 	return res.RowsAffected()
 }
+
+// KeyUsageRow is one key on one UTC day.
+type KeyUsageRow struct {
+	KeyID    int64
+	Prefix   string
+	Label    string
+	Day      time.Time
+	Requests int64
+	Bytes    int64
+	Errors   int64
+}
+
+// UsageByKey summarizes usage per key per day; accountID 0 means every account.
+func (c *Client) UsageByKey(ctx context.Context, since, until time.Time, accountID int64) ([]KeyUsageRow, error) {
+	var filter sql.NullInt64
+	if accountID != 0 {
+		filter = sql.NullInt64{Int64: accountID, Valid: true}
+	}
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT u.key_id, k.prefix, k.label, date_trunc('day', u.ts AT TIME ZONE 'UTC') AS day,
+		        count(*), coalesce(sum(u.bytes), 0), count(*) FILTER (WHERE u.status >= 400)
+		   FROM usage u JOIN api_keys k ON k.id = u.key_id
+		  WHERE u.ts >= $1 AND u.ts < $2 AND ($3::bigint IS NULL OR u.account_id = $3)
+		  GROUP BY u.key_id, k.prefix, k.label, day
+		  ORDER BY u.key_id, day`, since, until, filter)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []KeyUsageRow
+	for rows.Next() {
+		var r KeyUsageRow
+		if err := rows.Scan(&r.KeyID, &r.Prefix, &r.Label, &r.Day, &r.Requests, &r.Bytes, &r.Errors); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// PathUsageRow is one path's request count for a key.
+type PathUsageRow struct {
+	Path     string
+	Requests int64
+	Errors   int64
+}
+
+// TopPaths lists the paths one key requested most, up to limit.
+func (c *Client) TopPaths(ctx context.Context, since, until time.Time, keyID int64, limit int) ([]PathUsageRow, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT u.path, count(*), count(*) FILTER (WHERE u.status >= 400)
+		   FROM usage u
+		  WHERE u.ts >= $1 AND u.ts < $2 AND u.key_id = $3
+		  GROUP BY u.path
+		  ORDER BY count(*) DESC, u.path
+		  LIMIT $4`, since, until, keyID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []PathUsageRow
+	for rows.Next() {
+		var r PathUsageRow
+		if err := rows.Scan(&r.Path, &r.Requests, &r.Errors); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

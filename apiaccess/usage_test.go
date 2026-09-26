@@ -10,7 +10,7 @@ func TestUsageInsertSummarizePrune(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
 	a, _ := c.CreateAccount(ctx, "u@example.com", "")
-	_, k, _ := c.CreateKey(ctx, a.ID, "")
+	_, k, _ := c.CreateKey(ctx, a.ID, "", KeyLive)
 	now := time.Now().UTC()
 
 	rows := []Usage{
@@ -47,7 +47,7 @@ func TestInsertUsageDropsUnparseableIP(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
 	a, _ := c.CreateAccount(ctx, "ip@example.com", "")
-	_, k, _ := c.CreateKey(ctx, a.ID, "")
+	_, k, _ := c.CreateKey(ctx, a.ID, "", KeyLive)
 	now := time.Now().UTC()
 
 	rows := []Usage{
@@ -65,5 +65,38 @@ func TestInsertUsageDropsUnparseableIP(t *testing.T) {
 	}
 	if total != 3 || withIP != 1 {
 		t.Errorf("stored %d rows with %d addresses, want 3 and 1", total, withIP)
+	}
+}
+
+func TestUsageByKeyAndTopPaths(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	a, _ := c.CreateAccount(ctx, "u@example.com", "")
+	_, k1, _ := c.CreateKey(ctx, a.ID, "one", KeyLive)
+	_, k2, _ := c.CreateKey(ctx, a.ID, "two", KeyLive)
+	day := time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
+	rows := []Usage{
+		{Ts: day, KeyID: k1.ID, AccountID: a.ID, Game: "magic", Path: "/retail/ZEN.json", Status: 200},
+		{Ts: day.Add(time.Hour), KeyID: k1.ID, AccountID: a.ID, Game: "magic", Path: "/retail/ZEN.json", Status: 200},
+		{Ts: day.Add(2 * time.Hour), KeyID: k1.ID, AccountID: a.ID, Game: "magic", Path: "/sets.json", Status: 404},
+		{Ts: day.Add(24 * time.Hour), KeyID: k1.ID, AccountID: a.ID, Game: "magic", Path: "/sets.json", Status: 200},
+		{Ts: day, KeyID: k2.ID, AccountID: a.ID, Game: "magic", Path: "/stores.json", Status: 200},
+	}
+	if err := c.InsertUsage(ctx, rows); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.UsageByKey(ctx, day.Add(-time.Hour), day.Add(48*time.Hour), a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0].KeyID != k1.ID || got[0].Requests != 3 || got[0].Errors != 1 || got[1].Requests != 1 || got[2].KeyID != k2.ID || got[0].Label != "one" {
+		t.Errorf("by key: %+v", got)
+	}
+	paths, err := c.TopPaths(ctx, day.Add(-time.Hour), day.Add(48*time.Hour), k1.ID, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 2 || paths[0].Path != "/retail/ZEN.json" || paths[0].Requests != 2 || paths[1].Errors != 1 {
+		t.Errorf("paths: %+v", paths)
 	}
 }

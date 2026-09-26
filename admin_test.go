@@ -44,9 +44,9 @@ func (m *memStore) SetAccountStatus(_ context.Context, id int64, status string) 
 	return apiaccess.ErrNotFound
 }
 func (m *memStore) ListAccounts(context.Context) ([]apiaccess.Account, error) { return m.accounts, nil }
-func (m *memStore) CreateKey(_ context.Context, accountID int64, label string) (string, apiaccess.Key, error) {
-	plain, hash, prefix, _ := apiaccess.GenerateKey()
-	k := apiaccess.Key{ID: int64(len(m.keys) + 1), AccountID: accountID, Hash: hash, Prefix: prefix, Label: label}
+func (m *memStore) CreateKey(_ context.Context, accountID int64, label string, kind apiaccess.KeyKind) (string, apiaccess.Key, error) {
+	plain, hash, prefix, _ := apiaccess.GenerateKey(kind)
+	k := apiaccess.Key{ID: int64(len(m.keys) + 1), AccountID: accountID, Hash: hash, Prefix: prefix, Label: label, Kind: kind}
 	m.keys = append(m.keys, k)
 	return plain, k, nil
 }
@@ -110,7 +110,7 @@ func (m *memStore) RecordAdminAction(_ context.Context, actor, action string, ac
 func admin(t *testing.T, store adminStore, args ...string) (int, string, string) {
 	t.Helper()
 	var out, errb bytes.Buffer
-	code := runAdmin(context.Background(), store, []string{"TCG", "CK"}, []string{"magic", "pokemon"}, args[0], args[1:], &out, &errb)
+	code := runAdmin(context.Background(), store, []string{"magic", "pokemon"}, args[0], args[1:], &out, &errb)
 	return code, out.String(), errb.String()
 }
 
@@ -159,12 +159,17 @@ func TestAdminKeys(t *testing.T) {
 	s := &memStore{}
 	admin(t, s, "account", "add", "-email", "ck@example.com")
 	code, out, errb := admin(t, s, "key", "create", "-email", "ck@example.com", "-label", "prod")
-	if code != 0 || !strings.Contains(out, "mtgban_live_") {
+	if code != 0 || !strings.Contains(out, "ban_demo_") || !strings.Contains(out, "(ban_demo, prefix") {
 		t.Fatalf("create: %d %q %q", code, out, errb)
 	}
 	prefix := s.keys[0].Prefix
-	if code, out, _ := admin(t, s, "key", "list", "-email", "ck@example.com"); code != 0 || !strings.Contains(out, prefix) || strings.Contains(out, "mtgban_live_") {
+	// The kind column prints ban_demo; only a leaked plaintext carries the underscore.
+	code, out, _ = admin(t, s, "key", "list", "-email", "ck@example.com")
+	if code != 0 || !strings.Contains(out, prefix) || strings.Contains(out, "ban_demo_") {
 		t.Fatalf("list leaked or missed: %d %q", code, out)
+	}
+	if !strings.Contains(out, "ban_demo") {
+		t.Errorf("list does not show the key kind: %q", out)
 	}
 	if code, _, _ := admin(t, s, "key", "revoke", "-prefix", prefix); code != 0 || s.keys[0].RevokedAt == nil {
 		t.Fatalf("revoke: %d", code)
@@ -174,6 +179,20 @@ func TestAdminKeys(t *testing.T) {
 	}
 	if len(s.audit) != 2 || !strings.HasPrefix(s.audit[0], "key create ") || !strings.HasPrefix(s.audit[1], "key revoke ") {
 		t.Errorf("audit %v, want the create and the revoke", s.audit)
+	}
+}
+
+func TestAdminKeyCreateIsLiveOnAStripePlan(t *testing.T) {
+	s := &memStore{}
+	admin(t, s, "account", "add", "-email", "ck@example.com")
+	s.ents = append(s.ents, apiaccess.Entitlement{ID: 1, AccountID: s.accounts[0].ID, Source: "stripe", Status: "active",
+		Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}, ValidFrom: time.Now().Add(-time.Hour)})
+	code, out, errb := admin(t, s, "key", "create", "-email", "ck@example.com", "-label", "prod")
+	if code != 0 || !strings.Contains(out, "ban_live_") || !strings.Contains(out, "(ban_live, prefix") {
+		t.Fatalf("create: %d %q %q", code, out, errb)
+	}
+	if len(s.keys) != 1 || s.keys[0].Kind != apiaccess.KeyLive {
+		t.Errorf("stored keys %+v, want one live key", s.keys)
 	}
 }
 
@@ -193,8 +212,8 @@ func TestAdminGrants(t *testing.T) {
 	if code, _, errb := admin(t, s, "grant", "add", "-email", "ck@example.com", "-games", "magic", "-stores", "DEV_ACCESS", "-modes", "retail"); code != 1 || !strings.Contains(errb, "DEV_ACCESS") {
 		t.Errorf("dev access: %d %q", code, errb)
 	}
-	if code, _, errb := admin(t, s, "grant", "add", "-email", "ck@example.com", "-games", "magic", "-stores", "XYZ", "-modes", "retail"); code != 1 || !strings.Contains(errb, "XYZ") {
-		t.Errorf("unknown store: %d %q", code, errb)
+	if code, _, errb := admin(t, s, "grant", "add", "-email", "ck@example.com", "-games", "magic", "-stores", "TCG CK", "-modes", "retail"); code != 1 || !strings.Contains(errb, "TCG CK") {
+		t.Errorf("missing comma: %d %q", code, errb)
 	}
 	if code, _, errb := admin(t, s, "grant", "add", "-email", "ck@example.com", "-games", "magic", "-stores", "TCG", "-modes", "all"); code != 1 || !strings.Contains(errb, "all") {
 		t.Errorf("mode all: %d %q", code, errb)

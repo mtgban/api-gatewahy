@@ -6,7 +6,7 @@
   <div class="head-row">
     <span>Status <strong>{{.Account.Status}}</strong> &middot; created {{date .Account.CreatedAt}}
     {{if .StripeURL}} &middot; <a href="{{.StripeURL}}" target="_blank" rel="noopener">Open in Stripe</a>{{end}}</span>
-    <form method="POST" action="/admin/accounts/{{.Account.ID}}/status" class="inline">
+    <form method="POST" action="/admin/accounts/{{.Account.ID}}/status" class="inline" onsubmit="return confirm('{{if eq .Account.Status "active"}}Suspend this account? Every key stops working within a minute.{{else}}Reinstate this account?{{end}}')">
       <input type="hidden" name="csrf" value="{{$.CSRF}}">
       {{if eq .Account.Status "active"}}<input type="hidden" name="status" value="suspended"><button type="submit" class="btn btn-danger btn-small">Suspend</button>
       {{else}}<input type="hidden" name="status" value="active"><button type="submit" class="btn btn-small">Reinstate</button>{{end}}
@@ -30,10 +30,10 @@
 <div class="card scroll">
 {{if .Keys}}
 <table class="nowrap">
-  <thead><tr><th>Prefix</th><th>Label</th><th>Created</th><th>Last used</th><th>Revoked</th><th></th></tr></thead>
+  <thead><tr><th>Prefix</th><th>Kind</th><th>Label</th><th>Created</th><th>Last used</th><th>Revoked</th><th></th></tr></thead>
   <tbody>
-  {{range .Keys}}<tr><td><code>{{.Prefix}}</code></td><td>{{.Label}}</td><td>{{date .CreatedAt}}</td><td>{{if .LastUsedAt}}{{date .LastUsedAt}}{{else}}-{{end}}</td><td>{{if .RevokedAt}}{{date .RevokedAt}}{{else}}-{{end}}</td>
-    <td class="right">{{if not .RevokedAt}}<form method="POST" action="/admin/accounts/{{$.Data.Account.ID}}/keys/{{.ID}}/revoke" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="btn btn-danger btn-small">Revoke</button></form>{{end}}</td></tr>{{end}}
+  {{range .Keys}}<tr><td><code>{{.Prefix}}</code></td><td><code>{{.Kind}}</code></td><td>{{.Label}}</td><td>{{date .CreatedAt}}</td><td>{{if .LastUsedAt}}{{date .LastUsedAt}}{{else}}-{{end}}</td><td>{{if .RevokedAt}}{{date .RevokedAt}}{{else}}-{{end}}</td>
+    <td class="right">{{if not .RevokedAt}}<form method="POST" action="/admin/accounts/{{$.Data.Account.ID}}/keys/{{.ID}}/revoke" class="inline" onsubmit="return confirm('Revoke this key? It cannot be undone; anything using it stops working within a minute.')"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="btn btn-danger btn-small">Revoke</button></form>{{end}}</td></tr>{{end}}
   </tbody>
 </table>
 {{else}}
@@ -50,7 +50,7 @@
   <thead><tr><th>ID</th><th>Source</th><th>Status</th><th>Games</th><th>Stores</th><th>Modes</th><th>From</th><th>Until</th><th>Note</th><th></th></tr></thead>
   <tbody>
   {{range .Entitlements}}<tr><td>{{.ID}}</td><td>{{.Source}}</td><td>{{.Status}}</td><td>{{join .Games ","}}</td><td title="{{.StoreScope}}">{{.View.Stores}}</td><td>{{join .Modes ","}}</td><td>{{date .ValidFrom}}</td><td>{{if .ValidUntil}}{{date .ValidUntil}}{{else}}-{{end}}</td><td>{{.Note}}</td>
-    <td class="right">{{if eq .Status "active"}}<form method="POST" action="/admin/accounts/{{$.Data.Account.ID}}/entitlements/{{.ID}}/end" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="btn btn-danger btn-small">End</button></form>{{end}}</td></tr>{{end}}
+    <td class="right">{{if eq .Status "active"}}<form method="POST" action="/admin/accounts/{{$.Data.Account.ID}}/entitlements/{{.ID}}/end" class="inline" onsubmit="return confirm('End this access? The customer loses it within a minute and it cannot be reopened.')"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="btn btn-danger btn-small">End</button></form>{{end}}</td></tr>{{end}}
   </tbody>
 </table>
 {{else}}
@@ -75,6 +75,20 @@
 </div>
 </section>
 
+<section class="section">
+<h2>Usage this month</h2>
+<div class="card scroll">
+{{if .Usage}}
+<table class="nowrap">
+  <thead><tr><th>Key</th><th>Label</th><th>Day</th><th>Requests</th><th>Errors</th></tr></thead>
+  <tbody>{{range .Usage}}<tr><td><code>{{.Prefix}}</code></td><td>{{.Label}}</td><td>{{date .Day}}</td><td>{{.Requests}}</td><td>{{.Errors}}</td></tr>{{end}}</tbody>
+</table>
+{{else}}
+<p class="dim" style="margin:0">No requests this month.</p>
+{{end}}
+</div>
+</section>
+
 </div>
 <aside class="admin-side">
 
@@ -85,7 +99,7 @@
     <input type="hidden" name="csrf" value="{{$.CSRF}}">
     <label>Games</label>
     <div class="chips">{{range .Games}}<label class="chip"><input type="checkbox" name="games" value="{{.}}"> {{.}}</label>{{end}}</div>
-    <label for="stores">Stores</label>
+    <label for="stores">Stores (a preset, or backend shorthands typed exactly)</label>
     <input id="stores" type="text" name="stores" placeholder="ALL_ACCESS, BASE_ACCESS, or TCGLow,CK,SCG" required>
     <label>Modes</label>
     <div class="chips">{{range .Modes}}<label class="chip"><input type="checkbox" name="modes" value="{{.}}"> {{.}}</label>{{end}}</div>
@@ -100,13 +114,14 @@
 
 {{if .Intervals}}
 <section class="section">
-<h2>Create an invite</h2>
+<h2>Invite to a billing schedule</h2>
 <div class="card">
+  <p class="dim" style="margin:0 0 0.6em">Some schedules are invite-only: they never show on the pricing page. An invite is a one-time token that unlocks one such schedule for one checkout. Give the customer the pricing page URL with <code>?invite=TOKEN</code> added.</p>
   <form method="POST" action="/admin/accounts/{{.Account.ID}}/invites">
     <input type="hidden" name="csrf" value="{{$.CSRF}}">
     <div class="two">
-      <div><label for="interval">Interval</label><select id="interval" name="interval">{{range .Intervals}}<option value="{{.Key}}">{{.Key}}</option>{{end}}</select></div>
-      <div><label for="days">Valid for (days)</label><input id="days" type="number" name="days" value="14" min="1"></div>
+      <div><label for="interval">Billing schedule</label><select id="interval" name="interval">{{range .Intervals}}<option value="{{.Key}}">{{.Key}}: billed every {{.Count}} {{if eq .Count 1}}month{{else}}months{{end}}</option>{{end}}</select></div>
+      <div><label for="days">Token valid for (days)</label><input id="days" type="number" name="days" value="14" min="1"></div>
     </div>
     <label for="inote">Note</label>
     <input id="inote" type="text" name="note">

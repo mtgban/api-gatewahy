@@ -7,7 +7,6 @@ import (
 )
 
 func TestValidateStoreScope(t *testing.T) {
-	known := []string{"TCG", "CK", "SCG"}
 	cases := []struct {
 		in, want string
 		wantErr  bool
@@ -16,12 +15,13 @@ func TestValidateStoreScope(t *testing.T) {
 		{"BASE_ACCESS", "BASE_ACCESS", false},
 		{"DEV_ACCESS", "", true},
 		{"CK, TCG,CK", "CK,TCG", false},
-		{"TCG,XYZ", "", true},
+		{"TCG,XYZ", "TCG,XYZ", false},
+		{"TCG,CK SCG", "", true},
 		{"", "", true},
 		{" , ", "", true},
 	}
 	for _, c := range cases {
-		got, err := ValidateStoreScope(c.in, known)
+		got, err := ValidateStoreScope(c.in)
 		if (err != nil) != c.wantErr || got != c.want {
 			t.Errorf("%q: got %q err %v", c.in, got, err)
 		}
@@ -59,6 +59,27 @@ func TestActiveAt(t *testing.T) {
 	for _, c := range cases {
 		if got := c.e.ActiveAt(now); got != c.want {
 			t.Errorf("%s: %v", c.name, got)
+		}
+	}
+}
+
+func TestHasActiveStripePlan(t *testing.T) {
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	past := now.Add(-time.Hour)
+	cases := []struct {
+		name string
+		ents []Entitlement
+		want bool
+	}{
+		{"none", nil, false},
+		{"active stripe", []Entitlement{{Source: "stripe", Status: "active", ValidFrom: past}}, true},
+		{"active manual only", []Entitlement{{Source: "manual", Status: "active", ValidFrom: past}}, false},
+		{"ended stripe", []Entitlement{{Source: "stripe", Status: "ended", ValidFrom: past}}, false},
+		{"manual then stripe", []Entitlement{{Source: "manual", Status: "active", ValidFrom: past}, {Source: "stripe", Status: "active", ValidFrom: past}}, true},
+	}
+	for _, c := range cases {
+		if got := HasActiveStripePlan(c.ents, now); got != c.want {
+			t.Errorf("%s: got %v", c.name, got)
 		}
 	}
 }
@@ -124,16 +145,10 @@ func TestAddEntitlementValidates(t *testing.T) {
 		t.Fatalf("good grant: %+v %v", e, err)
 	}
 
-	c.SetKnownStores([]string{"TCGLow", "CK"})
-	unknown := base
-	unknown.StoreScope = "XYZ"
-	if _, err := c.AddEntitlement(ctx, unknown); err == nil {
-		t.Error("unknown store was stored")
-	}
-	wrongCase := base
-	wrongCase.StoreScope = "tcglow"
-	if _, err := c.AddEntitlement(ctx, wrongCase); err == nil {
-		t.Error("wrong-case store was stored")
+	spaced := base
+	spaced.StoreScope = "TCGLow CK"
+	if _, err := c.AddEntitlement(ctx, spaced); err == nil {
+		t.Error("a scope missing its comma was stored")
 	}
 }
 
@@ -218,14 +233,11 @@ func TestListActiveStripeRefs(t *testing.T) {
 }
 
 func TestCanonicalStoreScopeKeepsCase(t *testing.T) {
-	got, err := canonicalStoreScope(" ck , TCGLow,CK ", nil, false)
+	got, err := canonicalStoreScope(" ck , TCGLow,CK ")
 	if err != nil || got != "CK,TCGLow,ck" {
 		t.Errorf("got %q %v", got, err)
 	}
-	if got, _ := canonicalStoreScope("base_access", nil, false); got != "BASE_ACCESS" {
+	if got, _ := canonicalStoreScope("base_access"); got != "BASE_ACCESS" {
 		t.Errorf("preset %q", got)
-	}
-	if _, err := canonicalStoreScope("tcglow", []string{"TCGLow"}, true); err == nil {
-		t.Error("wrong-case shorthand accepted against known stores")
 	}
 }

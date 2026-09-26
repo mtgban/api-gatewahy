@@ -23,7 +23,7 @@ type adminStore interface {
 	GetAccountByEmail(ctx context.Context, email string) (apiaccess.Account, error)
 	SetAccountStatus(ctx context.Context, id int64, status string) error
 	ListAccounts(ctx context.Context) ([]apiaccess.Account, error)
-	CreateKey(ctx context.Context, accountID int64, label string) (string, apiaccess.Key, error)
+	CreateKey(ctx context.Context, accountID int64, label string, kind apiaccess.KeyKind) (string, apiaccess.Key, error)
 	RevokeKeyByPrefix(ctx context.Context, prefix string) (apiaccess.Key, error)
 	ListKeys(ctx context.Context, accountID int64) ([]apiaccess.Key, error)
 	AddEntitlement(ctx context.Context, e apiaccess.Entitlement) (apiaccess.Entitlement, error)
@@ -41,7 +41,7 @@ func init() {
 			usage: adminUsage[name],
 			run: func(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 				return withStore(ctx, args, stderr, func(store *apiaccess.Client, cfg *config.Config, rest []string) int {
-					return runAdmin(ctx, store, cfg.KnownStores, cfg.GameNames(), name, rest, stdout, stderr)
+					return runAdmin(ctx, store, cfg.GameNames(), name, rest, stdout, stderr)
 				})
 			},
 		}
@@ -92,12 +92,11 @@ func withStore(ctx context.Context, args []string, stderr io.Writer, fn func(*ap
 		return 1
 	}
 	defer func() { _ = store.Close() }()
-	store.SetKnownStores(cfg.KnownStores)
 	return fn(store, cfg, args)
 }
 
 // runAdmin dispatches one operator command. Exit codes: 0 ok, 1 error, 2 usage.
-func runAdmin(ctx context.Context, store adminStore, knownStores, knownGames []string, cmd string, args []string, stdout, stderr io.Writer) int {
+func runAdmin(ctx context.Context, store adminStore, knownGames []string, cmd string, args []string, stdout, stderr io.Writer) int {
 	fail := func(err error) int {
 		fmt.Fprintln(stderr, "api-gatewahy:", err)
 		return 1
@@ -117,7 +116,7 @@ func runAdmin(ctx context.Context, store adminStore, knownStores, knownGames []s
 	label := fs.String("label", "", "key label")
 	prefix := fs.String("prefix", "", "key prefix as shown by key list")
 	games := fs.String("games", "", "comma-separated game names")
-	stores := fs.String("stores", "", "ALL_ACCESS, BASE_ACCESS, or a comma-separated store list")
+	stores := fs.String("stores", "", "ALL_ACCESS, BASE_ACCESS, or comma-separated backend shorthands, typed exactly")
 	modes := fs.String("modes", "", "comma-separated subset of retail,buylist,sealed")
 	until := fs.String("until", "", "end date YYYY-MM-DD, exclusive")
 	id := fs.Int64("id", 0, "entitlement id")
@@ -198,13 +197,17 @@ func runAdmin(ctx context.Context, store adminStore, knownStores, knownGames []s
 		if !ok {
 			return exitFor(*email)
 		}
-		plain, k, err := store.CreateKey(ctx, a.ID, *label)
+		kind, err := keyKindFor(ctx, store, a.ID)
 		if err != nil {
 			return fail(err)
 		}
-		audit("key create", a.ID, k.Prefix, *label)
+		plain, k, err := store.CreateKey(ctx, a.ID, *label, kind)
+		if err != nil {
+			return fail(err)
+		}
+		audit("key create", a.ID, k.Prefix, strings.TrimSpace(string(kind)+" "+*label))
 		notify()
-		fmt.Fprintf(stdout, "key created for %s (prefix %s). Shown once, copy it now:\n\n    %s\n\n", a.Email, k.Prefix, plain)
+		fmt.Fprintf(stdout, "key created for %s (%s, prefix %s). Shown once, copy it now:\n\n    %s\n\n", a.Email, kind, k.Prefix, plain)
 		return 0
 	case "key revoke":
 		if !need("prefix", *prefix) {
@@ -228,9 +231,9 @@ func runAdmin(ctx context.Context, store adminStore, knownStores, knownGames []s
 			return fail(err)
 		}
 		tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "PREFIX\tLABEL\tCREATED\tLAST USED\tREVOKED")
+		fmt.Fprintln(tw, "PREFIX\tKIND\tLABEL\tCREATED\tLAST USED\tREVOKED")
 		for _, k := range keys {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", k.Prefix, k.Label, k.CreatedAt.Format("2006-01-02"), fmtTime(k.LastUsedAt), fmtTime(k.RevokedAt))
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", k.Prefix, k.Kind, k.Label, k.CreatedAt.Format("2006-01-02"), fmtTime(k.LastUsedAt), fmtTime(k.RevokedAt))
 		}
 		return flushTab(tw)
 	case "grant add":
@@ -241,7 +244,7 @@ func runAdmin(ctx context.Context, store adminStore, knownStores, knownGames []s
 		if !need("games", *games) || !need("stores", *stores) || !need("modes", *modes) {
 			return 2
 		}
-		scope, err := apiaccess.ValidateStoreScope(*stores, knownStores)
+		scope, err := apiaccess.ValidateStoreScope(*stores)
 		if err != nil {
 			return fail(err)
 		}
@@ -351,6 +354,18 @@ func adminUsageCmd(ctx context.Context, store adminStore, args []string, stdout,
 		fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%d\n", r.Email, r.Game, r.Requests, r.Bytes, r.Errors)
 	}
 	return flushTab(tw)
+}
+
+// keyKindFor is live when the account has an active Stripe entitlement, else demo.
+func keyKindFor(ctx context.Context, store adminStore, accountID int64) (apiaccess.KeyKind, error) {
+	ents, err := store.ListEntitlements(ctx, accountID)
+	if err != nil {
+		return "", err
+	}
+	if apiaccess.HasActiveStripePlan(ents, time.Now()) {
+		return apiaccess.KeyLive, nil
+	}
+	return apiaccess.KeyDemo, nil
 }
 
 func exitFor(email string) int {

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/lib/pq"
 )
@@ -46,14 +47,29 @@ func (e Entitlement) ActiveAt(now time.Time) bool {
 	return e.ValidUntil == nil || now.Before(*e.ValidUntil)
 }
 
-// ValidateStoreScope canonicalizes a preset or a store list against knownStores.
-func ValidateStoreScope(scope string, knownStores []string) (string, error) {
-	return canonicalStoreScope(scope, knownStores, true)
+// IsActiveStripePlan reports whether e is a currently active Stripe entitlement.
+func (e Entitlement) IsActiveStripePlan(now time.Time) bool {
+	return e.Source == "stripe" && e.ActiveAt(now)
 }
 
-// canonicalStoreScope canonicalizes scope; checkKnown false accepts any store token.
+// HasActiveStripePlan reports whether ents includes an active Stripe entitlement.
+func HasActiveStripePlan(ents []Entitlement, now time.Time) bool {
+	for _, e := range ents {
+		if e.IsActiveStripePlan(now) {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateStoreScope canonicalizes a preset or a list of backend shorthands, checking syntax only.
+func ValidateStoreScope(scope string) (string, error) {
+	return canonicalStoreScope(scope)
+}
+
+// canonicalStoreScope canonicalizes scope; operators type shorthands and nothing checks them against a list.
 // Presets are case-insensitive; explicit tokens are backend shorthands and keep their case.
-func canonicalStoreScope(scope string, knownStores []string, checkKnown bool) (string, error) {
+func canonicalStoreScope(scope string) (string, error) {
 	scope = strings.TrimSpace(scope)
 	switch strings.ToUpper(scope) {
 	case ScopeAll, ScopeBase:
@@ -61,18 +77,14 @@ func canonicalStoreScope(scope string, knownStores []string, checkKnown bool) (s
 	case "DEV_ACCESS":
 		return "", errors.New("DEV_ACCESS cannot be granted")
 	}
-	known := map[string]bool{}
-	for _, s := range knownStores {
-		known[s] = true
-	}
 	var out []string
 	for _, part := range strings.Split(scope, ",") {
 		s := strings.TrimSpace(part)
 		if s == "" {
 			continue
 		}
-		if checkKnown && !known[s] {
-			return "", fmt.Errorf("unknown store %q", s)
+		if strings.ContainsFunc(s, unicode.IsSpace) {
+			return "", fmt.Errorf("store %q has a space; separate stores with commas", s)
 		}
 		if !slices.Contains(out, s) {
 			out = append(out, s)
@@ -130,7 +142,7 @@ func scanEntitlement(row scanner) (Entitlement, error) {
 
 // prepare canonicalizes and validates e and returns the nullable columns.
 func (c *Client) prepare(e Entitlement) (Entitlement, sql.NullTime, sql.NullString, error) {
-	scope, err := canonicalStoreScope(e.StoreScope, c.KnownStores, len(c.KnownStores) > 0)
+	scope, err := canonicalStoreScope(e.StoreScope)
 	if err != nil {
 		return Entitlement{}, sql.NullTime{}, sql.NullString{}, err
 	}

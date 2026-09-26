@@ -52,6 +52,7 @@ var schemaStatements = []string{
 )`,
 	`CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage (ts)`,
 	`CREATE INDEX IF NOT EXISTS idx_usage_account_ts ON usage (account_id, ts)`,
+	`CREATE INDEX IF NOT EXISTS idx_usage_key_ts ON usage (key_id, ts)`,
 	// Appended so an existing database picks it up on the next start.
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_live_prefix ON api_keys (prefix) WHERE revoked_at IS NULL`,
 	// Phase 2: Stripe.
@@ -105,6 +106,8 @@ var schemaStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_magic_links_expires ON magic_links (expires_at)`,
 	`CREATE INDEX IF NOT EXISTS idx_handoff_nonces_expires ON handoff_nonces (expires_at)`,
 	`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS session_epoch bigint NOT NULL DEFAULT 0`,
+	// Keys minted before this column existed were all live.
+	`ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'ban_live'`,
 }
 
 func ensureSchema(db *sql.DB) error {

@@ -41,13 +41,15 @@ type Store interface {
 	CreateMagicLink(ctx context.Context, accountID int64, ttl time.Duration) (string, error)
 	ConsumeMagicLink(ctx context.Context, token string, now time.Time) (apiaccess.Account, error)
 	DeleteMagicLink(ctx context.Context, token string) error
-	CreateKey(ctx context.Context, accountID int64, label string) (string, apiaccess.Key, error)
+	CreateKey(ctx context.Context, accountID int64, label string, kind apiaccess.KeyKind) (string, apiaccess.Key, error)
 	ListKeys(ctx context.Context, accountID int64) ([]apiaccess.Key, error)
 	RevokeKey(ctx context.Context, id, accountID int64) (apiaccess.Key, error)
 	ListEntitlements(ctx context.Context, accountID int64) ([]apiaccess.Entitlement, error)
 	AddEntitlement(ctx context.Context, e apiaccess.Entitlement) (apiaccess.Entitlement, error)
 	EndEntitlement(ctx context.Context, id int64, at time.Time) error
 	SummarizeUsage(ctx context.Context, since, until time.Time, accountID int64) ([]apiaccess.UsageRow, error)
+	UsageByKey(ctx context.Context, since, until time.Time, accountID int64) ([]apiaccess.KeyUsageRow, error)
+	TopPaths(ctx context.Context, since, until time.Time, keyID int64, limit int) ([]apiaccess.PathUsageRow, error)
 	CreateTrial(ctx context.Context, email string, accountID int64, endsAt, notBefore time.Time) (apiaccess.Trial, error)
 	DeleteTrial(ctx context.Context, id int64) error
 	LastTrial(ctx context.Context, email string) (apiaccess.Trial, error)
@@ -59,6 +61,7 @@ type Store interface {
 	ConsumeNonce(ctx context.Context, nonce string, expiresAt, now time.Time) error
 	RecordAdminAction(ctx context.Context, actor, action string, accountID int64, target, detail string) error
 	ListAdminActions(ctx context.Context, accountID int64, limit int) ([]apiaccess.AdminAction, error)
+	ListDemoAccess(ctx context.Context) ([]apiaccess.DemoAccess, error)
 }
 
 var _ Store = (*apiaccess.Client)(nil)
@@ -82,12 +85,12 @@ func Reserved(path string) bool {
 
 // Server serves the customer and admin pages.
 type Server struct {
-	Store       Store
-	Catalog     *apiproductlist.ProductList
-	Games       []string
-	KnownStores []string
-	Sessions    *session.Codec
-	Mail        mailer.Mailer
+	Store    Store
+	Catalog  *apiproductlist.ProductList
+	Games    []string
+	Stores   billing.StoreLister
+	Sessions *session.Codec
+	Mail     mailer.Mailer
 	// Stripe, Checkout, Reconcile, and ReconcileAll are nil when billing is off
 	Stripe       billing.API
 	Checkout     *billing.Checkout
@@ -122,6 +125,7 @@ type page struct {
 	Notice     string
 	PricingURL string
 	PrivacyURL string
+	GuideURL   string
 	PublicURL  string
 	// Wide lets a page with several tables use more of the viewport.
 	Wide bool
@@ -187,6 +191,12 @@ func (s *Server) now() time.Time {
 	return time.Now()
 }
 
+// monthStart is the first instant of now's month in UTC.
+func monthStart(now time.Time) time.Time {
+	utc := now.UTC()
+	return time.Date(utc.Year(), utc.Month(), 1, 0, 0, 0, 0, time.UTC)
+}
+
 func (s *Server) logf(format string, args ...any) {
 	if s.Log != nil {
 		s.Log.Printf(format, args...)
@@ -215,7 +225,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 // pageFor is the common page frame for sess.
 func (s *Server) pageFor(sess *session.Session, title string) page {
-	p := page{Title: title, Session: sess, PricingURL: s.PricingURL, PublicURL: s.PublicURL, PrivacyURL: siteOrigin(s.PricingURL) + "/privacy"}
+	p := page{Title: title, Session: sess, PricingURL: s.PricingURL, PublicURL: s.PublicURL, PrivacyURL: siteOrigin(s.PricingURL) + "/privacy", GuideURL: siteOrigin(s.PricingURL) + "/guide#api-getting-started"}
 	if sess != nil {
 		p.CSRF = s.Sessions.CSRF(*sess)
 	}
@@ -231,6 +241,9 @@ func (s *Server) render(w http.ResponseWriter, status int, name string, p page) 
 	}
 	if p.PrivacyURL == "" {
 		p.PrivacyURL = siteOrigin(s.PricingURL) + "/privacy"
+	}
+	if p.GuideURL == "" {
+		p.GuideURL = siteOrigin(s.PricingURL) + "/guide#api-getting-started"
 	}
 	var buf bytes.Buffer
 	if err := s.tmpl.ExecuteTemplate(&buf, name, p); err != nil {

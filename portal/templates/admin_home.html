@@ -14,6 +14,18 @@
   </tbody>
 </table>
 
+<h2>Demo access</h2>
+{{if .Demo}}
+<table>
+  <thead><tr><th>Account</th><th>Kind</th><th>Requested by</th><th>Note</th><th>Granted</th><th>Ends</th><th>Keys</th><th>Last used</th></tr></thead>
+  <tbody>
+  {{range .Demo}}<tr><td><a href="/admin/accounts/{{.AccountID}}">{{.Email}}</a></td><td>{{.Source}}</td><td>{{.Requester}}</td><td>{{.Note}}</td><td>{{date .GrantedAt}}</td><td>{{if .EndsAt}}{{date .EndsAt}}{{else}}open{{end}}</td><td>{{.Keys}}</td><td>{{if .LastUsed}}{{date .LastUsed}}{{else}}never{{end}}</td></tr>{{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="dim">No trial or manual access is active.</p>
+{{end}}
+
 <h2>Activity</h2>
 <table>
   <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Account</th><th>Target</th><th>Detail</th></tr></thead>

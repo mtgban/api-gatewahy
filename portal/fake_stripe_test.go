@@ -87,8 +87,48 @@ func (f *fakeStripe) UpdateSubscription(_ context.Context, _ string, p *stripe.S
 func (ts *testServer) withStripe() *fakeStripe {
 	f := &fakeStripe{prices: seededPrices(ts.Catalog)}
 	ts.Stripe = f
-	ts.Checkout = &billing.Checkout{Store: ts.store, API: f, Catalog: ts.Catalog, Games: ts.Games,
+	ts.Checkout = &billing.Checkout{Store: ts.store, API: f, Catalog: ts.Catalog, Stores: ts.Stores, Games: ts.Games,
 		SuccessURL: ts.PublicURL + ts.SuccessPath, CancelURL: ts.PublicURL + ts.CancelPath, Now: ts.Now}
 	ts.Reconcile = func(context.Context, string) error { return nil }
 	return f
+}
+
+// fakeStores is a StoreLister over two fixed game sites; fail makes every call error.
+type fakeStores struct {
+	sites map[string]billing.SiteStores
+	fail  error
+	down  map[string]bool
+	calls map[string]int
+}
+
+func newFakeStores() *fakeStores {
+	tcg := billing.StoreFamily{Key: "tcgplayer", Name: "TCGplayer", Shorthands: []string{"TCGLow", "TCGMarket", "TCGDirect", "TCGDirectNet", "TCGPlayer"}}
+	return &fakeStores{sites: map[string]billing.SiteStores{
+		"magic": {Game: "magic", Implied: []billing.StoreFamily{tcg}, Stores: []billing.StoreFamily{
+			{Key: "cardkingdom", Name: "Card Kingdom", Shorthands: []string{"CK"}},
+			{Key: "starcitygames", Name: "Star City Games", Shorthands: []string{"SCG"}},
+		}},
+		"pokemon": {Game: "pokemon", Implied: []billing.StoreFamily{tcg}, Stores: []billing.StoreFamily{
+			{Key: "cardkingdom", Name: "Card Kingdom", Shorthands: []string{"CK", "CKBLLast"}},
+			{Key: "trollandtoad", Name: "Troll and Toad", Shorthands: []string{"TNT"}},
+		}},
+	}}
+}
+
+func (f *fakeStores) SiteStores(_ context.Context, game string) (billing.SiteStores, error) {
+	if f.calls == nil {
+		f.calls = map[string]int{}
+	}
+	f.calls[game]++
+	if f.down[game] {
+		return billing.SiteStores{}, fmt.Errorf("fake stores: %s is down", game)
+	}
+	if f.fail != nil {
+		return billing.SiteStores{}, f.fail
+	}
+	site, ok := f.sites[game]
+	if !ok {
+		return billing.SiteStores{}, fmt.Errorf("fake stores: no site for %s", game)
+	}
+	return site, nil
 }
