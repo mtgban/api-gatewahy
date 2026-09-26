@@ -52,6 +52,8 @@ type memStore struct {
 	listEntitlementsErr error
 	listActionsErr      error
 	usageErr            error
+	// usageByKeyCalls counts UsageByKey calls, so a test can prove it stayed unrun.
+	usageByKeyCalls int
 }
 
 func newMemStore() *memStore {
@@ -350,6 +352,7 @@ func (m *memStore) addUsage(accountID, keyID int64, game, path string, status in
 func (m *memStore) UsageByKey(_ context.Context, since, until time.Time, accountID int64) ([]apiaccess.KeyUsageRow, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.usageByKeyCalls++
 	if m.usageErr != nil {
 		return nil, m.usageErr
 	}

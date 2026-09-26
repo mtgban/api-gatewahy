@@ -351,11 +351,15 @@ func TestAdminUsageByKeyAndPaths(t *testing.T) {
 	ts.store.addUsage(a.ID, k.ID, "magic", "/retail/ZEN.json", 200, ts.now.Add(-time.Hour))
 	ts.store.addUsage(a.ID, k.ID, "magic", "/sets.json", 404, ts.now.Add(-time.Hour))
 	since, until := ts.now.Add(-48*time.Hour).Format("2006-01-02"), ts.now.Add(24*time.Hour).Format("2006-01-02")
-	body := ts.do("GET", "/admin/usage?since="+since+"&until="+until+"&key="+k.Prefix, "", ck).Body.String()
+	filters := "since=" + since + "&until=" + until + "&email=u@example.com"
+	body := ts.do("GET", "/admin/usage?"+filters+"&key="+k.Prefix, "", ck).Body.String()
 	for _, want := range []string{"By key", k.Prefix, "laptop", "/retail/ZEN.json", "/sets.json"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("usage page lacks %q", want)
 		}
+	}
+	if !strings.Contains(body, `<input type="hidden" name="key" value="`+k.Prefix+`">`) {
+		t.Error("the filter form does not carry the key filter")
 	}
 	body = ts.do("GET", "/admin/accounts/"+strconv.FormatInt(a.ID, 10), "", ck).Body.String()
 	if !strings.Contains(body, "Usage this month") || !strings.Contains(body, k.Prefix) {
@@ -367,5 +371,25 @@ func TestAdminUsageByKeyAndPaths(t *testing.T) {
 	// Only the usage table renders the day's two requests and one error.
 	if !strings.Contains(body, "<td>2</td><td>1</td>") {
 		t.Error("account page lacks the request and error counts")
+	}
+}
+
+func TestAdminUsageByKeyNeedsAnAccount(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, _ := ts.signIn(t, "admin@example.com")
+	ctx := context.Background()
+	a, _ := ts.store.GetOrCreateAccount(ctx, "u@example.com", "")
+	_, k, _ := ts.store.CreateKey(ctx, a.ID, "laptop", apiaccess.KeyLive)
+	ts.store.addUsage(a.ID, k.ID, "magic", "/retail/ZEN.json", 200, ts.now.Add(-time.Hour))
+
+	body := ts.do("GET", "/admin/usage", "", ck).Body.String()
+	if !strings.Contains(body, "Filter by account to see requests per key.") {
+		t.Error("the usage page does not say how to see requests per key")
+	}
+	if strings.Contains(body, "<th>Key</th>") {
+		t.Error("the by-key table rendered without an account filter")
+	}
+	if n := ts.store.usageByKeyCalls; n != 0 {
+		t.Errorf("UsageByKey ran %d times without an account filter", n)
 	}
 }
