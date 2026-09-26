@@ -20,7 +20,7 @@
     {{end}}
   </span>
 </nav>
-<main class="page">
+<main class="page{{if .Wide}} page-wide{{end}}">
 {{if .Error}}<div class="msg msg-error">{{.Error}}</div>{{end}}
 {{if .Notice}}<div class="msg">{{.Notice}}</div>{{end}}
 {{end}}
