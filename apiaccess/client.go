@@ -20,15 +20,6 @@ var ErrNotFound = errors.New("apiaccess: not found")
 // Client wraps a connection pool and the schema it expects.
 type Client struct {
 	db *sql.DB
-
-	// KnownStores restricts the store tokens AddEntitlement will store.
-	// Empty accepts any token, but never DEV_ACCESS or an empty scope.
-	KnownStores []string
-}
-
-// SetKnownStores sets the store tokens AddEntitlement accepts.
-func (c *Client) SetKnownStores(stores []string) {
-	c.KnownStores = stores
 }
 
 // NewClient opens a pool, pings, and ensures the schema.

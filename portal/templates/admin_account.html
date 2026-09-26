@@ -99,7 +99,7 @@
     <input type="hidden" name="csrf" value="{{$.CSRF}}">
     <label>Games</label>
     <div class="chips">{{range .Games}}<label class="chip"><input type="checkbox" name="games" value="{{.}}"> {{.}}</label>{{end}}</div>
-    <label for="stores">Stores</label>
+    <label for="stores">Stores (a preset, or backend shorthands typed exactly)</label>
     <input id="stores" type="text" name="stores" placeholder="ALL_ACCESS, BASE_ACCESS, or TCGLow,CK,SCG" required>
     <label>Modes</label>
     <div class="chips">{{range .Modes}}<label class="chip"><input type="checkbox" name="modes" value="{{.}}"> {{.}}</label>{{end}}</div>

@@ -26,12 +26,12 @@ func changes(params *stripe.SubscriptionUpdateParams) []itemChange {
 func TestChangePlanRewritesItems(t *testing.T) {
 	f := seededFake(t)
 	ctx := context.Background()
-	current, _ := Plan{Package: "starter", Interval: "quarterly", Games: []string{"magic"}, Stores: []string{"CK"}}.Normalize(testCatalog)
+	current, _ := Plan{Package: "starter", Interval: "quarterly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}}.Normalize(testCatalog)
 	f.addSub(t, "sub_1", "cus_7", stripe.SubscriptionStatusActive, current.Metadata(7), periodEnd, fakeItem{"starter_quarterly", 1})
 	rc := &recorder{}
 
 	// Interval "monthly" here is ignored: the subscription is quarterly and stays so.
-	got, err := ChangePlan(ctx, f, testCatalog, testGames, testAccount, "sub_1",
+	got, err := ChangePlan(ctx, f, testCatalog, newFakeStores(), testGames, testAccount, "sub_1",
 		Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic", "pokemon"}}, rc.reconcile)
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +65,7 @@ func TestChangePlanAdjustsQuantities(t *testing.T) {
 	current, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic", "pokemon"}}.Normalize(testCatalog)
 	f.addSub(t, "sub_1", "cus_7", stripe.SubscriptionStatusActive, current.Metadata(7), periodEnd, fakeItem{"all_data_monthly", 1}, fakeItem{"extra_game_monthly", 1})
 	rc := &recorder{}
-	if _, err := ChangePlan(ctx, f, testCatalog, testGames, testAccount, "sub_1",
+	if _, err := ChangePlan(ctx, f, testCatalog, newFakeStores(), testGames, testAccount, "sub_1",
 		Plan{Package: "all_data", Games: []string{"magic", "pokemon", "lorcana"}}, rc.reconcile); err != nil {
 		t.Fatal(err)
 	}
@@ -81,19 +81,19 @@ func TestChangePlanRefuses(t *testing.T) {
 	current, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
 	f.addSub(t, "sub_1", "cus_7", stripe.SubscriptionStatusActive, current.Metadata(99), periodEnd, fakeItem{"all_data_monthly", 1})
 	rc := &recorder{}
-	if _, err := ChangePlan(ctx, f, testCatalog, testGames, testAccount, "sub_1", Plan{Package: "all_stores", Games: []string{"magic"}}, rc.reconcile); err == nil {
+	if _, err := ChangePlan(ctx, f, testCatalog, newFakeStores(), testGames, testAccount, "sub_1", Plan{Package: "all_stores", Games: []string{"magic"}}, rc.reconcile); err == nil {
 		t.Error("another account's subscription was changed")
 	}
-	if _, err := ChangePlan(ctx, f, testCatalog, testGames, testAccount, "sub_missing", Plan{Package: "all_stores", Games: []string{"magic"}}, rc.reconcile); err == nil {
+	if _, err := ChangePlan(ctx, f, testCatalog, newFakeStores(), testGames, testAccount, "sub_missing", Plan{Package: "all_stores", Games: []string{"magic"}}, rc.reconcile); err == nil {
 		t.Error("missing subscription accepted")
 	}
 	mine, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
 	f.addSub(t, "sub_2", "cus_7", stripe.SubscriptionStatusActive, mine.Metadata(7), periodEnd, fakeItem{"all_data_monthly", 1})
-	if _, err := ChangePlan(ctx, f, testCatalog, testGames, testAccount, "sub_2", Plan{Package: "starter", Games: []string{"magic"}}, rc.reconcile); err == nil {
+	if _, err := ChangePlan(ctx, f, testCatalog, newFakeStores(), testGames, testAccount, "sub_2", Plan{Package: "starter", Games: []string{"magic"}}, rc.reconcile); err == nil {
 		t.Error("starter without stores accepted")
 	}
 	f.fail["UpdateSubscription"] = errors.New("stripe down")
-	if _, err := ChangePlan(ctx, f, testCatalog, testGames, testAccount, "sub_2", Plan{Package: "all_stores", Games: []string{"magic"}}, rc.reconcile); err == nil {
+	if _, err := ChangePlan(ctx, f, testCatalog, newFakeStores(), testGames, testAccount, "sub_2", Plan{Package: "all_stores", Games: []string{"magic"}}, rc.reconcile); err == nil {
 		t.Error("stripe failure swallowed")
 	}
 	if len(rc.ids) != 0 {

@@ -51,7 +51,6 @@ type Config struct {
 	Observability          *timeseries.SQLConfig `json:"observability_config"`
 	DiscordHook            string                `json:"discord_api_notif_hook"`
 	Games                  map[string]Game       `json:"games"`
-	KnownStores            []string              `json:"known_stores"`
 	CacheTTLSeconds        int                   `json:"cache_ttl_seconds"`
 	StaleGraceSeconds      int                   `json:"stale_grace_seconds"`
 	PerKeyRequestsPerSec   float64               `json:"per_key_requests_per_sec"`

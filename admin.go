@@ -41,7 +41,7 @@ func init() {
 			usage: adminUsage[name],
 			run: func(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 				return withStore(ctx, args, stderr, func(store *apiaccess.Client, cfg *config.Config, rest []string) int {
-					return runAdmin(ctx, store, cfg.KnownStores, cfg.GameNames(), name, rest, stdout, stderr)
+					return runAdmin(ctx, store, cfg.GameNames(), name, rest, stdout, stderr)
 				})
 			},
 		}
@@ -92,12 +92,11 @@ func withStore(ctx context.Context, args []string, stderr io.Writer, fn func(*ap
 		return 1
 	}
 	defer func() { _ = store.Close() }()
-	store.SetKnownStores(cfg.KnownStores)
 	return fn(store, cfg, args)
 }
 
 // runAdmin dispatches one operator command. Exit codes: 0 ok, 1 error, 2 usage.
-func runAdmin(ctx context.Context, store adminStore, knownStores, knownGames []string, cmd string, args []string, stdout, stderr io.Writer) int {
+func runAdmin(ctx context.Context, store adminStore, knownGames []string, cmd string, args []string, stdout, stderr io.Writer) int {
 	fail := func(err error) int {
 		fmt.Fprintln(stderr, "api-gatewahy:", err)
 		return 1
@@ -117,7 +116,7 @@ func runAdmin(ctx context.Context, store adminStore, knownStores, knownGames []s
 	label := fs.String("label", "", "key label")
 	prefix := fs.String("prefix", "", "key prefix as shown by key list")
 	games := fs.String("games", "", "comma-separated game names")
-	stores := fs.String("stores", "", "ALL_ACCESS, BASE_ACCESS, or a comma-separated store list")
+	stores := fs.String("stores", "", "ALL_ACCESS, BASE_ACCESS, or comma-separated backend shorthands, typed exactly")
 	modes := fs.String("modes", "", "comma-separated subset of retail,buylist,sealed")
 	until := fs.String("until", "", "end date YYYY-MM-DD, exclusive")
 	id := fs.Int64("id", 0, "entitlement id")
@@ -245,7 +244,7 @@ func runAdmin(ctx context.Context, store adminStore, knownStores, knownGames []s
 		if !need("games", *games) || !need("stores", *stores) || !need("modes", *modes) {
 			return 2
 		}
-		scope, err := apiaccess.ValidateStoreScope(*stores, knownStores)
+		scope, err := apiaccess.ValidateStoreScope(*stores)
 		if err != nil {
 			return fail(err)
 		}

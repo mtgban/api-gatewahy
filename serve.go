@@ -104,7 +104,6 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer func() { _ = store.Close() }()
-	store.SetKnownStores(cfg.KnownStores)
 
 	var events gateway.EventSink
 	if cfg.Observability != nil {
@@ -255,19 +254,17 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 
 	var (
 		cat     *apiproductlist.ProductList
+		stores  billing.StoreLister
 		rec     *billing.Reconciler
 		webhook http.Handler
 		web     *portal.Server
 	)
 	if sd != nil || pd != nil {
 		cat = apiproductlist.MustLoad()
-		if err := checkCatalogStores(cat, cfg.KnownStores); err != nil {
-			abort()
-			return nil, nil, err
-		}
+		stores = billing.NewSiteStoreClient(cfg, alert)
 	}
 	if sd != nil {
-		rec = newReconciler(store, sd.api, cfg, cat, alert)
+		rec = newReconciler(store, sd.api, cfg, cat, stores, alert)
 		webhook = &billing.Webhook{Secret: sd.webhookSecret, Ledger: store, Reconcile: rec.Subscription}
 		jobs.Add(1)
 		go func() {
@@ -288,7 +285,7 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 			return nil, nil, err
 		}
 		web = &portal.Server{
-			Store: store, Catalog: cat, Games: cfg.GameNames(), KnownStores: cfg.KnownStores,
+			Store: store, Catalog: cat, Games: cfg.GameNames(), Stores: stores,
 			Sessions:          &session.Codec{Secret: pd.sessionSecret, Secure: strings.HasPrefix(cfg.PublicURL, "https://")},
 			Mail:              pd.mail,
 			PublicURL:         strings.TrimRight(cfg.PublicURL, "/"),
@@ -303,7 +300,7 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 		}
 		if sd != nil {
 			web.Stripe = sd.api
-			web.Checkout = newCheckout(store, sd.api, cfg, cat)
+			web.Checkout = newCheckout(store, sd.api, cfg, cat, stores)
 			web.Reconcile = rec.Subscription
 			web.ReconcileAll = rec.All
 		}
@@ -333,26 +330,6 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 		IdleTimeout:  120 * time.Second,
 	}
 	return srv, abort, nil
-}
-
-// checkCatalogStores fails startup if known_stores would silently drop a
-// catalog shorthand from every future store-scope grant.
-func checkCatalogStores(cat *apiproductlist.ProductList, known []string) error {
-	if len(known) == 0 {
-		return nil
-	}
-	knownSet := map[string]bool{}
-	for _, s := range known {
-		knownSet[s] = true
-	}
-	for _, st := range cat.Stores {
-		for _, sh := range st.Shorthands {
-			if !knownSet[sh] {
-				return fmt.Errorf("known_stores is missing catalog shorthand %q; add it or clear known_stores", sh)
-			}
-		}
-	}
-	return nil
 }
 
 // gameSecrets is each configured game's shared secret, the one the gateway

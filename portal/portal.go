@@ -85,12 +85,12 @@ func Reserved(path string) bool {
 
 // Server serves the customer and admin pages.
 type Server struct {
-	Store       Store
-	Catalog     *apiproductlist.ProductList
-	Games       []string
-	KnownStores []string
-	Sessions    *session.Codec
-	Mail        mailer.Mailer
+	Store    Store
+	Catalog  *apiproductlist.ProductList
+	Games    []string
+	Stores   billing.StoreLister
+	Sessions *session.Codec
+	Mail     mailer.Mailer
 	// Stripe, Checkout, Reconcile, and ReconcileAll are nil when billing is off
 	Stripe       billing.API
 	Checkout     *billing.Checkout

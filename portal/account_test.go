@@ -81,7 +81,7 @@ func TestPortalAndPlanChange(t *testing.T) {
 	ctx := context.Background()
 	_, _ = ts.store.SetStripeCustomerID(ctx, a.ID, "cus_test")
 	_, _ = ts.store.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "TCGLow,TCGMarket,TCGDirect,TCGDirectNet,TCGPlayer,CK", Modes: []string{"retail", "buylist"}, Status: "active", ExternalRef: "sub_1"})
-	current := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"CK"}}
+	current := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}}
 	f.sub = &stripe.Subscription{ID: "sub_1", Metadata: current.Metadata(a.ID), Customer: &stripe.Customer{ID: "cus_test"},
 		Items: &stripe.SubscriptionItemList{Data: []*stripe.SubscriptionItem{{ID: "si_1", Quantity: 1, Price: &stripe.Price{ID: "price_starter_monthly", LookupKey: "starter_monthly"}}}}}
 
@@ -95,7 +95,7 @@ func TestPortalAndPlanChange(t *testing.T) {
 		t.Fatalf("no change link in %s", body)
 	}
 	u, _ := url.Parse(strings.ReplaceAll(changeURL[1], "&amp;", "&"))
-	if u.Query().Get("change") != "1" || u.Query().Get("package") != "starter" || u.Query().Get("stores") != "CK" || u.Query().Get("games") != "magic" {
+	if u.Query().Get("change") != "1" || u.Query().Get("package") != "starter" || u.Query().Get("stores") != "cardkingdom" || u.Query().Get("games") != "magic" {
 		t.Errorf("change link %q", changeURL[1])
 	}
 
@@ -116,18 +116,18 @@ func TestPortalAndPlanChange(t *testing.T) {
 		t.Errorf("portal: %d %q", rec.Code, rec.Header().Get("Location"))
 	}
 
-	rec = ts.do("GET", "/checkout?change=1&package=starter&games=magic&stores=CK,SCG&return_to=https%3A%2F%2Fmtgban.com%2Fapi-plans", "", ck)
+	rec = ts.do("GET", "/checkout?change=1&package=starter&games=magic&stores=cardkingdom,starcitygames&return_to=https%3A%2F%2Fmtgban.com%2Fapi-plans", "", ck)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `action="/account/plan"`) || !strings.Contains(rec.Body.String(), "$350") {
 		t.Fatalf("change confirm: %d %s", rec.Code, rec.Body.String())
 	}
 	reconciled := ""
 	ts.Reconcile = func(_ context.Context, id string) error { reconciled = id; return nil }
-	rec = ts.do("POST", "/account/plan", "csrf="+csrf+"&package=starter&interval=monthly&games=magic&stores=CK,SCG", ck)
+	rec = ts.do("POST", "/account/plan", "csrf="+csrf+"&package=starter&interval=monthly&games=magic&stores=cardkingdom,starcitygames", ck)
 	if rec.Code != 302 || rec.Header().Get("Location") != "/account?notice=plan" || reconciled != "sub_1" || f.updated == nil {
 		t.Errorf("change: %d %q reconciled %q updated %v", rec.Code, rec.Header().Get("Location"), reconciled, f.updated != nil)
 	}
 
-	rec = ts.do("POST", "/account/plan", "csrf="+csrf+"&package=starter&interval=monthly&games=chess&stores=CK", ck)
+	rec = ts.do("POST", "/account/plan", "csrf="+csrf+"&package=starter&interval=monthly&games=chess&stores=cardkingdom", ck)
 	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "chess") {
 		t.Errorf("unknown game: %d %s", rec.Code, rec.Body.String())
 	}
@@ -260,5 +260,63 @@ func TestRejectedKeyCreationKeepsTheQuota(t *testing.T) {
 	rec := ts.do("POST", "/account/keys", "csrf="+csrf+"&label=laptop", ck)
 	if rec.Code != 200 {
 		t.Fatalf("a rejected request spent the hourly quota: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPrefillMapsShorthandsBackToKeys(t *testing.T) {
+	ts := newTestServer(t)
+	ctx := context.Background()
+	plan := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom", "starcitygames"}}
+	resolved, err := plan.Resolve(ctx, ts.Catalog, ts.Stores)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := apiaccess.Entitlement{Source: "stripe", Games: plan.Games, StoreScope: resolved.Scope + ",GoneStore"}
+	q := ts.prefillQuery(ts.newSiteLookup(ctx), e)
+	if q.Get("package") != "starter" || q.Get("stores") != "cardkingdom,starcitygames" || q.Get("games") != "magic,pokemon" || q.Get("change") != "1" {
+		t.Errorf("prefill %v", q)
+	}
+	if q := ts.prefillQuery(ts.newSiteLookup(ctx), apiaccess.Entitlement{Games: []string{"magic"}, StoreScope: "ALL_ACCESS"}); q.Get("package") != "all_data" || q.Has("stores") {
+		t.Errorf("preset prefill %v", q)
+	}
+}
+
+func TestPrefillKeepsTheStoresOutWhenASiteIsDown(t *testing.T) {
+	ts := newTestServer(t)
+	ts.Stores.(*fakeStores).down = map[string]bool{"pokemon": true}
+	e := apiaccess.Entitlement{Source: "stripe", Games: []string{"magic", "pokemon"}, StoreScope: "CK,SCG,TCGLow,TNT"}
+	if q := ts.prefillQuery(ts.newSiteLookup(context.Background()), e); q.Has("stores") || q.Get("package") != "starter" {
+		t.Errorf("prefill with pokemon down %v", q)
+	}
+}
+
+func TestAccountPageReadsEachSiteOnce(t *testing.T) {
+	ts := newTestServer(t)
+	a, ck, _ := ts.signIn(t, "ann@example.com")
+	ctx := context.Background()
+	for _, ref := range []string{"sub_1", "sub_2"} {
+		_, _ = ts.store.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "CK,TCGLow", Modes: []string{"retail"}, Status: "active", ExternalRef: ref})
+	}
+	rec := ts.do("GET", "/account", "", ck)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "Card Kingdom") {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if n := ts.Stores.(*fakeStores).calls["magic"]; n != 1 {
+		t.Errorf("magic read %d times for one render", n)
+	}
+}
+
+func TestPlanChangeRejectsAStoreTheSitesDoNotSell(t *testing.T) {
+	ts := newTestServer(t)
+	f := ts.withStripe()
+	a, ck, csrf := ts.signIn(t, "ann@example.com")
+	ctx := context.Background()
+	_, _ = ts.store.SetStripeCustomerID(ctx, a.ID, "cus_test")
+	_, _ = ts.store.AddEntitlement(ctx, entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
+	f.sub = &stripe.Subscription{ID: "sub_1", Customer: &stripe.Customer{ID: "cus_test"},
+		Metadata: billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID)}
+	rec := ts.do("POST", "/account/plan", "csrf="+csrf+"&package=starter&interval=monthly&games=magic&stores=trollandtoad", ck)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "Store trollandtoad is not available for the games you picked.") || f.updated != nil {
+		t.Errorf("%d %v %s", rec.Code, f.updated != nil, rec.Body.String())
 	}
 }

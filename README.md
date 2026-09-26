@@ -121,11 +121,13 @@ may appear anywhere in the command line, before or after the verb:
 
 - `add -email -games -stores -modes -until -note`: `-games` is a
   comma-separated game list, each name one of the games in the config,
-  `-stores` is `ALL_ACCESS`, `BASE_ACCESS`, or a comma-separated store list
-  drawn from `known_stores`, `-modes` is a comma-separated subset of
+  `-stores` is `ALL_ACCESS`, `BASE_ACCESS`, or a comma-separated list of
+  backend store shorthands, `-modes` is a comma-separated subset of
   `retail,buylist,sealed`, `-until` is `YYYY-MM-DD` (open-ended if omitted).
-  Store shorthands are case-sensitive and must match the backend's spelling,
-  for example `TCGLow` or `CK`.
+  Operators type shorthands exactly as the backend spells them, for example
+  `TCGLow` or `CK`; they are case-sensitive and only their syntax is checked
+  (no spaces inside a shorthand), so a typo grants nothing rather than
+  failing. The admin page's manual entitlement form works the same way.
 - `end -id`: ends an entitlement by id as of now.
 - `list -email`: table of an account's entitlements.
 
@@ -145,8 +147,9 @@ the old one. Run it in test mode and again in live mode.
 
 `checkout link -email -package [-games] [-stores] [-interval] [-invite]`:
 prints a hosted Checkout URL for the account. `-games` defaults to `magic`,
-which is always included. `-stores` applies to `starter` only and lists the
-extra stores from the catalog's `selectable_stores` (TCGplayer is implied).
+which is always included. `-stores` applies to `starter` only and lists store
+family keys (`cardkingdom,starcitygames`), resolved as described under
+[Store families](#store-families); the implied family is added on its own.
 `-interval` defaults to `monthly`; `quarterly` needs `-invite` with a token
 from `invite create`. The account must already exist (`account add`).
 
@@ -192,7 +195,6 @@ JSON, named by `-config` or `BAN_CONFIG_PATH` (a `b2://` path needs
 | `observability_config` | (none, observability disabled) |
 | `discord_api_notif_hook` | (none, alerts disabled) |
 | `games` | required, no default |
-| `known_stores` | (none) |
 | `cache_ttl_seconds` | `60` |
 | `stale_grace_seconds` | `600` |
 | `per_key_requests_per_sec` | `10` |
@@ -394,6 +396,58 @@ Dashboard setup, once per mode (test, then live):
 
 Every entitlement Stripe writes has `source = stripe` and `external_ref` set
 to the subscription id; `grant list` shows them beside manual grants.
+
+### Store families
+
+The pricing page submits store family keys, one `stores` value per picked
+family (`stores=cardkingdom&stores=starcitygames`), and the gateway's change
+plan link carries them comma-joined. A family is one entry of a game site's
+scraper config, keyed by its lowercase config name. The gateway keeps no store
+list of its own: each game site serves its families publicly at
+`GET /api-plans/stores.json` on the origin of that game's `games.<game>.upstream`,
+as `{"game", "implied": [...], "stores": [...]}`, where each family is
+`{"key", "name", "shorthands"}`.
+
+At checkout, on the confirm page, at plan change, and when the webhook or the
+nightly reconcile writes an entitlement, the gateway fetches that list for
+every game in the plan (five second timeout) and caches it per game for five
+minutes; callers that arrive while a game's list is being fetched wait for
+that one fetch. When a refresh fails it keeps serving the last list it had,
+logs the error, and does not try that site again for 30 seconds; with nothing
+cached the checkout page asks the customer to try again in a minute, and no
+Stripe session or entitlement is created. Once a site's list has been stale
+for an hour, one alert goes to the Discord hook for that failure window.
+A request resolves its plan once and reuses the result, and the account and
+admin pages read each game's list once per page. Every key
+must be a selectable family on at least one of the plan's game sites, or the
+customer sees "Store <key> is not available for the games you picked." The
+extra store count is the number of keys past the package's included stores.
+
+The entitlement's store scope is the sorted union of the shorthands of every
+site's implied families and of the picked families, exactly the list the
+backend matches. The scope is whatever the sites list at that moment: a
+reconcile that runs while a site is only partly loaded (a scraper not loaded
+yet, so its shorthands are missing from stores.json) writes a narrower
+explicit scope, and the next reconcile after the site recovers widens it
+again. Presets (`ALL_ACCESS`, `BASE_ACCESS`) are unchanged.
+Subscription metadata keeps the keys, so a reconcile follows the sites' current
+shorthands; if a key stops resolving the reconcile alerts and leaves the row
+as it was, except that a cancelled subscription still ends its row. The
+account page's Change plan link maps a stored scope back to family keys and
+drops any shorthand no current family owns; when one of the plan's sites
+cannot be read it leaves the stores out of the link rather than narrow them. Existing entitlement rows are not
+rewritten, but an `a la carte` subscription created before this change carries
+the old catalog keys (`CK`, `SCG`) in its metadata; those no longer resolve, so
+its reconcile alerts until an operator sets the metadata `stores` to family keys.
+
+`known_stores` is gone from the config. The decoder ignores unknown fields, so
+an old config that still sets it loads, and the value is not read.
+
+This needs the website change that serves `/api-plans/stores.json` and drops
+the store list from `apiproductlist/products.json`. That website PR merges
+first; the gateway's pin of the website module is bumped afterwards (the
+current pin still carries the old store types, which the gateway no longer
+reads).
 
 ## Onboarding a game
 

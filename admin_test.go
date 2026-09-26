@@ -110,7 +110,7 @@ func (m *memStore) RecordAdminAction(_ context.Context, actor, action string, ac
 func admin(t *testing.T, store adminStore, args ...string) (int, string, string) {
 	t.Helper()
 	var out, errb bytes.Buffer
-	code := runAdmin(context.Background(), store, []string{"TCG", "CK"}, []string{"magic", "pokemon"}, args[0], args[1:], &out, &errb)
+	code := runAdmin(context.Background(), store, []string{"magic", "pokemon"}, args[0], args[1:], &out, &errb)
 	return code, out.String(), errb.String()
 }
 
@@ -212,8 +212,8 @@ func TestAdminGrants(t *testing.T) {
 	if code, _, errb := admin(t, s, "grant", "add", "-email", "ck@example.com", "-games", "magic", "-stores", "DEV_ACCESS", "-modes", "retail"); code != 1 || !strings.Contains(errb, "DEV_ACCESS") {
 		t.Errorf("dev access: %d %q", code, errb)
 	}
-	if code, _, errb := admin(t, s, "grant", "add", "-email", "ck@example.com", "-games", "magic", "-stores", "XYZ", "-modes", "retail"); code != 1 || !strings.Contains(errb, "XYZ") {
-		t.Errorf("unknown store: %d %q", code, errb)
+	if code, _, errb := admin(t, s, "grant", "add", "-email", "ck@example.com", "-games", "magic", "-stores", "TCG CK", "-modes", "retail"); code != 1 || !strings.Contains(errb, "TCG CK") {
+		t.Errorf("missing comma: %d %q", code, errb)
 	}
 	if code, _, errb := admin(t, s, "grant", "add", "-email", "ck@example.com", "-games", "magic", "-stores", "TCG", "-modes", "all"); code != 1 || !strings.Contains(errb, "all") {
 		t.Errorf("mode all: %d %q", code, errb)
