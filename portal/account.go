@@ -117,13 +117,16 @@ func mergeQuery(pricingURL string, q url.Values) string {
 // keysPerHour caps how many keys one account can mint in a sliding hour.
 const keysPerHour = 10
 
+// keyAttemptsPerHour bounds the key form itself, so rejected posts cannot hammer the store.
+const keyAttemptsPerHour = 60
+
 // maxActiveKeys caps unrevoked keys per account; one per integration is plenty.
 const maxActiveKeys = 5
 
 // createKey mints a key and shows it once.
 func (s *Server) createKey(w http.ResponseWriter, r *http.Request, sess session.Session, a apiaccess.Account) {
-	if !s.limit.allow("keys:"+itoa(a.ID), keysPerHour, s.now()) {
-		s.renderAccount(w, r, http.StatusTooManyRequests, sess, a, "", "", "Too many keys created in the last hour. Try again later.")
+	if !s.limit.allow("keyattempts:"+itoa(a.ID), keyAttemptsPerHour, s.now()) {
+		s.renderAccount(w, r, http.StatusTooManyRequests, sess, a, "", "", "Too many key requests in the last hour. Try again later.")
 		return
 	}
 	label := strings.TrimSpace(r.FormValue("label"))
@@ -140,6 +143,7 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request, sess session.
 		s.renderAccount(w, r, http.StatusInternalServerError, sess, a, "", "", tryAgainMsg)
 		return
 	}
+	// The count can go stale before the insert; the hourly quota bounds the overshoot.
 	active := 0
 	for _, k := range keys {
 		if k.RevokedAt == nil {
@@ -159,6 +163,10 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request, sess session.
 	kind := apiaccess.KeyDemo
 	if hasPlan {
 		kind = apiaccess.KeyLive
+	}
+	if !s.limit.allow("keys:"+itoa(a.ID), keysPerHour, s.now()) {
+		s.renderAccount(w, r, http.StatusTooManyRequests, sess, a, "", "", "Too many keys created in the last hour. Try again later.")
+		return
 	}
 	plain, k, err := s.Store.CreateKey(r.Context(), a.ID, label, kind)
 	if err != nil {

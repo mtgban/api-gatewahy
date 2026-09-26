@@ -297,13 +297,17 @@ func TestAdminDestructiveButtonsConfirm(t *testing.T) {
 	ts := newTestServer(t)
 	_, ck, _ := ts.signIn(t, "admin@example.com")
 	a, _ := ts.store.GetOrCreateAccount(context.Background(), "cust@example.com", "")
-	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "manual", "BASE_ACCESS"))
-	_, _, _ = ts.store.CreateKey(context.Background(), a.ID, "k", apiaccess.KeyLive)
-	body := ts.do("GET", "/admin/accounts/"+strconv.FormatInt(a.ID, 10), "", ck).Body.String()
-	for _, action := range []string{"/status", "/revoke", "/end"} {
-		i := strings.Index(body, `action="/admin/accounts/`+strconv.FormatInt(a.ID, 10))
-		if i < 0 {
-			t.Fatalf("no form for %s", action)
+	e, _ := ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "manual", "BASE_ACCESS"))
+	_, k, _ := ts.store.CreateKey(context.Background(), a.ID, "k", apiaccess.KeyLive)
+	id := strconv.FormatInt(a.ID, 10)
+	body := ts.do("GET", "/admin/accounts/"+id, "", ck).Body.String()
+	for _, action := range []string{
+		"/admin/accounts/" + id + "/status",
+		"/admin/accounts/" + id + "/keys/" + strconv.FormatInt(k.ID, 10) + "/revoke",
+		"/admin/accounts/" + id + "/entitlements/" + strconv.FormatInt(e.ID, 10) + "/end",
+	} {
+		if !strings.Contains(body, `action="`+action+`" class="inline" onsubmit="return confirm(`) {
+			t.Errorf("no confirming form for %s", action)
 		}
 	}
 	if strings.Count(body, "onsubmit=\"return confirm(") < 3 {

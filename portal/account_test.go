@@ -248,3 +248,17 @@ func TestAccountPageShowsKeyKind(t *testing.T) {
 		}
 	}
 }
+
+func TestRejectedKeyCreationKeepsTheQuota(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, csrf := ts.signIn(t, "many@example.com")
+	for i := 0; i < keysPerHour; i++ {
+		if rec := ts.do("POST", "/account/keys", "csrf="+csrf+"&label=", ck); rec.Code != 400 {
+			t.Fatalf("empty label %d: %d", i, rec.Code)
+		}
+	}
+	rec := ts.do("POST", "/account/keys", "csrf="+csrf+"&label=laptop", ck)
+	if rec.Code != 200 {
+		t.Fatalf("a rejected request spent the hourly quota: %d %s", rec.Code, rec.Body.String())
+	}
+}

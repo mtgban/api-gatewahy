@@ -80,6 +80,9 @@ func (s *Server) renderAdminHome(w http.ResponseWriter, r *http.Request, sess se
 	demo, err := s.Store.ListDemoAccess(r.Context())
 	if err != nil {
 		s.logf("admin demo list: %v", err)
+		if errMsg == "" {
+			errMsg = tryAgainMsg
+		}
 	}
 	actions, err := s.Store.ListAdminActions(r.Context(), 0, 20)
 	if err != nil {
