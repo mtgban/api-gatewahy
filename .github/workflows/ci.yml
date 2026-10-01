@@ -32,14 +32,20 @@ jobs:
           cache: true
       - name: Verify formatting
         run: |
-          unformatted=$(gofmt -l .)
+          unformatted=$(gofmt -s -l .)
           if [ -n "$unformatted" ]; then
-            echo "The following files are not gofmt-formatted:"
+            echo "these files are not gofmt-ed:"
             echo "$unformatted"
             exit 1
           fi
       - name: Vet
         run: go vet ./...
+      - name: Revive
+        run: go run github.com/mgechev/revive@v1.13.0 -set_exit_status -config .revive.toml ./...
+      - name: Staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.1 ./...
+      - name: Govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
       - name: Build
         run: go build ./...
       - name: Test
@@ -47,15 +53,3 @@ jobs:
         run: go test -race -p 1 ./...
         env:
           APIACCESS_TEST_DSN: postgres://postgres:postgres@localhost:5432/apiaccess_test?sslmode=disable
-
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.13.2

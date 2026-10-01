@@ -476,11 +476,13 @@ one instance they are global.
 ```bash
 go build ./...
 go vet ./...
-gofmt -l .                                   # must print nothing
+gofmt -s -l .                                # must print nothing
 go test ./...                                # DB and Stripe tests skip
 APIACCESS_TEST_DSN='postgres://u:p@localhost:5432/scratch?sslmode=disable' \
   go test -race -p 1 ./...                   # what CI runs
-golangci-lint run ./...                      # v2.13.2, as CI pins
+go run github.com/mgechev/revive@v1.13.0 -set_exit_status -config .revive.toml ./...
+go run honnef.co/go/tools/cmd/staticcheck@2026.2.1 ./...
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 ```
 
 - `APIACCESS_TEST_DSN` turns on the `apiaccess` and `billing` DB tests.
@@ -510,8 +512,8 @@ golangci-lint run ./...                      # v2.13.2, as CI pins
 ### 9.3 CI and deploy
 
 - `.github/workflows/ci.yml` on every PR and push to master: `build`
-  (gofmt, vet, build, `go test -race -p 1` against `postgres:16`) and
-  `lint` (golangci-lint v2.13.2: the standard set plus misspell).
+  (gofmt -s, vet, revive v1.13.0 with `.revive.toml`, staticcheck 2026.2.1,
+  govulncheck, build, `go test -race -p 1` against `postgres:16`).
 - `.github/dependabot.yml`: weekly gomod, GitHub Actions and Docker.
 - Deploy: a `v*` tag (or a manual run) of `.github/workflows/deploy.yml`
   runs `doctl apps create-deployment` for the DigitalOcean App Platform app,

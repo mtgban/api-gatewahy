@@ -46,7 +46,7 @@ Recorded 2026-10-01. The items that depended on them are in Phase 2.
   paid. Reconcile alerts if an account still ends up with two.
 - [x] **D7a No `reflect`.** Banned in production code and tests, as in
   go-mtgban and mtgban-website: revive's `imports-blocklist` through
-  golangci-lint, after the 6 billing test files that import it are
+  `.revive.toml`, after the 6 billing test files that import it are
   rewritten.
 - [x] **D7b No rule on calls folded into an `if`.** Follow the
   surrounding code; not a review point and not a sweep target.
@@ -113,7 +113,7 @@ fails before the fix.
 | `/healthz` answers from the process alone; the prober pings the DB and alerts on a state change | D4 | `newMux`, `gateway.Prober` |
 | `always_invoice` when the plan's total goes up | D5 | `ChangePlan` |
 | `Checkout.Create` refuses an active plan and expires other open sessions; one "active plan" predicate; reconcile alerts on two | D6 | `SubscriptionFor` counts `Status == "active"`, `hasActiveStripePlan` uses `ActiveAt`; the CLI never checks |
-| Ban `reflect`: revive `imports-blocklist` in `.golangci.yml`, rewrite the 6 test files with `slices`/`maps` or typed comparisons | D7a | `billing/{seed,entitlement_db,stores,plan,planchange,reconcile}_test.go` |
+| Ban `reflect`: revive `imports-blocklist` in `.revive.toml`, rewrite the 6 test files with `slices`/`maps` or typed comparisons | D7a | `billing/{seed,entitlement_db,stores,plan,planchange,reconcile}_test.go` |
 
 - [ ] D3: reconcile mutex, README note. Issue [#45](https://github.com/mtgban/api-gatewahy/issues/45)
 - [ ] D4: liveness `/healthz`, DB check in the prober. Issue [#46](https://github.com/mtgban/api-gatewahy/issues/46)
