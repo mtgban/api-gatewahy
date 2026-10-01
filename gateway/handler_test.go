@@ -312,10 +312,10 @@ func TestHandlerRejections(t *testing.T) {
 			t.Errorf("%s: status %d want %d (%s)", c.name, rec.Code, c.status, rec.Body.String())
 			continue
 		}
-		if msg, _ := body["error"].(string); !strings.Contains(msg, c.errContains) {
+		if msg := bodyString(body, "error"); !strings.Contains(msg, c.errContains) {
 			t.Errorf("%s: error %q want containing %q", c.name, msg, c.errContains)
 		}
-		if g, _ := body["game"].(string); g != c.game {
+		if g := bodyString(body, "game"); g != c.game {
 			t.Errorf("%s: game %q want %q", c.name, g, c.game)
 		}
 		if rec.Header().Get("Content-Type") != "application/json" {
@@ -594,4 +594,13 @@ func TestClientIPTakesTheLastHeaderValue(t *testing.T) {
 	if got := ClientIP(req, "X-Forwarded-For"); got != "198.51.100.9" {
 		t.Errorf("fallback: %q", got)
 	}
+}
+
+// bodyString returns body[key] when it is a string, and "" otherwise.
+func bodyString(body map[string]any, key string) string {
+	s, ok := body[key].(string)
+	if !ok {
+		return ""
+	}
+	return s
 }

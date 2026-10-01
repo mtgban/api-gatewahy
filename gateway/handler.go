@@ -123,6 +123,16 @@ type proxyParams struct {
 	game     string
 }
 
+// paramsFrom returns the proxyParams ServeHTTP stored in ctx, or the zero
+// value when there are none.
+func paramsFrom(ctx context.Context) proxyParams {
+	p, ok := ctx.Value(ctxKey{}).(proxyParams)
+	if !ok {
+		return proxyParams{}
+	}
+	return p
+}
+
 // newProxy builds the reverse proxy for one game. The game name travels per request.
 func (h *Handler) newProxy(_ string, up Upstream) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
@@ -132,7 +142,7 @@ func (h *Handler) newProxy(_ string, up Upstream) *httputil.ReverseProxy {
 			MaxIdleConnsPerHost:   16,
 		},
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			p, _ := pr.In.Context().Value(ctxKey{}).(proxyParams)
+			p := paramsFrom(pr.In.Context())
 			pr.SetURL(up.URL)
 			pr.Out.URL.Path = p.path
 			pr.Out.URL.RawPath = ""
@@ -181,7 +191,7 @@ func (h *Handler) newProxy(_ string, up Upstream) *httputil.ReverseProxy {
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			p, _ := r.Context().Value(ctxKey{}).(proxyParams)
+			p := paramsFrom(r.Context())
 			var status errUpstreamStatus
 			var netErr net.Error
 			switch {
