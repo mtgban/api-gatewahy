@@ -163,13 +163,11 @@ func TestCreateTrialSerializesConcurrentGrants(t *testing.T) {
 	now := time.Now()
 	var wg sync.WaitGroup
 	results := make(chan error, 8)
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 8 {
+		wg.Go(func() {
 			_, err := c.CreateTrial(ctx, "race@example.com", a.ID, now.AddDate(0, 0, 15), now.AddDate(0, 0, -180))
 			results <- err
-		}()
+		})
 	}
 	wg.Wait()
 	close(results)

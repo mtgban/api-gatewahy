@@ -154,14 +154,12 @@ func TestSiteStoreClientIsSafeForConcurrentUse(t *testing.T) {
 	c := &SiteStoreClient{Origins: map[string]string{"magic": srv.URL, "pokemon": srv.URL}, TTL: time.Nanosecond}
 	var wg sync.WaitGroup
 	for i := range 16 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			game := []string{"magic", "pokemon"}[i%2]
 			if _, err := c.SiteStores(context.Background(), game); err != nil {
 				t.Error(err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -211,13 +209,11 @@ func TestSiteStoreClientFetchesOnceForABurst(t *testing.T) {
 	c := &SiteStoreClient{Origins: map[string]string{"magic": srv.URL}}
 	var wg sync.WaitGroup
 	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if _, err := c.SiteStores(context.Background(), "magic"); err != nil {
 				t.Error(err)
 			}
-		}()
+		})
 	}
 	for hits.Load() == 0 {
 		time.Sleep(time.Millisecond)

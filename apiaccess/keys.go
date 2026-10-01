@@ -19,6 +19,7 @@ import (
 // created it and nothing more; the gateway treats both the same.
 type KeyKind string
 
+// The kinds of key GenerateKey mints.
 const (
 	KeyLive KeyKind = "ban_live"
 	KeyDemo KeyKind = "ban_demo"
