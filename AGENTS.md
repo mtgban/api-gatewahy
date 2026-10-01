@@ -91,8 +91,8 @@ trust their output; todo/refactor.md records the last measurement.
   compare with `slices`/`maps` or a comparison written for the type. Six
   billing test files still import it until todo/refactor.md D7a lands the
   lint rule; don't add a seventh.
-- Calls folded into an `if` (`if err := f(); err != nil`) are not yet
-  ruled on here (todo/refactor.md D7b): follow the surrounding code.
+- Calls folded into an `if` (`if err := f(); err != nil`) are neither
+  required nor banned here, unlike go-mtgban: follow the surrounding code.
 
 ## Where things live
 

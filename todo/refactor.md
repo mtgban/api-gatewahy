@@ -24,14 +24,6 @@ not a code reading. Answers are recorded under Decided.
   the end of the *new*, unpaid period plus `grace_days`: a whole extra
   interval, so with `grace_days = 0` a quarterly customer still keeps three
   months. Should grace run from the end of the last *paid* period?
-- [ ] **D2 Ending a Stripe entitlement from the admin page.** The next
-  webhook or the 03:00 reconcile reopens it. Options: refuse End for
-  `source = stripe` and point to Stripe, or cancel the subscription in
-  Stripe from that button.
-- [ ] **D7b Calls folded into an `if`.** go-mtgban splits
-  `if err := f(); err != nil` into `err := f()` and `if err != nil` for new
-  code; review enforces it, not a linter. There are 130 folded sites here.
-
 ### Decided (2026-10-01)
 
 - [x] **D3 One instance.** The App Platform app runs a single instance.
@@ -109,7 +101,7 @@ fails before the fix.
 | Item | Decision | Evidence |
 |---|---|---|
 | Grace from the last paid period | D1 (open) | `subPeriodEnd` uses the current, unpaid period |
-| Stripe rows: refuse or cancel on End; fix the "cannot be reopened" dialog | D2 (open) | `adminEndEntitlement`, `admin_account.html`, `UpsertStripeEntitlement` |
+| Hide End on Stripe rows and refuse it in `adminEndEntitlement` (and CLI `grant end`), pointing to Stripe and to Suspend | D2 | `admin_account.html`; `UpsertStripeEntitlement` rewrites status from Stripe |
 | Serialize reconciles per subscription with a mutex; `All` re-fetches before writing a status change | D3 | `Reconciler.apply`; `UpsertStripeEntitlement` is last-writer-wins |
 | README: one instance; the per-hour limits are per process | D3 | README "Customer pages", Configuration |
 | `/healthz` answers from the process alone; the prober pings the DB and alerts on a state change | D4 | `newMux`, `gateway.Prober` |
@@ -122,7 +114,8 @@ fails before the fix.
 - [ ] D5: `always_invoice` on upgrade, with a fake-Stripe test for each direction
 - [ ] D6: block in `Checkout.Create`, expire sibling sessions, alert in reconcile
 - [ ] D7a: rewrite the 6 test files, then turn the lint rule on in the same PR
-- [ ] D1, D2: once decided
+- [ ] D2: refuse End on Stripe rows in the web admin and the CLI, with tests
+- [ ] D1: once decided
 
 ## Phase 3: structure
 
