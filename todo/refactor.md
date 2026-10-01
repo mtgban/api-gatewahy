@@ -96,7 +96,7 @@ fails before the fix.
 - [ ] Gateway proxy: #10, #11, #19, #23, #25. Issue [#35](https://github.com/mtgban/api-gatewahy/issues/35)
 - [ ] Billing reconcile: #4, #7, #14; then #12, #13. Issue [#36](https://github.com/mtgban/api-gatewahy/issues/36)
 - [ ] apiaccess: #5, #18, #21 (`EndEntitlement` returns the row), #27. Issue [#37](https://github.com/mtgban/api-gatewahy/issues/37)
-- [ ] Jobs: #8 (recover per run, log, alert). Issue [#38](https://github.com/mtgban/api-gatewahy/issues/38)
+- [x] Jobs: #8 (recover per run, log, alert). Issue [#38](https://github.com/mtgban/api-gatewahy/issues/38)
 - [ ] Discord: #6 (split on line boundaries). Issue [#39](https://github.com/mtgban/api-gatewahy/issues/39)
 - [ ] Portal: #15, #16, #20, #24. Issue [#40](https://github.com/mtgban/api-gatewahy/issues/40)
 - [ ] Mailer: #17. Issue [#41](https://github.com/mtgban/api-gatewahy/issues/41)

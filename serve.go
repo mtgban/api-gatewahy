@@ -239,7 +239,7 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 	go func() {
 		defer jobs.Done()
 		var lastDropped int64
-		runDaily(jobsCtx, 0, 5, func(ctx context.Context, now time.Time) {
+		runDaily(jobsCtx, 0, 5, "daily summary", alert, func(ctx context.Context, now time.Time) {
 			dropped := meter.Dropped()
 			dailySummary(ctx, store, alert, now, cfg.UsageRetentionDays, dropped-lastDropped)
 			lastDropped = dropped
@@ -270,7 +270,7 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 		jobs.Add(1)
 		go func() {
 			defer jobs.Done()
-			runDaily(jobsCtx, 3, 0, func(ctx context.Context, _ time.Time) {
+			runDaily(jobsCtx, 3, 0, "stripe reconcile", alert, func(ctx context.Context, _ time.Time) {
 				res, err := rec.All(ctx)
 				if err != nil {
 					alert("api-gatewahy: stripe reconcile failed: " + err.Error())
@@ -308,7 +308,7 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 		jobs.Add(1)
 		go func() {
 			defer jobs.Done()
-			runDaily(jobsCtx, 9, 0, web.SendTrialReminders)
+			runDaily(jobsCtx, 9, 0, "trial reminders", alert, web.SendTrialReminders)
 		}()
 	}
 
@@ -470,17 +470,50 @@ func nextRunAt(now time.Time, hour, minute int) time.Time {
 }
 
 // runDaily calls fn at hh:mm UTC every day until ctx ends.
-func runDaily(ctx context.Context, hour, minute int, fn func(context.Context, time.Time)) {
+func runDaily(ctx context.Context, hour, minute int, name string, alert func(string), fn func(context.Context, time.Time)) {
+	runOn(ctx, func(now time.Time) time.Time { return nextRunAt(now, hour, minute) }, name, alert, fn)
+}
+
+// runOn calls fn each time next(time.Now()) elapses, until ctx ends.
+func runOn(ctx context.Context, next func(time.Time) time.Time, name string, alert func(string), fn func(context.Context, time.Time)) {
 	for {
-		timer := time.NewTimer(time.Until(nextRunAt(time.Now(), hour, minute)))
+		timer := time.NewTimer(time.Until(next(time.Now())))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return
 		case <-timer.C:
-			fn(ctx, time.Now())
+			runJob(ctx, name, alert, fn, time.Now())
 		}
 	}
+}
+
+// maxAlertPanicLen caps the panic value in the alert text; the log keeps it in full.
+const maxAlertPanicLen = 300
+
+// runJob runs one invocation of a named job, recovering and alerting a panic
+// so the caller's loop keeps going.
+func runJob(ctx context.Context, name string, alert func(string), fn func(context.Context, time.Time), now time.Time) {
+	defer func() {
+		if p := recover(); p != nil {
+			log.Printf("panic in job %s: %v\n%s", name, p, debug.Stack())
+			func() {
+				// A panic from alert must not take the job loop down too.
+				defer func() { _ = recover() }()
+				alert(fmt.Sprintf("api-gatewahy: job %s panicked: %s", name, capPanicText(p)))
+			}()
+		}
+	}()
+	fn(ctx, now)
+}
+
+// capPanicText truncates a panic value for the alert text.
+func capPanicText(p any) string {
+	s := fmt.Sprint(p)
+	if len(s) > maxAlertPanicLen {
+		return s[:maxAlertPanicLen] + "..."
+	}
+	return s
 }
 
 // dailySummary posts yesterday's usage. dropped counts rows lost since the last summary.

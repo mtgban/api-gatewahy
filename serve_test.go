@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,6 +33,54 @@ func TestNextRunAt(t *testing.T) {
 	early := time.Date(2026, 9, 15, 0, 1, 0, 0, time.UTC)
 	if got := nextRunAt(early, 0, 5); !got.Equal(time.Date(2026, 9, 15, 0, 5, 0, 0, time.UTC)) {
 		t.Errorf("got %v", got)
+	}
+}
+
+func TestRunOnRecoversPanicAndKeepsGoing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var mu sync.Mutex
+	var alerts []string
+	alert := func(msg string) {
+		mu.Lock()
+		alerts = append(alerts, msg)
+		mu.Unlock()
+	}
+
+	ran := make(chan struct{}, 2)
+	var calls atomic.Int32
+	fn := func(context.Context, time.Time) {
+		n := calls.Add(1)
+		ran <- struct{}{}
+		if n == 1 {
+			panic("boom")
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runOn(ctx, func(time.Time) time.Time { return time.Now().Add(time.Millisecond) }, "test job", alert, fn)
+	}()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-ran:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for the job to run")
+		}
+	}
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(alerts) != 1 {
+		t.Fatalf("got %d alerts, want 1: %v", len(alerts), alerts)
+	}
+	if !strings.Contains(alerts[0], "test job") || !strings.Contains(alerts[0], "boom") {
+		t.Errorf("alert %q missing job name or panic value", alerts[0])
 	}
 }
 
