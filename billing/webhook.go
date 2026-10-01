@@ -35,10 +35,11 @@ var handledEvents = map[stripe.EventType]bool{
 const maxWebhookBody = 1 << 20
 
 // Webhook verifies Stripe's signature and reconciles the named subscription
-// once per event id.
+// once per event id. A permanent failure answers 200, so Stripe stops retrying.
 type Webhook struct {
-	Secret    string
-	Ledger    Ledger
+	Secret string
+	Ledger Ledger
+	// Reconcile alerts its own failures, as Reconciler.Subscription does.
 	Reconcile func(ctx context.Context, subID string) error
 }
 
@@ -83,6 +84,12 @@ func (h *Webhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.Reconcile(ctx, subID); err != nil {
 		log.Printf("stripe webhook %s (%s): %v", event.ID, subID, err)
+		// A retry fails the same way, and Reconcile has already alerted it.
+		if isPermanent(err) {
+			h.finish(ctx, event.ID)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		if derr := h.Ledger.DeleteStripeEvent(ctx, event.ID); derr != nil {
 			log.Printf("stripe webhook %s: release claim: %v", event.ID, derr)
 		}

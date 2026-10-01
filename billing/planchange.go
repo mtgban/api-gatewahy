@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -11,9 +12,12 @@ import (
 	"github.com/stripe/stripe-go/v84"
 )
 
-// ChangePlan rewrites the subscription's items and metadata to newPlan with
-// proration, then runs reconcile. The interval stays what the subscription has.
-// Once the stores resolve, the resolved plan comes back even with an error.
+// ErrChangeNotReconciled means Stripe took the plan change but the entitlement
+// row did not follow; the webhook or the nightly pass catches it up.
+var ErrChangeNotReconciled = errors.New("billing: plan changed, access not updated yet")
+
+// ChangePlan prorates the subscription onto newPlan at its own interval, then reconciles.
+// The resolved plan returns even with an error; a failed reconcile is ErrChangeNotReconciled.
 func ChangePlan(ctx context.Context, api API, cat *apiproductlist.ProductList, stores StoreLister, games []string, account apiaccess.Account,
 	subID string, newPlan Plan, reconcile func(context.Context, string) error) (ResolvedPlan, error) {
 	sub, err := api.GetSubscription(ctx, subID)
@@ -42,16 +46,14 @@ func ChangePlan(ctx context.Context, api API, cat *apiproductlist.ProductList, s
 	if err != nil {
 		return resolved, fmt.Errorf("billing: list prices: %w", err)
 	}
-	want := map[string]int64{}
-	for _, li := range newPlan.LineItems(cat) {
-		want[li.LookupKey] = li.Quantity
-	}
+	want := planItems(cat, newPlan)
 	var items []*stripe.SubscriptionUpdateItemParams
 	if sub.Items != nil {
 		for _, it := range sub.Items.Data {
 			key := ""
 			if it.Price != nil {
-				key = it.Price.LookupKey
+				// A replaced price keeps its key in metadata, so the item stays at its price.
+				key = priceLookupKey(it.Price)
 			}
 			qty, keep := want[key]
 			switch {
@@ -77,5 +79,8 @@ func ChangePlan(ctx context.Context, api API, cat *apiproductlist.ProductList, s
 	}); err != nil {
 		return resolved, fmt.Errorf("billing: update %s: %w", subID, err)
 	}
-	return resolved, reconcile(ctx, subID)
+	if err := reconcile(ctx, subID); err != nil {
+		return resolved, fmt.Errorf("%w: %w", ErrChangeNotReconciled, err)
+	}
+	return resolved, nil
 }

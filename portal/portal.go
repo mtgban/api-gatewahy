@@ -374,14 +374,15 @@ func (s *Server) clientIP(r *http.Request) string {
 
 // notices are the messages a redirect may ask the next page to show.
 var notices = map[string]string{
-	"revoked": "Key revoked.",
-	"plan":    "Plan changed. Your access updates within a minute.",
-	"trial":   "Your trial has started. Create a key below to begin.",
-	"login":   "You are signed in.",
-	"status":  "Status updated.",
-	"saved":   "Note saved.",
-	"granted": "Entitlement added.",
-	"ended":   "Entitlement ended.",
+	"revoked":      "Key revoked.",
+	"plan":         "Plan changed. Your access updates within a minute.",
+	"plan_pending": "Plan changed; your access updates shortly.",
+	"trial":        "Your trial has started. Create a key below to begin.",
+	"login":        "You are signed in.",
+	"status":       "Status updated.",
+	"saved":        "Note saved.",
+	"granted":      "Entitlement added.",
+	"ended":        "Entitlement ended.",
 }
 
 func noticeFor(r *http.Request) string {

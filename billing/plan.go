@@ -156,10 +156,13 @@ func (p Plan) Metadata(accountID int64) map[string]string {
 	}
 }
 
+// ErrNoPlan means the subscription metadata carries no plan.
+var ErrNoPlan = errors.New("billing: subscription metadata carries no plan")
+
 // PlanFromMetadata reads back what Metadata wrote. It does not normalize.
 func PlanFromMetadata(m map[string]string) (Plan, int64, error) {
 	if m["package"] == "" || m["interval"] == "" {
-		return Plan{}, 0, errors.New("billing: subscription metadata carries no plan")
+		return Plan{}, 0, ErrNoPlan
 	}
 	accountID, _ := strconv.ParseInt(m["account_id"], 10, 64)
 	return Plan{

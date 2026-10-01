@@ -252,6 +252,12 @@ func (s *Server) changePlan(w http.ResponseWriter, r *http.Request, sess session
 		return
 	}
 	resolved, err := billing.ChangePlan(r.Context(), s.Stripe, s.Catalog, s.Stores, s.Games, a, subID, plan, s.Reconcile)
+	// Stripe took the change, so the customer sees it go through.
+	if errors.Is(err, billing.ErrChangeNotReconciled) {
+		s.logf("plan change %s: %v", a.Email, err)
+		http.Redirect(w, r, "/account?notice=plan_pending", http.StatusFound)
+		return
+	}
 	if err != nil {
 		s.logf("plan change %s: %v", a.Email, err)
 		if billing.IsValidation(err) || errors.Is(err, billing.ErrStoresUnavailable) {

@@ -28,6 +28,14 @@ type Reconciler struct {
 // ErrNoAccount means neither the metadata nor the customer id names an account.
 var ErrNoAccount = errors.New("billing: subscription names no known account")
 
+// isPermanent reports whether a reconcile error fails the same way on every retry.
+func isPermanent(err error) bool {
+	if errors.Is(err, ErrStoresUnavailable) {
+		return false
+	}
+	return errors.Is(err, ErrNoPlan) || errors.Is(err, ErrNoAccount) || IsValidation(err)
+}
+
 func (r *Reconciler) now() time.Time {
 	if r.Now != nil {
 		return r.Now()
@@ -43,9 +51,18 @@ func (r *Reconciler) alertf(format string, args ...any) {
 	}
 }
 
-// MapStatus is the spec's table from Stripe status to entitlement status
-// and end. past_due keeps access for grace past the period end.
-func MapStatus(status stripe.SubscriptionStatus, periodEnd time.Time, grace time.Duration, now time.Time) (string, *time.Time) {
+// failed names the subscription in err and alerts it, unless a pass reports it in its summary.
+func (r *Reconciler) failed(sub *stripe.Subscription, err error, pass bool) error {
+	err = fmt.Errorf("subscription %s: %w", sub.ID, err)
+	if !pass {
+		r.alertf("%v", err)
+	}
+	return err
+}
+
+// MapStatus maps a Stripe status to entitlement status and end: past_due
+// keeps grace past periodEnd, ended rows end at endedAt (or now if zero).
+func MapStatus(status stripe.SubscriptionStatus, periodEnd, endedAt time.Time, grace time.Duration, now time.Time) (string, *time.Time) {
 	switch status {
 	case stripe.SubscriptionStatusActive, stripe.SubscriptionStatusTrialing:
 		return "active", nil
@@ -53,7 +70,10 @@ func MapStatus(status stripe.SubscriptionStatus, periodEnd time.Time, grace time
 		until := periodEnd.Add(grace)
 		return "active", &until
 	}
-	return "ended", &now
+	if endedAt.IsZero() {
+		endedAt = now
+	}
+	return "ended", &endedAt
 }
 
 // subPeriodEnd is the latest item period end, or now when the items carry none.
@@ -68,6 +88,14 @@ func subPeriodEnd(sub *stripe.Subscription, now time.Time) time.Time {
 		return now
 	}
 	return time.Unix(end, 0).UTC()
+}
+
+// subEndedAt is when Stripe ended the subscription, or zero.
+func subEndedAt(sub *stripe.Subscription) time.Time {
+	if sub.EndedAt == 0 {
+		return time.Time{}
+	}
+	return time.Unix(sub.EndedAt, 0).UTC()
 }
 
 // priceLookupKey is p.LookupKey, or the key rebuilt from the metadata Seed
@@ -87,12 +115,18 @@ func priceLookupKey(p *stripe.Price) string {
 	return apiproductlist.LookupKey(item, iv)
 }
 
-// itemMismatch describes how the subscription's items differ from the plan, or is empty.
-func itemMismatch(cat *apiproductlist.ProductList, plan Plan, sub *stripe.Subscription) string {
+// planItems maps each lookup key the plan bills to its quantity.
+func planItems(cat *apiproductlist.ProductList, plan Plan) map[string]int64 {
 	want := map[string]int64{}
 	for _, li := range plan.LineItems(cat) {
 		want[li.LookupKey] = li.Quantity
 	}
+	return want
+}
+
+// itemMismatch describes how the subscription's items differ from the plan, or is empty.
+func itemMismatch(cat *apiproductlist.ProductList, plan Plan, sub *stripe.Subscription) string {
+	want := planItems(cat, plan)
 	got := map[string]int64{}
 	if sub.Items != nil {
 		for _, it := range sub.Items.Data {
@@ -109,48 +143,45 @@ func itemMismatch(cat *apiproductlist.ProductList, plan Plan, sub *stripe.Subscr
 
 // Subscription fetches one subscription from Stripe and applies it.
 func (r *Reconciler) Subscription(ctx context.Context, subID string) error {
-	return r.fetchAndApply(ctx, subID, true)
+	return r.fetchAndApply(ctx, subID, false)
 }
 
-// fetchAndApply fetches one subscription and applies it, notifying the
-// resolver cache only when notify is set.
-func (r *Reconciler) fetchAndApply(ctx context.Context, subID string, notify bool) error {
+// fetchAndApply fetches one subscription and applies it; pass is as for apply.
+func (r *Reconciler) fetchAndApply(ctx context.Context, subID string, pass bool) error {
 	sub, err := r.API.GetSubscription(ctx, subID)
 	if err != nil {
 		return fmt.Errorf("billing: fetch %s: %w", subID, err)
 	}
-	return r.apply(ctx, sub, notify)
+	return r.apply(ctx, sub, pass)
 }
 
-// apply upserts the entitlement row for a fetched subscription.
-func (r *Reconciler) apply(ctx context.Context, sub *stripe.Subscription, notify bool) error {
+// apply upserts the entitlement row for a fetched subscription. Within a
+// pass, the pass sends the reload notify and reports the failures.
+func (r *Reconciler) apply(ctx context.Context, sub *stripe.Subscription, pass bool) error {
 	plan, accountID, err := PlanFromMetadata(sub.Metadata)
 	if err != nil {
-		r.alertf("subscription %s: %v", sub.ID, err)
-		return err
+		return r.failed(sub, err, pass)
 	}
 	account, err := r.findAccount(ctx, accountID, sub)
 	if err != nil {
-		r.alertf("subscription %s: %v", sub.ID, err)
-		return err
+		return r.failed(sub, err, pass)
 	}
 	plan, err = plan.Normalize(r.Catalog)
 	if err != nil {
-		r.alertf("subscription %s: %v", sub.ID, err)
-		return err
+		return r.failed(sub, err, pass)
 	}
 	if msg := itemMismatch(r.Catalog, plan, sub); msg != "" {
 		r.alertf("subscription %s: %s; metadata wins, fix the items or the metadata", sub.ID, msg)
 	}
 	now := r.now()
-	status, until := MapStatus(sub.Status, subPeriodEnd(sub, now), r.Grace, now)
+	status, until := MapStatus(sub.Status, subPeriodEnd(sub, now), subEndedAt(sub), r.Grace, now)
 	resolved, err := plan.Resolve(ctx, r.Catalog, r.Stores)
 	if err != nil {
-		r.alertf("subscription %s: %v", sub.ID, err)
 		// Without keys there is nothing to stand in for the scope, so the row cannot be written.
 		if status != "ended" || len(plan.Stores) == 0 {
-			return err
+			return r.failed(sub, err, pass)
 		}
+		r.alertf("subscription %s: %v", sub.ID, err)
 		// An ended row grants nothing, so the keys stand in for the scope and access still ends.
 		pkg, _ := r.Catalog.Package(plan.Package)
 		resolved = ResolvedPlan{Plan: plan, Scope: strings.Join(plan.Stores, ","), Modes: pkg.Modes}
@@ -170,7 +201,7 @@ func (r *Reconciler) apply(ctx context.Context, sub *stripe.Subscription, notify
 	if _, err := r.Store.UpsertStripeEntitlement(ctx, e); err != nil {
 		return fmt.Errorf("billing: upsert %s: %w", sub.ID, err)
 	}
-	if notify {
+	if !pass {
 		if err := r.Store.Notify(ctx, ""); err != nil {
 			log.Printf("billing: reload notify after %s: %v", sub.ID, err)
 		}
@@ -235,16 +266,18 @@ func (r *Reconciler) All(ctx context.Context) (Result, error) {
 		return res, fmt.Errorf("billing: list subscriptions: %w", err)
 	}
 	seen := map[string]bool{}
-	record := func(err error) {
+	record := func(subID string, err error) {
 		res.Checked++
 		if err != nil {
+			// The summary caps its list, so the log keeps every failure.
+			log.Printf("billing: reconcile %s: %v", subID, err)
 			res.Failed++
 			res.Errors = append(res.Errors, err.Error())
 		}
 	}
 	for _, sub := range subs {
 		seen[sub.ID] = true
-		record(r.apply(ctx, sub, false))
+		record(sub.ID, r.apply(ctx, sub, true))
 	}
 	refs, err := r.Store.ListActiveStripeRefs(ctx)
 	if err != nil {
@@ -252,7 +285,7 @@ func (r *Reconciler) All(ctx context.Context) (Result, error) {
 	}
 	for _, ref := range refs {
 		if !seen[ref] {
-			record(r.fetchAndApply(ctx, ref, false))
+			record(ref, r.fetchAndApply(ctx, ref, true))
 		}
 	}
 	// One reload notification for the whole pass, not one per subscription.

@@ -192,3 +192,71 @@ func TestSubscriptionID(t *testing.T) {
 		t.Errorf("empty event: %q", got)
 	}
 }
+
+// TestWebhookApplyErrors runs a real reconciler behind the webhook and
+// delivers each event twice, as Stripe retries a 500.
+func TestWebhookApplyErrors(t *testing.T) {
+	plan, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
+	starter, _ := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"nosuchstore"}}.Normalize(testCatalog)
+	cases := []struct {
+		name      string
+		metadata  map[string]string
+		customer  string
+		item      string
+		fault     func(f *fakeAPI, s *memStore, r *Reconciler)
+		permanent bool
+	}{
+		{name: "no plan metadata", metadata: map[string]string{"account_id": "7"}, permanent: true},
+		{name: "unknown package", metadata: map[string]string{"account_id": "7", "package": "gold", "interval": "monthly"}, permanent: true},
+		{name: "no account", metadata: plan.Metadata(999), customer: "cus_nobody", permanent: true},
+		{name: "store not sold", metadata: starter.Metadata(7), item: "starter_monthly", permanent: true},
+		{name: "stripe down", metadata: plan.Metadata(7), fault: func(f *fakeAPI, _ *memStore, _ *Reconciler) {
+			f.fail["GetSubscription"] = &stripe.Error{Msg: "api error", HTTPStatusCode: 500}
+		}},
+		{name: "db down", metadata: plan.Metadata(7), fault: func(_ *fakeAPI, s *memStore, _ *Reconciler) { s.failUpsert = errors.New("db down") }},
+		{name: "stores down", metadata: starter.Metadata(7), item: "starter_monthly", fault: func(_ *fakeAPI, _ *memStore, r *Reconciler) {
+			lister := newFakeStores()
+			lister.fail = errors.New("connection refused")
+			r.Stores = lister
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := seededFake(t)
+			s := newMemStore(testAccount)
+			var alerts []string
+			r := newTestReconciler(f, s, &alerts)
+			customer := c.customer
+			if customer == "" {
+				customer = "cus_x"
+			}
+			item := c.item
+			if item == "" {
+				item = "all_data_monthly"
+			}
+			f.addSub(t, "sub_1", customer, stripe.SubscriptionStatusActive, c.metadata, periodEnd, fakeItem{item, 1})
+			if c.fault != nil {
+				c.fault(f, s, r)
+			}
+			l := newMemLedger()
+			h := &Webhook{Secret: whSecret, Ledger: l, Reconcile: r.Subscription}
+			body := eventJSON("evt_1", "customer.subscription.updated", `{"object":"subscription","id":"sub_1"}`)
+			first, second := serve(h, signedRequest(body, whSecret)), serve(h, signedRequest(body, whSecret))
+			if c.permanent {
+				if first.Code != http.StatusOK || second.Code != http.StatusOK || !l.rows["evt_1"] {
+					t.Errorf("codes %d, %d, ledger %v; want 200 and the event finished", first.Code, second.Code, l.rows)
+				}
+				if len(alerts) != 1 {
+					t.Errorf("alerts %q, want one", alerts)
+				}
+				return
+			}
+			if first.Code != http.StatusInternalServerError || second.Code != http.StatusInternalServerError {
+				t.Errorf("codes %d, %d; want 500 so Stripe retries", first.Code, second.Code)
+			}
+			if _, ok := l.rows["evt_1"]; ok {
+				t.Error("claim kept after a retryable failure")
+			}
+		})
+	}
+}

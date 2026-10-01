@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stripe/stripe-go/v84"
@@ -98,5 +99,59 @@ func TestChangePlanRefuses(t *testing.T) {
 	}
 	if len(rc.ids) != 0 {
 		t.Errorf("reconcile ran after failures: %v", rc.ids)
+	}
+}
+
+// TestChangePlanKeepsReplacedPrice covers an item on a price Seed replaced,
+// whose lookup key now lives only in the price metadata.
+func TestChangePlanKeepsReplacedPrice(t *testing.T) {
+	f := seededFake(t)
+	ctx := context.Background()
+	current, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic", "pokemon"}}.Normalize(testCatalog)
+	f.addSub(t, "sub_1", "cus_7", stripe.SubscriptionStatusActive, current.Metadata(7), periodEnd, fakeItem{"all_data_monthly", 1}, fakeItem{"extra_game_monthly", 1})
+	old := f.priceByKey("all_data_monthly")
+	if _, err := f.CreatePrice(ctx, &stripe.PriceCreateParams{
+		LookupKey: stripe.String(old.LookupKey), TransferLookupKey: stripe.Bool(true), Metadata: old.Metadata,
+		UnitAmount: stripe.Int64(old.UnitAmount + 1000), Currency: stripe.String(string(old.Currency)), Product: stripe.String(old.Product.ID),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	old.Active = false
+	if old.LookupKey != "" {
+		t.Fatal("the replacement did not take the lookup key")
+	}
+
+	rc := &recorder{}
+	if _, err := ChangePlan(ctx, f, testCatalog, newFakeStores(), testGames, testAccount, "sub_1",
+		Plan{Package: "all_data", Games: []string{"magic", "pokemon", "lorcana"}}, rc.reconcile); err != nil {
+		t.Fatal(err)
+	}
+	want := []itemChange{{id: "si_sub_1_1", qty: 2}}
+	if got := changes(f.updates["sub_1"][0]); !slices.Equal(got, want) {
+		t.Errorf("items %+v want %+v", got, want)
+	}
+}
+
+// TestChangePlanReportsPendingAccess separates a change Stripe took but
+// reconcile did not apply from a change that never happened.
+func TestChangePlanReportsPendingAccess(t *testing.T) {
+	f := seededFake(t)
+	ctx := context.Background()
+	current, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
+	f.addSub(t, "sub_1", "cus_7", stripe.SubscriptionStatusActive, current.Metadata(7), periodEnd, fakeItem{"all_data_monthly", 1})
+	rc := &recorder{err: errors.New("db down")}
+	newPlan := Plan{Package: "all_stores", Games: []string{"magic"}}
+
+	got, err := ChangePlan(ctx, f, testCatalog, newFakeStores(), testGames, testAccount, "sub_1", newPlan, rc.reconcile)
+	if !errors.Is(err, ErrChangeNotReconciled) || !strings.Contains(err.Error(), "db down") {
+		t.Errorf("reconcile failure after the update: %v", err)
+	}
+	if got.Package != "all_stores" || len(f.updates["sub_1"]) != 1 {
+		t.Errorf("plan %+v, updates %d", got, len(f.updates["sub_1"]))
+	}
+
+	f.fail["UpdateSubscription"] = errors.New("stripe down")
+	if _, err := ChangePlan(ctx, f, testCatalog, newFakeStores(), testGames, testAccount, "sub_1", newPlan, rc.reconcile); err == nil || errors.Is(err, ErrChangeNotReconciled) {
+		t.Errorf("update failure: %v", err)
 	}
 }
