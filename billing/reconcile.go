@@ -7,6 +7,7 @@ import (
 	"log"
 	"maps"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
@@ -23,6 +24,44 @@ type Reconciler struct {
 	Grace   time.Duration
 	Alert   func(string)
 	Now     func() time.Time
+
+	locks subLocks
+}
+
+// subLocks is a mutex per subscription id; an entry lives only while held or awaited.
+type subLocks struct {
+	mu    sync.Mutex
+	locks map[string]*subLock
+}
+
+type subLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lock blocks until id is free and returns the matching unlock.
+func (l *subLocks) lock(id string) func() {
+	l.mu.Lock()
+	if l.locks == nil {
+		l.locks = map[string]*subLock{}
+	}
+	e := l.locks[id]
+	if e == nil {
+		e = &subLock{}
+		l.locks[id] = e
+	}
+	e.refs++
+	l.mu.Unlock()
+	e.mu.Lock()
+	return func() {
+		e.mu.Unlock()
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		e.refs--
+		if e.refs == 0 {
+			delete(l.locks, id)
+		}
+	}
 }
 
 // ErrNoAccount means neither the metadata nor the customer id names an account.
@@ -147,7 +186,9 @@ func (r *Reconciler) Subscription(ctx context.Context, subID string) error {
 }
 
 // fetchAndApply fetches one subscription and applies it; pass is as for apply.
+// The lock covers the fetch too, so an older read cannot land after a newer one.
 func (r *Reconciler) fetchAndApply(ctx context.Context, subID string, pass bool) error {
+	defer r.locks.lock(subID)()
 	sub, err := r.API.GetSubscription(ctx, subID)
 	if err != nil {
 		return fmt.Errorf("billing: fetch %s: %w", subID, err)
@@ -155,7 +196,7 @@ func (r *Reconciler) fetchAndApply(ctx context.Context, subID string, pass bool)
 	return r.apply(ctx, sub, pass)
 }
 
-// apply upserts the entitlement row for a fetched subscription. Within a
+// apply upserts the row for a subscription fetched under its lock. Within a
 // pass, the pass sends the reload notify and reports the failures.
 func (r *Reconciler) apply(ctx context.Context, sub *stripe.Subscription, pass bool) error {
 	plan, accountID, err := PlanFromMetadata(sub.Metadata)
@@ -257,8 +298,8 @@ func (res Result) Summary() string {
 	return fmt.Sprintf("stripe reconcile: %d subscriptions, %d failed: %s%s", res.Checked, res.Failed, strings.Join(errs, "; "), suffix)
 }
 
-// All applies every subscription Stripe lists, then fetches every active
-// stripe entitlement Stripe did not list so a missed cancellation still ends it.
+// All refetches each listed subscription, as a listing can go stale mid-pass,
+// then each active stripe row Stripe did not list, so a missed cancel ends it.
 func (r *Reconciler) All(ctx context.Context) (Result, error) {
 	var res Result
 	subs, err := r.API.ListSubscriptions(ctx)
@@ -277,7 +318,7 @@ func (r *Reconciler) All(ctx context.Context) (Result, error) {
 	}
 	for _, sub := range subs {
 		seen[sub.ID] = true
-		record(sub.ID, r.apply(ctx, sub, true))
+		record(sub.ID, r.fetchAndApply(ctx, sub.ID, true))
 	}
 	refs, err := r.Store.ListActiveStripeRefs(ctx)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 
 // fakeAPI is an in-memory Stripe with just enough state for the billing tests.
 type fakeAPI struct {
+	mu            sync.Mutex // guards calls, for the concurrent reconcile test
 	seq           int
 	customers     map[string]*stripe.Customer
 	products      map[string]*stripe.Product
@@ -46,6 +47,8 @@ func missing(what string) error {
 
 // enter counts the call and returns the injected failure, if any.
 func (f *fakeAPI) enter(method string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls[method]++
 	return f.fail[method]
 }
