@@ -1,11 +1,12 @@
 // Package mailer sends the portal's mail: one interface, an SMTP
-// implementation with STARTTLS, and a logging one for development and tests.
+// implementation (STARTTLS or implicit TLS), and a logging one for tests.
 package mailer
 
 import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -24,12 +25,22 @@ type Mailer interface {
 	Send(ctx context.Context, to, subject, text, html string) error
 }
 
-// SMTP sends through one server with STARTTLS and PLAIN auth.
+// sendFallbackTimeout bounds Send when ctx carries no deadline; tests lower
+// it to keep an unresponsive-server scenario fast.
+var sendFallbackTimeout = 30 * time.Second
+
+// SMTP sends through one server with PLAIN auth, over STARTTLS or implicit TLS.
 type SMTP struct {
 	Host string
 	Port int
-	User string
-	Pass string
+	// ImplicitTLS dials straight into TLS instead of upgrading with
+	// STARTTLS; FromEnv sets it for port 465.
+	ImplicitTLS bool
+	// RootCAs overrides the system trust store for both TLS modes; nil
+	// verifies against it, which is what production wants.
+	RootCAs *x509.CertPool
+	User    string
+	Pass    string
 	// From is the header value, for example "MTGBAN <no-reply@mtgban.com>";
 	// the header keeps the display name but MAIL FROM uses the bare address.
 	From string
@@ -45,24 +56,38 @@ func (s *SMTP) Send(ctx context.Context, to, subject, text, html string) error {
 	if err != nil {
 		return fmt.Errorf("mailer: to: %w", err)
 	}
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(s.Host, strconv.Itoa(s.Port)))
+	// One deadline bounds both the dial (handshake included, for
+	// ImplicitTLS) and the SMTP exchange that follows it.
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(sendFallbackTimeout)
+	}
+	dialCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	addr := net.JoinHostPort(s.Host, strconv.Itoa(s.Port))
+	tlsConfig := &tls.Config{ServerName: s.Host, RootCAs: s.RootCAs}
+	var conn net.Conn
+	if s.ImplicitTLS {
+		dialer := tls.Dialer{Config: tlsConfig}
+		conn, err = dialer.DialContext(dialCtx, "tcp", addr)
+	} else {
+		var d net.Dialer
+		conn, err = d.DialContext(dialCtx, "tcp", addr)
+	}
 	if err != nil {
 		return fmt.Errorf("mailer: dial: %w", err)
 	}
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
-	} else {
-		_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
-	}
+	_ = conn.SetDeadline(deadline)
 	c, err := smtp.NewClient(conn, s.Host)
 	if err != nil {
 		_ = conn.Close()
 		return fmt.Errorf("mailer: %w", err)
 	}
 	defer func() { _ = c.Close() }()
-	if err := c.StartTLS(&tls.Config{ServerName: s.Host}); err != nil {
-		return fmt.Errorf("mailer: starttls: %w", err)
+	if !s.ImplicitTLS {
+		if err := c.StartTLS(tlsConfig); err != nil {
+			return fmt.Errorf("mailer: starttls: %w", err)
+		}
 	}
 	if s.User != "" {
 		if err := c.Auth(smtp.PlainAuth("", s.User, s.Pass, s.Host)); err != nil {
@@ -121,8 +146,8 @@ func (l *Log) Send(_ context.Context, to, subject, text, _ string) error {
 	return err
 }
 
-// FromEnv builds the SMTP mailer from MAIL_SMTP_HOST, MAIL_SMTP_PORT (587),
-// MAIL_SMTP_USER, and MAIL_SMTP_PASS. No host means nil, nil: use Log.
+// FromEnv builds the SMTP mailer from MAIL_SMTP_HOST, MAIL_SMTP_PORT (587,
+// implicit TLS on 465), MAIL_SMTP_USER, and MAIL_SMTP_PASS. No host: nil, nil, use Log.
 func FromEnv(from string) (*SMTP, error) {
 	host := os.Getenv("MAIL_SMTP_HOST")
 	if host == "" {
@@ -139,5 +164,12 @@ func FromEnv(from string) (*SMTP, error) {
 	if _, err := mail.ParseAddress(from); err != nil {
 		return nil, fmt.Errorf("mail.from: %w", err)
 	}
-	return &SMTP{Host: host, Port: port, User: os.Getenv("MAIL_SMTP_USER"), Pass: os.Getenv("MAIL_SMTP_PASS"), From: from}, nil
+	return &SMTP{
+		Host:        host,
+		Port:        port,
+		ImplicitTLS: port == 465,
+		User:        os.Getenv("MAIL_SMTP_USER"),
+		Pass:        os.Getenv("MAIL_SMTP_PASS"),
+		From:        from,
+	}, nil
 }
