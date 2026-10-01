@@ -116,7 +116,7 @@ fails before the fix.
 | Ban `reflect`: revive `imports-blocklist` in `.revive.toml`, rewrite the 6 test files with `slices`/`maps` or typed comparisons | D7a | `billing/{seed,entitlement_db,stores,plan,planchange,reconcile}_test.go` |
 
 - [ ] D3: reconcile mutex, README note. Issue [#45](https://github.com/mtgban/api-gatewahy/issues/45)
-- [ ] D4: liveness `/healthz`, DB check in the prober. Issue [#46](https://github.com/mtgban/api-gatewahy/issues/46)
+- [x] D4: liveness `/healthz`, DB check in the prober. Issue [#46](https://github.com/mtgban/api-gatewahy/issues/46)
 - [ ] D5: `always_invoice` on upgrade, with a fake-Stripe test for each
   direction. Issue [#47](https://github.com/mtgban/api-gatewahy/issues/47)
 - [ ] D6: block in `Checkout.Create`, expire sibling sessions, alert in

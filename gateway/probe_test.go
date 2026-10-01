@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -28,7 +29,7 @@ func TestProberCheck(t *testing.T) {
 	p := NewProber(map[string]Upstream{
 		"magic":   {URL: gu, Secret: []byte("ok")},
 		"pokemon": {URL: gu, Secret: []byte("wrong")},
-	}, "gateway@mtgban.com", apisig.DefaultLink, good.Client(), nil)
+	}, "gateway@mtgban.com", apisig.DefaultLink, good.Client(), nil, nil)
 	errs := p.Check(context.Background())
 	if errs["magic"] != nil {
 		t.Errorf("magic: %v", errs["magic"])
@@ -51,7 +52,7 @@ func TestProberAlertsOnTransition(t *testing.T) {
 	defer srv.Close()
 	u, _ := url.Parse(srv.URL)
 	var alerts []string
-	p := NewProber(map[string]Upstream{"magic": {URL: u, Secret: []byte("s")}}, "g@x", apisig.DefaultLink, srv.Client(),
+	p := NewProber(map[string]Upstream{"magic": {URL: u, Secret: []byte("s")}}, "g@x", apisig.DefaultLink, srv.Client(), nil,
 		func(msg string) { alerts = append(alerts, msg) })
 
 	p.tick(context.Background())
@@ -66,12 +67,77 @@ func TestProberAlertsOnTransition(t *testing.T) {
 	}
 }
 
+func TestProberAlertsOnDBTransition(t *testing.T) {
+	var up atomic.Bool
+	up.Store(true)
+	pingDB := func(context.Context) error {
+		if up.Load() {
+			return nil
+		}
+		return errors.New("connection refused")
+	}
+	var alerts []string
+	p := NewProber(nil, "g@x", apisig.DefaultLink, nil, pingDB, func(msg string) { alerts = append(alerts, msg) })
+
+	p.tick(context.Background())
+	p.tick(context.Background())
+	up.Store(false)
+	p.tick(context.Background())
+	p.tick(context.Background())
+	up.Store(true)
+	p.tick(context.Background())
+	if len(alerts) != 2 {
+		t.Fatalf("alerts %v", alerts)
+	}
+	if !strings.Contains(alerts[0], "database") || !strings.Contains(alerts[0], "FAILING") {
+		t.Errorf("first alert %q", alerts[0])
+	}
+	if !strings.Contains(alerts[1], "database") || !strings.Contains(alerts[1], "recovered") {
+		t.Errorf("second alert %q", alerts[1])
+	}
+}
+
+func TestProberAlertsOnceWhenDBStartsDown(t *testing.T) {
+	pingDB := func(context.Context) error { return errors.New("connection refused") }
+	var alerts []string
+	p := NewProber(nil, "g@x", apisig.DefaultLink, nil, pingDB, func(msg string) { alerts = append(alerts, msg) })
+
+	p.tick(context.Background())
+	p.tick(context.Background())
+	p.tick(context.Background())
+	if len(alerts) != 1 {
+		t.Fatalf("alerts %v", alerts)
+	}
+	if !strings.Contains(alerts[0], "database") || !strings.Contains(alerts[0], "FAILING") {
+		t.Errorf("alert %q", alerts[0])
+	}
+}
+
+func TestProberBoundsDBPing(t *testing.T) {
+	var hadDeadline bool
+	var deadline time.Time
+	pingDB := func(ctx context.Context) error {
+		deadline, hadDeadline = ctx.Deadline()
+		return nil
+	}
+	p := NewProber(nil, "g@x", apisig.DefaultLink, nil, pingDB, nil)
+
+	start := time.Now()
+	p.tick(context.Background())
+	if !hadDeadline {
+		t.Fatal("pingDB ran with no deadline")
+	}
+	if d := deadline.Sub(start); d < probePingTimeout-time.Second || d > probePingTimeout+time.Second {
+		t.Errorf("deadline %s from start, want close to %s", d, probePingTimeout)
+	}
+}
+
 func TestProberErrorHidesSignature(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	u, _ := url.Parse(srv.URL)
 	srv.Close()
 
-	p := NewProber(map[string]Upstream{"magic": {URL: u, Secret: []byte("s")}}, "g@x", apisig.DefaultLink, srv.Client(), nil)
+	p := NewProber(map[string]Upstream{"magic": {URL: u, Secret: []byte("s")}}, "g@x", apisig.DefaultLink, srv.Client(), nil, nil)
 	errs := p.Check(context.Background())
 	err := errs["magic"]
 	if err == nil {

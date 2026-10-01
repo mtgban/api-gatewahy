@@ -229,7 +229,7 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 			log.Println("discord:", err)
 		}
 	}
-	prober := gateway.NewProber(games, cfg.GatewayEmail, cfg.Link, nil, alert)
+	prober := gateway.NewProber(games, cfg.GatewayEmail, cfg.Link, nil, store.PingContext, alert)
 	var jobs sync.WaitGroup
 	jobs.Add(2)
 	go func() {
@@ -314,7 +314,6 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 
 	mux := newMux(muxDeps{
 		games:       handler.GameNames(),
-		healthy:     store.PingContext,
 		gateway:     handler,
 		webhook:     webhook,
 		portal:      web,
@@ -356,7 +355,6 @@ func checkReservedPaths(cfg *config.Config) error {
 
 type muxDeps struct {
 	games       []string
-	healthy     func(context.Context) error
 	gateway     http.Handler
 	webhook     http.Handler
 	portal      *portal.Server
@@ -366,10 +364,10 @@ type muxDeps struct {
 
 func newMux(d muxDeps) http.Handler {
 	mux := http.NewServeMux()
+	// Liveness only: answers from the process alone, with no DB ping, so a
+	// DB blip cannot get the container restarted. The prober reports DB health.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-		if err := d.healthy(ctx); err != nil || len(d.games) == 0 {
+		if len(d.games) == 0 {
 			http.Error(w, "not ready", http.StatusServiceUnavailable)
 			return
 		}
