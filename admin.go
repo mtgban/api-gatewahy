@@ -364,7 +364,7 @@ func keyKindFor(ctx context.Context, store adminStore, accountID int64) (apiacce
 	if err != nil {
 		return "", err
 	}
-	if apiaccess.HasActiveStripePlan(ents, time.Now()) {
+	if apiaccess.HasActiveStripePlan(ents) {
 		return apiaccess.KeyLive, nil
 	}
 	return apiaccess.KeyDemo, nil

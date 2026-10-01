@@ -121,13 +121,13 @@ func (s *Server) checkoutGet(w http.ResponseWriter, r *http.Request) {
 	s.renderConfirm(w, r, sess, confirmOptions{Status: http.StatusOK, Resolved: resolved, Invite: invite, ReturnTo: returnTo, Change: change, HasPlan: hasPlan})
 }
 
-// hasActiveStripePlan reports whether the account already has an active Stripe entitlement.
+// hasActiveStripePlan reports whether the account holds a live Stripe plan, past_due included.
 func (s *Server) hasActiveStripePlan(r *http.Request, accountID int64) (bool, error) {
 	ents, err := s.Store.ListEntitlements(r.Context(), accountID)
 	if err != nil {
 		return false, err
 	}
-	return apiaccess.HasActiveStripePlan(ents, s.now()), nil
+	return apiaccess.HasActiveStripePlan(ents), nil
 }
 
 // subscriptionFor finds the account's one Stripe subscription, or the status
@@ -138,7 +138,7 @@ func (s *Server) subscriptionFor(ctx context.Context, accountID int64, email str
 		s.logf("plan change %s: entitlements: %v", email, err)
 		return "", http.StatusInternalServerError, tryAgainMsg
 	}
-	subID, err := billing.SubscriptionFor(ents, s.now())
+	subID, err := billing.SubscriptionFor(ents)
 	if errors.Is(err, billing.ErrManySubscriptions) {
 		return "", http.StatusBadRequest, manySubscriptionsMsg
 	}
@@ -293,6 +293,8 @@ func checkoutError(err error) string {
 		return "That plan is not set up for sale yet. Contact administrator@mtgban.com."
 	case errors.Is(err, billing.ErrStoresUnavailable):
 		return storesUnavailableMsg
+	case billing.IsPaymentFailure(err):
+		return "Your card was declined. Update it under Manage billing, then try again."
 	}
 	var ve *billing.ValidationError
 	if errors.As(err, &ve) {
@@ -319,7 +321,7 @@ func (s *Server) success(w http.ResponseWriter, r *http.Request, sess session.Se
 	}
 	sites := s.newSiteLookup(r.Context())
 	for _, e := range ents {
-		if e.IsActiveStripePlan(s.now()) {
+		if e.IsActiveStripePlan() {
 			d.Entitlements = append(d.Entitlements, s.describeEntitlement(sites, e))
 		}
 	}

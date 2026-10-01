@@ -283,11 +283,31 @@ func (f *fakeAPI) addSub(t *testing.T, id, customerID string, status stripe.Subs
 			t.Fatalf("no price for %s; seed the fake first", it.key)
 		}
 		s.Items.Data = append(s.Items.Data, &stripe.SubscriptionItem{
-			ID: fmt.Sprintf("si_%s_%d", id, i), Price: p, Quantity: it.qty, CurrentPeriodEnd: periodEnd.Unix(),
+			ID: fmt.Sprintf("si_%s_%d", id, i), Price: p, Quantity: it.qty,
+			CurrentPeriodStart: periodStart(p, periodEnd).Unix(), CurrentPeriodEnd: periodEnd.Unix(),
 		})
 	}
 	f.subs[id] = s
 	return s
+}
+
+// periodStart is periodEnd minus one billing interval of p, or periodEnd when p carries none.
+func periodStart(p *stripe.Price, periodEnd time.Time) time.Time {
+	if p.Recurring == nil {
+		return periodEnd
+	}
+	n := int(p.Recurring.IntervalCount)
+	switch p.Recurring.Interval {
+	case stripe.PriceRecurringIntervalYear:
+		return periodEnd.AddDate(-n, 0, 0)
+	case stripe.PriceRecurringIntervalMonth:
+		return periodEnd.AddDate(0, -n, 0)
+	case stripe.PriceRecurringIntervalWeek:
+		return periodEnd.AddDate(0, 0, -7*n)
+	case stripe.PriceRecurringIntervalDay:
+		return periodEnd.AddDate(0, 0, -n)
+	}
+	return periodEnd
 }
 
 func sortedKeys[V any](m map[string]V) []string {

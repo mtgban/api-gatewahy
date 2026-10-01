@@ -47,15 +47,16 @@ func (e Entitlement) ActiveAt(now time.Time) bool {
 	return e.ValidUntil == nil || now.Before(*e.ValidUntil)
 }
 
-// IsActiveStripePlan reports whether e is a currently active Stripe entitlement.
-func (e Entitlement) IsActiveStripePlan(now time.Time) bool {
-	return e.Source == "stripe" && e.ActiveAt(now)
+// IsActiveStripePlan reports whether e's Stripe subscription is still live,
+// counting a past_due row even past its grace: Stripe still bills it.
+func (e Entitlement) IsActiveStripePlan() bool {
+	return e.Source == "stripe" && e.Status == "active"
 }
 
-// HasActiveStripePlan reports whether ents includes an active Stripe entitlement.
-func HasActiveStripePlan(ents []Entitlement, now time.Time) bool {
+// HasActiveStripePlan reports whether ents includes a live Stripe subscription.
+func HasActiveStripePlan(ents []Entitlement) bool {
 	for _, e := range ents {
-		if e.IsActiveStripePlan(now) {
+		if e.IsActiveStripePlan() {
 			return true
 		}
 	}

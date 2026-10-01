@@ -267,7 +267,11 @@ func (s *Server) changePlan(w http.ResponseWriter, r *http.Request, sess session
 		if resolved.Package == "" {
 			resolved = billing.ResolvedPlan{Plan: plan}
 		}
-		s.renderConfirm(w, r, sess, confirmOptions{Status: http.StatusBadGateway, Resolved: resolved, ReturnTo: s.PricingURL, Change: true, ErrMsg: checkoutError(err)})
+		status := http.StatusBadGateway
+		if billing.IsPaymentFailure(err) {
+			status = http.StatusPaymentRequired
+		}
+		s.renderConfirm(w, r, sess, confirmOptions{Status: status, Resolved: resolved, ReturnTo: s.PricingURL, Change: true, ErrMsg: checkoutError(err)})
 		return
 	}
 	http.Redirect(w, r, "/account?notice=plan", http.StatusFound)

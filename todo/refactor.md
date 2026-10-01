@@ -125,7 +125,7 @@ fails before the fix.
   PR. Issue [#49](https://github.com/mtgban/api-gatewahy/issues/49)
 - [x] D2: refuse End on Stripe rows in the web admin and the CLI, with
   tests. Issue [#44](https://github.com/mtgban/api-gatewahy/issues/44)
-- [ ] D1: grace from `current_period_start`, a test per interval, README.
+- [x] D1: grace from `current_period_start`, a test per interval, README.
   Issue [#43](https://github.com/mtgban/api-gatewahy/issues/43)
 
 ## Phase 3: structure

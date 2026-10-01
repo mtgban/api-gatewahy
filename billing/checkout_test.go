@@ -401,14 +401,22 @@ func TestCheckoutRefusesAnAccountWithAPlan(t *testing.T) {
 		t.Error("a refused checkout reached Stripe")
 	}
 
-	// A row past its valid_until no longer counts, whatever its status says.
+	// Grace lapsing does not end the Stripe subscription, so a row past its
+	// valid_until still blocks checkout while its status stays active.
 	past := co.Now().Add(-time.Hour)
 	lapsed := s.ents["sub_1"]
 	lapsed.ValidUntil = &past
 	s.ents["sub_1"] = lapsed
-	s.ents["manual"] = apiaccess.Entitlement{ID: 2, AccountID: 7, Source: "manual", Status: "active", ValidFrom: past}
+	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: monthly}); !errors.Is(err, ErrHasPlan) {
+		t.Errorf("lapsed-but-active stripe row allowed checkout: %v", err)
+	}
+
+	// Only an ended row frees the account to buy a new plan.
+	ended := lapsed
+	ended.Status = "ended"
+	s.ents["sub_1"] = ended
 	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: monthly}); err != nil {
-		t.Errorf("lapsed stripe row and a manual row blocked checkout: %v", err)
+		t.Errorf("ended stripe row blocked checkout: %v", err)
 	}
 }
 

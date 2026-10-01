@@ -16,6 +16,7 @@ type fakeStripe struct {
 	prices    []*stripe.Price
 	sub       *stripe.Subscription
 	updated   *stripe.SubscriptionUpdateParams
+	updateErr error
 	checkouts int
 	sessions  map[string]stripe.CheckoutSessionStatus
 	fail      error
@@ -84,6 +85,9 @@ func (f *fakeStripe) GetSubscription(_ context.Context, id string) (*stripe.Subs
 }
 
 func (f *fakeStripe) UpdateSubscription(_ context.Context, _ string, p *stripe.SubscriptionUpdateParams) (*stripe.Subscription, error) {
+	if f.updateErr != nil {
+		return nil, f.updateErr
+	}
 	f.updated = p
 	return f.sub, nil
 }

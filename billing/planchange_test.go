@@ -150,6 +150,9 @@ func TestChangePlanInvoicesUpgradeImmediately(t *testing.T) {
 	if got := stripe.StringValue(ups[0].ProrationBehavior); got != "always_invoice" {
 		t.Errorf("proration %q, want always_invoice", got)
 	}
+	if got := stripe.StringValue(ups[0].PaymentBehavior); got != "error_if_incomplete" {
+		t.Errorf("payment_behavior %q, want error_if_incomplete", got)
+	}
 }
 
 func TestChangePlanCreditsDowngradeOnNextInvoice(t *testing.T) {
@@ -169,6 +172,31 @@ func TestChangePlanCreditsDowngradeOnNextInvoice(t *testing.T) {
 	}
 	if got := stripe.StringValue(ups[0].ProrationBehavior); got != "create_prorations" {
 		t.Errorf("proration %q, want create_prorations", got)
+	}
+	if ups[0].PaymentBehavior != nil {
+		t.Errorf("payment_behavior %q, want unset on a downgrade", stripe.StringValue(ups[0].PaymentBehavior))
+	}
+}
+
+// TestChangePlanFailsUpgradeWithoutReconciling checks a declined upgrade
+// charge returns an error, never reconciles, and leaves the subscription as it was.
+func TestChangePlanFailsUpgradeWithoutReconciling(t *testing.T) {
+	f := seededFake(t)
+	ctx := context.Background()
+	current, _ := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}}.Normalize(testCatalog)
+	f.addSub(t, "sub_1", "cus_7", stripe.SubscriptionStatusActive, current.Metadata(7), periodEnd, fakeItem{"starter_monthly", 1})
+	f.fail["UpdateSubscription"] = errors.New("card declined")
+	rc := &recorder{}
+
+	if _, err := ChangePlan(ctx, f, testCatalog, newFakeStores(), testGames, testAccount, "sub_1",
+		Plan{Package: "all_stores", Games: []string{"magic"}}, rc.reconcile); err == nil {
+		t.Fatal("declined upgrade charge accepted")
+	}
+	if len(rc.ids) != 0 {
+		t.Errorf("reconcile ran after a failed upgrade: %v", rc.ids)
+	}
+	if sub := f.subs["sub_1"]; sub.Metadata["package"] != "starter" {
+		t.Errorf("subscription metadata changed to %v despite the failed update", sub.Metadata)
 	}
 }
 

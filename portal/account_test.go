@@ -404,6 +404,29 @@ func TestPlanChangeRejectsAStoreTheSitesDoNotSell(t *testing.T) {
 	}
 }
 
+func TestPlanChangeDeclinedCardKeepsThePlan(t *testing.T) {
+	ts := newTestServer(t)
+	f := ts.withStripe()
+	a, ck, csrf := ts.signIn(t, "ann@example.com")
+	ctx := context.Background()
+	_, _ = ts.store.SetStripeCustomerID(ctx, a.ID, "cus_test")
+	_, _ = ts.store.AddEntitlement(ctx, entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
+	f.sub = &stripe.Subscription{ID: "sub_1", Customer: &stripe.Customer{ID: "cus_test"},
+		Metadata: billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID)}
+	f.updateErr = &stripe.Error{HTTPStatusCode: 402, Code: stripe.ErrorCodeCardDeclined, Msg: "Your card was declined."}
+	reconciled := false
+	ts.Reconcile = func(context.Context, string) error { reconciled = true; return nil }
+
+	rec := ts.do("POST", "/account/plan", "csrf="+csrf+"&package=all_stores&interval=monthly&games=magic", ck)
+	body := rec.Body.String()
+	if rec.Code != 402 || !strings.Contains(body, "Your card was declined. Update it under Manage billing, then try again.") || strings.Contains(body, "Could not") {
+		t.Errorf("%d %s", rec.Code, body)
+	}
+	if reconciled || f.updated != nil {
+		t.Errorf("declined upgrade applied: reconciled %v updated %v", reconciled, f.updated != nil)
+	}
+}
+
 func TestPlanChangeThatStripeTookButReconcileMissed(t *testing.T) {
 	ts := newTestServer(t)
 	f := ts.withStripe()

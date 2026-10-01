@@ -72,11 +72,17 @@ func ChangePlan(ctx context.Context, api API, cat *apiproductlist.ProductList, s
 		}
 		items = append(items, &stripe.SubscriptionUpdateItemParams{Price: stripe.String(id), Quantity: stripe.Int64(want[key])})
 	}
-	if _, err := api.UpdateSubscription(ctx, subID, &stripe.SubscriptionUpdateParams{
+	proration := prorationBehavior(current, newPlan, cat)
+	update := &stripe.SubscriptionUpdateParams{
 		Items:             items,
 		Metadata:          newPlan.Metadata(account.ID),
-		ProrationBehavior: stripe.String(prorationBehavior(current, newPlan, cat)),
-	}); err != nil {
+		ProrationBehavior: stripe.String(proration),
+	}
+	if proration == "always_invoice" {
+		// A declined upgrade charge must fail here, not move the subscription to past_due.
+		update.PaymentBehavior = stripe.String("error_if_incomplete")
+	}
+	if _, err := api.UpdateSubscription(ctx, subID, update); err != nil {
 		return resolved, fmt.Errorf("billing: update %s: %w", subID, err)
 	}
 	if err := reconcile(ctx, subID); err != nil {
@@ -100,4 +106,11 @@ func prorationBehavior(current, next Plan, cat *apiproductlist.ProductList) stri
 		return "always_invoice"
 	}
 	return "create_prorations"
+}
+
+// IsPaymentFailure reports whether Stripe refused a change because the
+// charge failed (a 402, as error_if_incomplete returns on a declined card).
+func IsPaymentFailure(err error) bool {
+	var se *stripe.Error
+	return errors.As(err, &se) && se.HTTPStatusCode == 402
 }

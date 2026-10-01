@@ -84,9 +84,10 @@ func TestHasActiveStripePlan(t *testing.T) {
 		{"active manual only", []Entitlement{{Source: "manual", Status: "active", ValidFrom: past}}, false},
 		{"ended stripe", []Entitlement{{Source: "stripe", Status: "ended", ValidFrom: past}}, false},
 		{"manual then stripe", []Entitlement{{Source: "manual", Status: "active", ValidFrom: past}, {Source: "stripe", Status: "active", ValidFrom: past}}, true},
+		{"stripe lapsed in grace", []Entitlement{{Source: "stripe", Status: "active", ValidFrom: past, ValidUntil: &past}}, true},
 	}
 	for _, c := range cases {
-		if got := HasActiveStripePlan(c.ents, now); got != c.want {
+		if got := HasActiveStripePlan(c.ents); got != c.want {
 			t.Errorf("%s: got %v", c.name, got)
 		}
 	}
