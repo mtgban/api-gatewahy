@@ -21,10 +21,11 @@ import (
 // testServer wires a Server on the in-memory store with the logging mailer.
 type testServer struct {
 	*Server
-	store *memStore
-	mail  *bytes.Buffer
-	mux   *http.ServeMux
-	now   time.Time
+	store  *memStore
+	mail   *bytes.Buffer
+	logBuf *bytes.Buffer
+	mux    *http.ServeMux
+	now    time.Time
 }
 
 func newTestServer(t *testing.T) *testServer {
@@ -33,6 +34,7 @@ func newTestServer(t *testing.T) *testServer {
 	store := newMemStore()
 	store.clock = func() time.Time { return now }
 	var mailBuf bytes.Buffer
+	var logBuf bytes.Buffer
 	s := &Server{
 		Store:             store,
 		Catalog:           apiproductlist.MustLoad(),
@@ -49,11 +51,11 @@ func newTestServer(t *testing.T) *testServer {
 		GameSecrets:       map[string][]byte{"magic": []byte("trial-secret"), "pokemon": []byte("pokemon-secret")},
 		LoginLinksPerHour: 3,
 		Now:               func() time.Time { return now },
-		Log:               log.New(&bytes.Buffer{}, "", 0),
+		Log:               log.New(&logBuf, "", 0),
 	}
 	mux := http.NewServeMux()
 	s.Register(mux)
-	return &testServer{Server: s, store: store, mail: &mailBuf, mux: mux, now: now}
+	return &testServer{Server: s, store: store, mail: &mailBuf, logBuf: &logBuf, mux: mux, now: now}
 }
 
 // do runs one request; cookies carry across when passed in. A POST is marked same-origin.

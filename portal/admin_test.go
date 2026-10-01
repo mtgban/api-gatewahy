@@ -156,6 +156,54 @@ func TestAdminAccountListErrorsAreLoggedAndDoNotClobber(t *testing.T) {
 	}
 }
 
+// TestAdminTargetDistinguishesNotFoundFromStoreError covers item 24:
+// adminTarget must 404 only for a missing account, and 500 for other errors.
+func TestAdminTargetDistinguishesNotFoundFromStoreError(t *testing.T) {
+	ts := newTestServer(t)
+	ctx := context.Background()
+	_, ck, _ := ts.signIn(t, "admin@example.com")
+	cust, _ := ts.store.GetOrCreateAccount(ctx, "cust4@example.com", "")
+	if rec := ts.do("GET", "/admin/accounts/999999", "", ck); rec.Code != 404 {
+		t.Errorf("missing account: %d", rec.Code)
+	}
+	ts.store.getAccountErr = errors.New("db down")
+	ts.store.getAccountErrID = cust.ID
+	rec := ts.do("GET", "/admin/accounts/"+itoa(cust.ID), "", ck)
+	if rec.Code != 500 || !strings.Contains(rec.Body.String(), tryAgainMsg) {
+		t.Errorf("store error should be 500 not 404: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAdminEndEntitlementStoreFailureIs500 covers item 24: a store failure
+// listing entitlements must 500, not read as the entitlement not existing.
+func TestAdminEndEntitlementStoreFailureIs500(t *testing.T) {
+	ts := newTestServer(t)
+	ctx := context.Background()
+	_, ck, csrf := ts.signIn(t, "admin@example.com")
+	cust, _ := ts.store.GetOrCreateAccount(ctx, "cust3@example.com", "")
+	ent, _ := ts.store.AddEntitlement(ctx, entitlementFor(cust.ID, "manual", apiaccess.ScopeBase))
+	ts.store.listEntitlementsErr = errors.New("entitlements down")
+	rec := ts.do("POST", "/admin/accounts/"+itoa(cust.ID)+"/entitlements/"+itoa(ent.ID)+"/end", "csrf="+csrf, ck)
+	if rec.Code != 500 || !strings.Contains(rec.Body.String(), tryAgainMsg) {
+		t.Errorf("store error should be 500 not 404: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAdminEndEntitlementRaceIsNotFound covers item 24: EndEntitlement
+// itself reporting not-found (a race with another end) stays a 404.
+func TestAdminEndEntitlementRaceIsNotFound(t *testing.T) {
+	ts := newTestServer(t)
+	ctx := context.Background()
+	_, ck, csrf := ts.signIn(t, "admin@example.com")
+	cust, _ := ts.store.GetOrCreateAccount(ctx, "cust5@example.com", "")
+	ent, _ := ts.store.AddEntitlement(ctx, entitlementFor(cust.ID, "manual", apiaccess.ScopeBase))
+	ts.store.endEntitlementErr = apiaccess.ErrNotFound
+	rec := ts.do("POST", "/admin/accounts/"+itoa(cust.ID)+"/entitlements/"+itoa(ent.ID)+"/end", "csrf="+csrf, ck)
+	if rec.Code != 404 {
+		t.Errorf("race not-found should be 404: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAdminAddEntitlementStoreFailureIs500(t *testing.T) {
 	ts := newTestServer(t)
 	ctx := context.Background()

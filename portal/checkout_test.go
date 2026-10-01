@@ -166,6 +166,63 @@ func TestCheckoutGetFailsClosedOnEntitlementListError(t *testing.T) {
 	}
 }
 
+// TestCheckoutPostLogsActivePlanCheckFailure covers item 24: checkoutPost
+// must log a store failure instead of dropping it.
+func TestCheckoutPostLogsActivePlanCheckFailure(t *testing.T) {
+	ts := newTestServer(t)
+	ts.withStripe()
+	_, ck, csrf := ts.signIn(t, "ann@example.com")
+	ts.store.listEntitlementsErr = errors.New("db down")
+	rec := ts.do("POST", "/checkout", "csrf="+csrf+"&package=all_data&interval=monthly&games=magic", ck)
+	if rec.Code != 500 {
+		t.Fatalf("status: %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(ts.logBuf.String(), "db down") {
+		t.Errorf("has-plan check failure not logged: %q", ts.logBuf.String())
+	}
+}
+
+// TestCurrentIntervalForMapsStoreAndStripeFailures covers item 24: a store
+// failure is a 500, and a Stripe failure is a 502, neither is a plain 400.
+func TestCurrentIntervalForMapsStoreAndStripeFailures(t *testing.T) {
+	ts := newTestServer(t)
+	ts.withStripe()
+	_, ck, _ := ts.signIn(t, "ann@example.com")
+	a, _ := ts.store.GetAccountByEmail(context.Background(), "ann@example.com")
+	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
+	const changeQuery = "/checkout?change=1&package=all_data&games=magic&return_to=https%3A%2F%2Fmtgban.com%2Fapi-plans"
+
+	ts.store.listEntitlementsErr = errors.New("db down")
+	rec := ts.do("GET", changeQuery, "", ck)
+	if rec.Code != 500 || !strings.Contains(rec.Body.String(), tryAgainMsg) {
+		t.Errorf("store failure should be 500: %d %s", rec.Code, rec.Body.String())
+	}
+	ts.store.listEntitlementsErr = nil
+
+	// f.sub is still nil, so GetSubscription fails like a Stripe outage.
+	rec = ts.do("GET", changeQuery, "", ck)
+	if rec.Code != 502 || !strings.Contains(rec.Body.String(), tryAgainMsg) {
+		t.Errorf("stripe failure should be 502: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCurrentIntervalForBadMetadataIs500 covers item 24: metadata we wrote
+// ourselves being unreadable is our bug, not Stripe's, so it is a 500.
+func TestCurrentIntervalForBadMetadataIs500(t *testing.T) {
+	ts := newTestServer(t)
+	f := ts.withStripe()
+	_, ck, _ := ts.signIn(t, "ann@example.com")
+	a, _ := ts.store.GetAccountByEmail(context.Background(), "ann@example.com")
+	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
+	f.sub = &stripe.Subscription{ID: "sub_1", Customer: &stripe.Customer{ID: "cus_test"}}
+
+	const changeQuery = "/checkout?change=1&package=all_data&games=magic&return_to=https%3A%2F%2Fmtgban.com%2Fapi-plans"
+	rec := ts.do("GET", changeQuery, "", ck)
+	if rec.Code != 500 || !strings.Contains(rec.Body.String(), tryAgainMsg) {
+		t.Errorf("bad metadata should be 500: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCheckoutDropsStoresForNonExplicitPackage(t *testing.T) {
 	ts := newTestServer(t)
 	_, ck, _ := ts.signIn(t, "ann@example.com")
@@ -181,6 +238,21 @@ func TestCheckoutWithoutStripeSaysSo(t *testing.T) {
 	rec := ts.do("POST", "/checkout", "csrf="+csrf+"&package=all_data&interval=monthly&games=magic", ck)
 	if rec.Code != 503 {
 		t.Errorf("%d", rec.Code)
+	}
+}
+
+// TestSuccessPageKeyLabelMatchesAccountPage covers item 20: success.html's
+// key label must be required, like account.html's, since createKey rejects
+// an empty label with 400.
+func TestSuccessPageKeyLabelMatchesAccountPage(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, _ := ts.signIn(t, "ann@example.com")
+	body := ts.do("GET", "/checkout/success", "", ck).Body.String()
+	if strings.Contains(body, "(optional)") {
+		t.Error("success page still marks the key label optional")
+	}
+	if !strings.Contains(body, `name="label" maxlength="64" placeholder="laptop, spreadsheet, prod" required`) {
+		t.Errorf("success page's label input is not required:\n%s", body)
 	}
 }
 

@@ -2,6 +2,7 @@ package portal
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -133,6 +134,22 @@ func TestPortalAndPlanChange(t *testing.T) {
 	}
 }
 
+// TestChangePlanLogsEntitlementListFailure covers item 24: changePlan must
+// log a store failure instead of dropping it.
+func TestChangePlanLogsEntitlementListFailure(t *testing.T) {
+	ts := newTestServer(t)
+	ts.withStripe()
+	_, ck, csrf := ts.signIn(t, "ann@example.com")
+	ts.store.listEntitlementsErr = errors.New("entitlements down")
+	rec := ts.do("POST", "/account/plan", "csrf="+csrf+"&package=all_data&interval=monthly&games=magic", ck)
+	if rec.Code != 500 {
+		t.Fatalf("status: %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(ts.logBuf.String(), "entitlements down") {
+		t.Errorf("entitlements failure not logged: %q", ts.logBuf.String())
+	}
+}
+
 func TestPortalWithoutCustomer(t *testing.T) {
 	ts := newTestServer(t)
 	ts.withStripe()
@@ -246,6 +263,72 @@ func TestAccountPageShowsKeyKind(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("account page lacks the key kind %q", want)
 		}
+	}
+}
+
+// TestAccountPageShowsTryAgainOnListFailure covers item 16: a store failure
+// must show tryAgainMsg at 500, not empty lists that read as no access.
+func TestAccountPageShowsTryAgainOnListFailure(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, _ := ts.signIn(t, "ann@example.com")
+
+	ts.store.listEntitlementsErr = errors.New("entitlements down")
+	rec := ts.do("GET", "/account", "", ck)
+	body := rec.Body.String()
+	if rec.Code != 500 || !strings.Contains(body, tryAgainMsg) {
+		t.Errorf("entitlements error not surfaced: %d %s", rec.Code, body)
+	}
+	if strings.Contains(body, "No active access") {
+		t.Error("entitlements failure still shows the empty-state plan pitch")
+	}
+
+	ts.store.listEntitlementsErr = nil
+	ts.store.listKeysErr = errors.New("keys down")
+	rec = ts.do("GET", "/account", "", ck)
+	body = rec.Body.String()
+	if rec.Code != 500 || !strings.Contains(body, tryAgainMsg) {
+		t.Errorf("keys error not surfaced: %d %s", rec.Code, body)
+	}
+	if strings.Contains(body, "No keys yet") {
+		t.Error("keys failure still shows the empty-state line")
+	}
+}
+
+// TestAccountPageListFailureDoesNotClobberFormError covers item 24's
+// no-clobber guard: a form error set before the list calls run must survive
+// a list failure, not be overwritten by the generic tryAgainMsg.
+func TestAccountPageListFailureDoesNotClobberFormError(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, csrf := ts.signIn(t, "ann@example.com")
+	ts.store.listEntitlementsErr = errors.New("entitlements down")
+	rec := ts.do("POST", "/account/keys", "csrf="+csrf, ck)
+	body := rec.Body.String()
+	if rec.Code != 400 || !strings.Contains(body, "Give the key a label") || strings.Contains(body, tryAgainMsg) {
+		t.Errorf("form error clobbered by list error: %d %s", rec.Code, body)
+	}
+}
+
+// TestCreateKeyKeepsNewKeyVisibleWhenListsFail covers item 16's follow-up: a
+// list failure right after minting a key must not invite a retry that burns
+// a second key.
+func TestCreateKeyKeepsNewKeyVisibleWhenListsFail(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, csrf := ts.signIn(t, "ann@example.com")
+	// The plan-kind check also lists entitlements; let that one succeed and
+	// only fail the second call, the one inside the final re-render.
+	ts.store.listEntitlementsErr = errors.New("entitlements down")
+	ts.store.listEntitlementsFailAfter = 2
+	rec := ts.do("POST", "/account/keys", "csrf="+csrf+"&label=laptop", ck)
+	body := rec.Body.String()
+	plain := keyRe.FindString(body)
+	if rec.Code != 200 || plain == "" {
+		t.Fatalf("key creation should still succeed: %d %s", rec.Code, body)
+	}
+	if strings.Contains(body, tryAgainMsg) {
+		t.Error("new key shown next to try-again, inviting a second key")
+	}
+	if !strings.Contains(body, "reload") {
+		t.Errorf("no reload guidance next to the new key: %s", body)
 	}
 }
 

@@ -17,7 +17,9 @@ import (
 type accountData struct {
 	Account      apiaccess.Account
 	Entitlements []entitlementView
+	EntsFailed   bool
 	Keys         []keyView
+	KeysFailed   bool
 	NewKey       string
 	Usage        []apiaccess.UsageRow
 	Month        string
@@ -26,6 +28,11 @@ type accountData struct {
 	TrialEnds    string
 	ReturnTo     string
 }
+
+// keyCreatedListsFailedMsg tells the customer their new key is safe even
+// though the rest of the page could not load, so they do not retry and burn
+// a second key.
+const keyCreatedListsFailedMsg = "Your key was created. The rest of this page could not be loaded; reload to see your access and keys."
 
 type keyView struct {
 	ID       int64
@@ -61,6 +68,7 @@ func (s *Server) renderAccount(w http.ResponseWriter, r *http.Request, status in
 	ents, err := s.Store.ListEntitlements(ctx, a.ID)
 	if err != nil {
 		s.logf("account %s: entitlements: %v", a.Email, err)
+		d.EntsFailed = true
 	}
 	sites := s.newSiteLookup(ctx)
 	for _, e := range ents {
@@ -78,6 +86,7 @@ func (s *Server) renderAccount(w http.ResponseWriter, r *http.Request, status in
 	keys, err := s.Store.ListKeys(ctx, a.ID)
 	if err != nil {
 		s.logf("account %s: keys: %v", a.Email, err)
+		d.KeysFailed = true
 	}
 	for _, k := range keys {
 		if k.RevokedAt != nil {
@@ -93,6 +102,16 @@ func (s *Server) renderAccount(w http.ResponseWriter, r *http.Request, status in
 		d.Usage = rows
 	} else {
 		s.logf("account %s: usage: %v", a.Email, err)
+	}
+	// A list failure right after minting a key must not read as a reason to
+	// retry the form, which would burn a second key for one already shown.
+	if (d.EntsFailed || d.KeysFailed) && errMsg == "" {
+		if newKey != "" {
+			errMsg = keyCreatedListsFailedMsg
+		} else {
+			errMsg = tryAgainMsg
+			status = http.StatusInternalServerError
+		}
 	}
 	p := s.pageFor(&sess, "Your API account")
 	p.Notice = notice
@@ -238,6 +257,7 @@ func (s *Server) changePlan(w http.ResponseWriter, r *http.Request, sess session
 	}
 	ents, err := s.Store.ListEntitlements(r.Context(), a.ID)
 	if err != nil {
+		s.logf("plan change %s: entitlements: %v", a.Email, err)
 		s.fail(w, r, http.StatusInternalServerError, tryAgainMsg)
 		return
 	}
