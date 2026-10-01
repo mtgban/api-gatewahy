@@ -18,7 +18,7 @@ places:
 ## Open decisions
 
 These block the items that reference them. Each needs an owner's answer,
-not a code reading.
+not a code reading. Answers are recorded under Decided.
 
 - [ ] **D1 past_due grace.** Today a failed renewal keeps access until
   the end of the *new*, unpaid period plus `grace_days`: a whole extra
@@ -28,28 +28,31 @@ not a code reading.
   webhook or the 03:00 reconcile reopens it. Options: refuse End for
   `source = stripe` and point to Stripe, or cancel the subscription in
   Stripe from that button.
-- [ ] **D3 Instance count.** Is the App Platform app ever more than one
-  instance? If yes:
-  - every daily job runs once per instance (duplicate trial reminder mails,
-    duplicate Discord posts, concurrent reconciles);
-  - the sign-in and key-mint limits multiply by N.
-  If it is pinned to one, say so in README and skip the locks.
-- [ ] **D4 What `/healthz` means.** It fails whenever the DB ping fails.
-  If App Platform restarts unhealthy containers, a DB blip wipes the
-  resolver cache the stale-grace window exists to serve from. Should it be
-  liveness only, with DB health reported elsewhere? This also needs the
-  app's health-check thresholds, which live in DigitalOcean.
-- [ ] **D5 Proration.** `ChangePlan` uses `create_prorations`, so an
-  upgrade's charge lands on the next invoice. A customer who upgrades then
-  cancels may never pay it. Is `always_invoice` wanted for upgrades?
-- [ ] **D6 Two paid subscriptions.** Two open checkouts (two tabs, or the
-  CLI, which never checks) can both be paid. Block it in
-  `Checkout.Create`, or only alert?
-- [ ] **D7 Sibling-repo rules.** go-mtgban and mtgban-website ban
-  `reflect` (revive) and calls folded into an `if`. Here, 6 billing test
-  files import `reflect` and there are 130 folded `if err :=`. Adopt for
-  new code, adopt with a sweep, or not at all? AGENTS.md says "not
-  adopted" until this is decided.
+- [ ] **D7b Calls folded into an `if`.** go-mtgban splits
+  `if err := f(); err != nil` into `err := f()` and `if err != nil` for new
+  code; review enforces it, not a linter. There are 130 folded sites here.
+
+### Decided (2026-10-01)
+
+- [x] **D3 One instance.** The App Platform app runs a single instance.
+  Daily jobs and in-process limits need no cross-instance locks; a
+  per-subscription mutex is enough to serialize reconciles. README says so.
+- [x] **D4 `/healthz` is liveness only.** It answers 200 while the process
+  serves and stops depending on the DB ping, so a DB blip cannot get the
+  container restarted and its resolver cache wiped. DB health is reported
+  by the prober's Discord alerts instead.
+- [x] **D5 Upgrades invoice immediately.** `ChangePlan` uses
+  `always_invoice` when the new plan's `Total` is higher, and keeps
+  `create_prorations` (a credit on the next invoice) for a downgrade.
+- [x] **D6 Block a second subscription.** `Checkout.Create` refuses an
+  account that already has an active Stripe plan (covering the CLI, which
+  never checks), using one shared "active plan" predicate. It also expires
+  the customer's other open Checkout Sessions, so two tabs cannot both be
+  paid. Reconcile alerts if an account still ends up with two.
+- [x] **D7a No `reflect`.** Banned in production code and tests, as in
+  go-mtgban and mtgban-website: revive's `imports-blocklist` through
+  golangci-lint, after the 6 billing test files that import it are
+  rewritten.
 
 ## Phase 1: correctness fixes
 
@@ -65,14 +68,14 @@ fails before the fix.
 | 5 | `DEV_ACCESS,` is stored as `DEV_ACCESS` | Security | 2/3/1 | 25 | `canonicalStoreScope` matches presets on the whole string only. `"DEV_ACCESS,"` canonicalizes to `DEV_ACCESS`, which it rejects on input. Only the handler's exact-match check stops it. Presets must stand alone |
 | 6 | Daily summary silently dropped past 2,000 chars | Ops | 2/3/1 | 25 | `discord.Post` sends one message; `SummaryText` writes a line per account×game and per new key. Discord answers 400 and only a log line remains |
 | 7 | Permanent reconcile errors retried for 3 days, alerting each time | Billing/Ops | 3/3/2 | 24 | `Webhook` answers 500 for every `apply` error, including ones that cannot succeed: no metadata, unknown package, `ErrNoAccount`, `ValidationError`. `All` alerts the same subscriptions nightly, twice |
-| 8 | Daily jobs: no panic recovery, no single-runner guarantee | Ops | 3/3/2 | 24 | `runDaily` runs `fn` bare in a background goroutine, so one panic in reconcile or reminders ends the process. See D3 for the per-instance duplication |
+| 8 | Daily jobs have no panic recovery | Ops | 3/3/1 | 30 | `runDaily` runs `fn` bare in a background goroutine, so one panic in reconcile or reminders ends the process |
 | 9 | `checkout link` prints a struct | Bug | 2/2/1 | 20 | `runBilling` prints `billing.Session` with `%s`: `{cs_… https://…}` |
 | 10 | Client disconnects counted as upstream 502s | Metering | 2/2/1 | 20 | `ErrorHandler` has no `context.Canceled` case: it logs "upstream unavailable", writes 502, and usage counts an error. The 499 path is unreachable |
 | 11 | Upstream transport has no dial or TLS timeout | Correctness | 2/2/1 | 20 | `newProxy` builds a bare `http.Transport`; a blackholed upstream waits the full 300 s |
 | 12 | Plan change reports failure after Stripe changed | Billing/UX | 2/2/1 | 20 | `ChangePlan` returns an error when the follow-up reconcile fails; the portal shows "Could not start checkout" for a change that went through |
 | 13 | Invite stays burned when the client disconnects | Billing | 2/2/1 | 20 | `Checkout.Create`'s deferred `ReleaseInvite` uses the request context and drops its error |
 | 14 | Ended Stripe rows get a new end date on every touch | Data | 2/2/1 | 20 | `MapStatus` uses `now` for ended subscriptions; use `sub.EndedAt` |
-| 15 | Trial reminder sent to customers who already bought | UX | 2/2/1 | 20 | `SendTrialReminders` checks only account status, not a Stripe plan or an ended trial entitlement. It also sends before marking (see D3) |
+| 15 | Trial reminder sent to customers who already bought | UX | 2/2/1 | 20 | `SendTrialReminders` checks only account status, not a Stripe plan or an ended trial entitlement. It also sends before marking |
 | 16 | Account page says "No active access" when the DB errors | UX | 2/2/1 | 20 | `renderAccount` logs `ListEntitlements`/`ListKeys` errors and renders empty lists |
 | 17 | SMTP on port 465 hangs every send | Ops | 2/2/1 | 20 | `SMTP.Send` dials plain TCP then requires STARTTLS; `FromEnv` accepts any port |
 | 18 | Trial grant can lock a patron out for 180 days | Correctness | 3/2/2 | 20 | `CreateTrial` commits, then `AddEntitlement` runs on its own and is compensated by `DeleteTrial`. A crash between them leaves a trial with no access. Do both in `CreateTrial`'s transaction |
@@ -103,17 +106,23 @@ fails before the fix.
 
 ## Phase 2: decision-dependent
 
-| Item | Waits on | Evidence |
+| Item | Decision | Evidence |
 |---|---|---|
-| Grace from the last paid period | D1 | `subPeriodEnd` uses the current, unpaid period |
-| Stripe rows: refuse or cancel on End; fix the "cannot be reopened" dialog | D2 | `adminEndEntitlement`, `admin_account.html`, `UpsertStripeEntitlement` |
-| Single-runner jobs (`pg_try_advisory_lock` per job); claim-then-send reminders; DB-backed key-mint quota | D3 | `runDaily`, `SendTrialReminders`, `limiter.go` |
-| Serialize reconciles per subscription; `All` re-fetches before writing a status change | D3 (a mutex is enough on one instance) | `Reconciler.apply`, `UpsertStripeEntitlement` is last-writer-wins |
-| `/healthz` liveness vs readiness | D4 | `newMux` |
-| `always_invoice` on upgrade | D5 | `ChangePlan` |
-| Detect or block a second subscription; one "active plan" predicate | D6 | `SubscriptionFor` counts `Status == "active"`, `hasActiveStripePlan` uses `ActiveAt` |
+| Grace from the last paid period | D1 (open) | `subPeriodEnd` uses the current, unpaid period |
+| Stripe rows: refuse or cancel on End; fix the "cannot be reopened" dialog | D2 (open) | `adminEndEntitlement`, `admin_account.html`, `UpsertStripeEntitlement` |
+| Serialize reconciles per subscription with a mutex; `All` re-fetches before writing a status change | D3 | `Reconciler.apply`; `UpsertStripeEntitlement` is last-writer-wins |
+| README: one instance; the per-hour limits are per process | D3 | README "Customer pages", Configuration |
+| `/healthz` answers from the process alone; the prober pings the DB and alerts on a state change | D4 | `newMux`, `gateway.Prober` |
+| `always_invoice` when the plan's total goes up | D5 | `ChangePlan` |
+| `Checkout.Create` refuses an active plan and expires other open sessions; one "active plan" predicate; reconcile alerts on two | D6 | `SubscriptionFor` counts `Status == "active"`, `hasActiveStripePlan` uses `ActiveAt`; the CLI never checks |
+| Ban `reflect`: revive `imports-blocklist` in `.golangci.yml`, rewrite the 6 test files with `slices`/`maps` or typed comparisons | D7a | `billing/{seed,entitlement_db,stores,plan,planchange,reconcile}_test.go` |
 
-- [ ] Each row above, once its decision is recorded in this file
+- [ ] D3: reconcile mutex, README note
+- [ ] D4: liveness `/healthz`, DB check in the prober
+- [ ] D5: `always_invoice` on upgrade, with a fake-Stripe test for each direction
+- [ ] D6: block in `Checkout.Create`, expire sibling sessions, alert in reconcile
+- [ ] D7a: rewrite the 6 test files, then turn the lint rule on in the same PR
+- [ ] D1, D2: once decided
 
 ## Phase 3: structure
 
@@ -159,7 +168,7 @@ fails before the fix.
     429's body is not JSON
   - the origin check also reads `Referer`
   - "`admin key create`" is `key create`
-  - the per-hour limits are per instance (D3)
+  - one instance (D3), so the per-hour limits are per process
   - the schema note lists 4 of 11 tables
   - the `-games` default is `magic` but not forced
   - an abandoned session's invite stays spent
