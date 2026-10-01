@@ -24,6 +24,7 @@ not a code reading. Answers are recorded under Decided.
   the end of the *new*, unpaid period plus `grace_days`: a whole extra
   interval, so with `grace_days = 0` a quarterly customer still keeps three
   months. Should grace run from the end of the last *paid* period?
+
 ### Decided (2026-10-01)
 
 - [x] **D3 One instance.** The App Platform app runs a single instance.
@@ -45,6 +46,13 @@ not a code reading. Answers are recorded under Decided.
   go-mtgban and mtgban-website: revive's `imports-blocklist` through
   golangci-lint, after the 6 billing test files that import it are
   rewritten.
+- [x] **D2 End refuses Stripe rows.** A Stripe entitlement mirrors its
+  subscription, so the admin page hides End for `source = stripe` and the
+  handler refuses it with "cancel it in Stripe". Suspending the account
+  stays the immediate cut-off; the gateway rejects every key of a
+  suspended account and reconcile does not touch account status.
+- [x] **D7b No rule on calls folded into an `if`.** Follow the
+  surrounding code; not a review point and not a sweep target.
 
 ## Phase 1: correctness fixes
 
