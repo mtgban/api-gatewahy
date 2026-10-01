@@ -182,7 +182,12 @@ subscription's items and metadata to the new plan with proration, keeping the
 current interval, then reconciles. An upgrade is invoiced immediately; a
 downgrade credits the next invoice instead. A declined card on an upgrade
 fails the update and keeps the current plan, rather than leaving the
-subscription past_due. `-sub` is only needed when the account has more
+subscription past_due. `-games` and `-stores` start from the
+subscription's current plan and change only when given, so a magic+pokemon
+customer changing package alone keeps pokemon. The current stores carry over
+only onto a package that still takes a store list; switching to one that
+does not (`all_stores`, `all_data`) drops them even without `-stores`, and a
+given `-stores` always wins. `-sub` is only needed when the account has more
 than one active Stripe subscription.
 
 `serve -config`: runs the gateway HTTP server.
