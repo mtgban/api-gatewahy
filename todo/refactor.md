@@ -90,17 +90,17 @@ fails before the fix.
 ### Phase 1 checklist
 
 - [ ] CLI billing: #1, #9 (land with Phase 3's per-verb flag sets, or fix
-  the defaults in place first). Issue #33
+  the defaults in place first). Issue [#33](https://github.com/mtgban/api-gatewahy/issues/33)
 - [ ] Resolver: #2 (generation counter), #3 (lookup deadline, then
-  stale-on-timeout); add a `-race` test with a blocking source. Issue #34
-- [ ] Gateway proxy: #10, #11, #19, #23, #25. Issue #35
-- [ ] Billing reconcile: #4, #7, #14; then #12, #13. Issue #36
-- [ ] apiaccess: #5, #18, #21 (`EndEntitlement` returns the row), #27. Issue #37
-- [ ] Jobs: #8 (recover per run, log, alert). Issue #38
-- [ ] Discord: #6 (split on line boundaries). Issue #39
-- [ ] Portal: #15, #16, #20, #24. Issue #40
-- [ ] Mailer: #17. Issue #41
-- [ ] Meter and summary: #22, #26. Issue #42
+  stale-on-timeout); add a `-race` test with a blocking source. Issue [#34](https://github.com/mtgban/api-gatewahy/issues/34)
+- [ ] Gateway proxy: #10, #11, #19, #23, #25. Issue [#35](https://github.com/mtgban/api-gatewahy/issues/35)
+- [ ] Billing reconcile: #4, #7, #14; then #12, #13. Issue [#36](https://github.com/mtgban/api-gatewahy/issues/36)
+- [ ] apiaccess: #5, #18, #21 (`EndEntitlement` returns the row), #27. Issue [#37](https://github.com/mtgban/api-gatewahy/issues/37)
+- [ ] Jobs: #8 (recover per run, log, alert). Issue [#38](https://github.com/mtgban/api-gatewahy/issues/38)
+- [ ] Discord: #6 (split on line boundaries). Issue [#39](https://github.com/mtgban/api-gatewahy/issues/39)
+- [ ] Portal: #15, #16, #20, #24. Issue [#40](https://github.com/mtgban/api-gatewahy/issues/40)
+- [ ] Mailer: #17. Issue [#41](https://github.com/mtgban/api-gatewahy/issues/41)
+- [ ] Meter and summary: #22, #26. Issue [#42](https://github.com/mtgban/api-gatewahy/issues/42)
 
 ## Phase 2: decision-dependent
 
@@ -115,18 +115,18 @@ fails before the fix.
 | `Checkout.Create` refuses an active plan and expires other open sessions; one "active plan" predicate; reconcile alerts on two | D6 | `SubscriptionFor` counts `Status == "active"`, `hasActiveStripePlan` uses `ActiveAt`; the CLI never checks |
 | Ban `reflect`: revive `imports-blocklist` in `.golangci.yml`, rewrite the 6 test files with `slices`/`maps` or typed comparisons | D7a | `billing/{seed,entitlement_db,stores,plan,planchange,reconcile}_test.go` |
 
-- [ ] D3: reconcile mutex, README note. Issue #45
-- [ ] D4: liveness `/healthz`, DB check in the prober. Issue #46
+- [ ] D3: reconcile mutex, README note. Issue [#45](https://github.com/mtgban/api-gatewahy/issues/45)
+- [ ] D4: liveness `/healthz`, DB check in the prober. Issue [#46](https://github.com/mtgban/api-gatewahy/issues/46)
 - [ ] D5: `always_invoice` on upgrade, with a fake-Stripe test for each
-  direction. Issue #47
+  direction. Issue [#47](https://github.com/mtgban/api-gatewahy/issues/47)
 - [ ] D6: block in `Checkout.Create`, expire sibling sessions, alert in
-  reconcile. Issue #48
+  reconcile. Issue [#48](https://github.com/mtgban/api-gatewahy/issues/48)
 - [ ] D7a: rewrite the 6 test files, then turn the lint rule on in the same
-  PR. Issue #49
+  PR. Issue [#49](https://github.com/mtgban/api-gatewahy/issues/49)
 - [ ] D2: refuse End on Stripe rows in the web admin and the CLI, with
-  tests. Issue #44
+  tests. Issue [#44](https://github.com/mtgban/api-gatewahy/issues/44)
 - [ ] D1: grace from `current_period_start`, a test per interval, README.
-  Issue #43
+  Issue [#43](https://github.com/mtgban/api-gatewahy/issues/43)
 
 ## Phase 3: structure
 
@@ -151,23 +151,23 @@ fails before the fix.
 
 - [ ] S5 first: a verb table, one `FlagSet` per verb, and narrow store
   interfaces so the happy paths get tests. This also fixes #1 and #9 at the
-  root. Issue #50
+  root. Issue [#50](https://github.com/mtgban/api-gatewahy/issues/50)
 - [ ] S6 in the same series: `apiaccess.ManualGrant`, `KeyKindFor`, and a
-  shared usage window, used by both admins. Issue #51
+  shared usage window, used by both admins. Issue [#51](https://github.com/mtgban/api-gatewahy/issues/51)
 - [ ] S3: an `apiaccess/apiaccesstest` in-memory store plus a contract test
   that runs one table against it and against Postgres; delete the three
   memStores. Fold the two `fakeStores` and Stripe fakes into
-  `billing/billingtest`. Issue #52
-- [ ] S1, S2 (one PR). Issue #53
-- [ ] S4, then S9 and S12 through it. Issue #54
-- [ ] S7, then S8. Issue #55
-- [ ] S10. Issue #56
-- [ ] S11. Issue #57
-- [ ] S13, S14 opportunistically, when touching those files. Issue #58
+  `billing/billingtest`. Issue [#52](https://github.com/mtgban/api-gatewahy/issues/52)
+- [ ] S1, S2 (one PR). Issue [#53](https://github.com/mtgban/api-gatewahy/issues/53)
+- [ ] S4, then S9 and S12 through it. Issue [#54](https://github.com/mtgban/api-gatewahy/issues/54)
+- [ ] S7, then S8. Issue [#55](https://github.com/mtgban/api-gatewahy/issues/55)
+- [ ] S10. Issue [#56](https://github.com/mtgban/api-gatewahy/issues/56)
+- [ ] S11. Issue [#57](https://github.com/mtgban/api-gatewahy/issues/57)
+- [ ] S13, S14 opportunistically, when touching those files. Issue [#58](https://github.com/mtgban/api-gatewahy/issues/58)
 
 ## Phase 4: docs
 
-- [ ] README drift (issue #59):
+- [ ] README drift (issue [#59](https://github.com/mtgban/api-gatewahy/issues/59)):
   - error table: 401 also covers a suspended account; 403 covers no store
     scope; 429 has three sources; 502 also passes 429 through; an upstream
     429's body is not JSON
@@ -180,7 +180,7 @@ fails before the fix.
 - [ ] Code comments that describe history: schema.go's "Phase 2"/"Phase 3"
   and "Appended so…"; `reconcile.go`'s "the spec's table"; the
   `AddEntitlement` comment that overclaims (#5); trial.go's "15-day";
-  `name := name` loop copies, dead since Go 1.22. Issue #60
+  `name := name` loop copies, dead since Go 1.22. Issue [#60](https://github.com/mtgban/api-gatewahy/issues/60)
 
 ## Not worth doing
 
