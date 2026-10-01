@@ -138,7 +138,7 @@ func (s *Server) subscriptionFor(ctx context.Context, accountID int64, email str
 		s.logf("plan change %s: entitlements: %v", email, err)
 		return "", http.StatusInternalServerError, tryAgainMsg
 	}
-	subID, err := billing.SubscriptionFor(ents)
+	subID, err := billing.SubscriptionFor(ents, s.now())
 	if errors.Is(err, billing.ErrManySubscriptions) {
 		return "", http.StatusBadRequest, manySubscriptionsMsg
 	}
@@ -261,6 +261,11 @@ func (s *Server) checkoutPost(w http.ResponseWriter, r *http.Request, sess sessi
 		return
 	}
 	cs, err := s.Checkout.Create(r.Context(), billing.Request{Account: a, Plan: plan, Invite: invite, Resolved: &resolved})
+	// The check above is a hint; a plan that lands after it is caught by Create.
+	if errors.Is(err, billing.ErrHasPlan) {
+		s.fail(w, r, http.StatusConflict, alreadyHasPlanMsg)
+		return
+	}
 	if err != nil {
 		s.logf("checkout for %s: %v", a.Email, err)
 		s.renderConfirm(w, r, sess, confirmOptions{Status: http.StatusBadGateway, Resolved: resolved, Invite: invite, ReturnTo: returnTo, ErrMsg: checkoutError(err)})

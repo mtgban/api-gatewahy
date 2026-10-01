@@ -21,6 +21,7 @@ type fakeAPI struct {
 	subs          map[string]*stripe.Subscription
 	sessions      []*stripe.CheckoutSessionCreateParams
 	sessionStatus map[string]stripe.CheckoutSessionStatus
+	sessionCust   map[string]string
 	portals       []*stripe.BillingPortalSessionCreateParams
 	updates       map[string][]*stripe.SubscriptionUpdateParams
 	fail          map[string]error
@@ -75,9 +76,25 @@ func (f *fakeAPI) CreateCheckoutSession(_ context.Context, p *stripe.CheckoutSes
 	id := f.next("cs")
 	if f.sessionStatus == nil {
 		f.sessionStatus = map[string]stripe.CheckoutSessionStatus{}
+		f.sessionCust = map[string]string{}
 	}
 	f.sessionStatus[id] = stripe.CheckoutSessionStatusOpen
+	f.sessionCust[id] = stripe.StringValue(p.Customer)
 	return &stripe.CheckoutSession{ID: id, URL: "https://checkout.stripe.test/" + id}, nil
+}
+
+// ListOpenCheckoutSessions returns the customer's open sessions, sorted by id.
+func (f *fakeAPI) ListOpenCheckoutSessions(_ context.Context, customerID string) ([]*stripe.CheckoutSession, error) {
+	if err := f.enter("ListOpenCheckoutSessions"); err != nil {
+		return nil, err
+	}
+	var out []*stripe.CheckoutSession
+	for _, id := range sortedKeys(f.sessionStatus) {
+		if f.sessionCust[id] == customerID && f.sessionStatus[id] == stripe.CheckoutSessionStatusOpen {
+			out = append(out, &stripe.CheckoutSession{ID: id, Status: stripe.CheckoutSessionStatusOpen})
+		}
+	}
+	return out, nil
 }
 
 // ExpireCheckoutSession expires an open session; Stripe refuses once it is complete or gone.

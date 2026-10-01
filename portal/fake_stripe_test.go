@@ -67,6 +67,11 @@ func (f *fakeStripe) ExpireCheckoutSession(_ context.Context, id string) (*strip
 	return &stripe.CheckoutSession{ID: id, Status: stripe.CheckoutSessionStatusExpired}, nil
 }
 
+// ListOpenCheckoutSessions lists none; billing's own fake covers expiring the others.
+func (f *fakeStripe) ListOpenCheckoutSessions(context.Context, string) ([]*stripe.CheckoutSession, error) {
+	return nil, nil
+}
+
 func (f *fakeStripe) CreatePortalSession(context.Context, *stripe.BillingPortalSessionCreateParams) (*stripe.BillingPortalSession, error) {
 	return &stripe.BillingPortalSession{URL: "https://billing.stripe.com/p/session/test"}, nil
 }

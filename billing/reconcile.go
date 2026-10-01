@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -278,6 +279,8 @@ type Result struct {
 	Checked int
 	Failed  int
 	Errors  []string
+	// Duplicates counts accounts left holding more than one active stripe row.
+	Duplicates int
 }
 
 // maxSummaryErrors caps how many errors Summary joins, so one bad pass does
@@ -286,8 +289,14 @@ const maxSummaryErrors = 5
 
 // Summary is the one-line Discord message for a pass.
 func (res Result) Summary() string {
+	dup := ""
+	if res.Duplicates == 1 {
+		dup = "; 1 account with more than one subscription"
+	} else if res.Duplicates > 1 {
+		dup = fmt.Sprintf("; %d accounts with more than one subscription", res.Duplicates)
+	}
 	if res.Failed == 0 {
-		return fmt.Sprintf("stripe reconcile: %d subscriptions in sync", res.Checked)
+		return fmt.Sprintf("stripe reconcile: %d subscriptions in sync%s", res.Checked, dup)
 	}
 	errs := res.Errors
 	suffix := ""
@@ -295,7 +304,7 @@ func (res Result) Summary() string {
 		suffix = fmt.Sprintf(" (+%d more)", len(errs)-maxSummaryErrors)
 		errs = errs[:maxSummaryErrors]
 	}
-	return fmt.Sprintf("stripe reconcile: %d subscriptions, %d failed: %s%s", res.Checked, res.Failed, strings.Join(errs, "; "), suffix)
+	return fmt.Sprintf("stripe reconcile: %d subscriptions, %d failed: %s%s%s", res.Checked, res.Failed, strings.Join(errs, "; "), suffix, dup)
 }
 
 // All refetches each listed subscription, as a listing can go stale mid-pass,
@@ -325,8 +334,8 @@ func (r *Reconciler) All(ctx context.Context) (Result, error) {
 		return res, fmt.Errorf("billing: list active stripe entitlements: %w", err)
 	}
 	for _, ref := range refs {
-		if !seen[ref] {
-			record(ref, r.fetchAndApply(ctx, ref, true))
+		if !seen[ref.SubID] {
+			record(ref.SubID, r.fetchAndApply(ctx, ref.SubID, true))
 		}
 	}
 	// One reload notification for the whole pass, not one per subscription.
@@ -335,5 +344,30 @@ func (r *Reconciler) All(ctx context.Context) (Result, error) {
 			log.Printf("billing: reload notify after reconcile: %v", err)
 		}
 	}
+	// Re-listed, so the check sees the rows the pass just wrote.
+	refs, err = r.Store.ListActiveStripeRefs(ctx)
+	if err != nil {
+		r.alertf("duplicate subscription check: %v", err)
+		return res, nil
+	}
+	res.Duplicates = r.alertDuplicates(refs)
 	return res, nil
+}
+
+// alertDuplicates alerts once per account holding more than one active stripe row,
+// in account order, and returns how many there are.
+func (r *Reconciler) alertDuplicates(refs []apiaccess.StripeRef) int {
+	subs := map[int64][]string{}
+	for _, ref := range refs {
+		subs[ref.AccountID] = append(subs[ref.AccountID], ref.SubID)
+	}
+	n := 0
+	for _, id := range slices.Sorted(maps.Keys(subs)) {
+		if ids := subs[id]; len(ids) > 1 {
+			slices.Sort(ids)
+			r.alertf("account %d has %d active Stripe subscriptions (%s)", id, len(ids), strings.Join(ids, ", "))
+			n++
+		}
+	}
+	return n
 }

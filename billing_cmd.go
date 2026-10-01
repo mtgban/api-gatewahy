@@ -152,11 +152,11 @@ func runBilling(ctx context.Context, d billingDeps, cmd string, args []string, s
 		if !ok {
 			return 1
 		}
-		url, err := newCheckout(d.store, d.api, d.cfg, d.cat, d.stores).Create(ctx, billing.Request{Account: a, Plan: plan(), Invite: *invite})
+		sess, err := newCheckout(d.store, d.api, d.cfg, d.cat, d.stores).Create(ctx, billing.Request{Account: a, Plan: plan(), Invite: *invite})
 		if err != nil {
 			return fail(err)
 		}
-		fmt.Fprintf(stdout, "checkout link for %s, valid 24 hours:\n\n    %s\n\n", a.Email, url)
+		fmt.Fprintf(stdout, "checkout link for %s, valid 24 hours:\n\n    %s\n\n", a.Email, sess.URL)
 		return 0
 
 	case "invite create":
@@ -230,7 +230,7 @@ func runBilling(ctx context.Context, d billingDeps, cmd string, args []string, s
 			if err != nil {
 				return fail(err)
 			}
-			if subID, err = billing.SubscriptionFor(ents); err != nil {
+			if subID, err = billing.SubscriptionFor(ents, time.Now()); err != nil {
 				return fail(err)
 			}
 		}

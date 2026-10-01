@@ -12,6 +12,7 @@ type API interface {
 	CreateCustomer(ctx context.Context, params *stripe.CustomerCreateParams) (*stripe.Customer, error)
 	CreateCheckoutSession(ctx context.Context, params *stripe.CheckoutSessionCreateParams) (*stripe.CheckoutSession, error)
 	ExpireCheckoutSession(ctx context.Context, id string) (*stripe.CheckoutSession, error)
+	ListOpenCheckoutSessions(ctx context.Context, customerID string) ([]*stripe.CheckoutSession, error)
 	GetSubscription(ctx context.Context, id string) (*stripe.Subscription, error)
 	ListSubscriptions(ctx context.Context) ([]*stripe.Subscription, error)
 	UpdateSubscription(ctx context.Context, id string, params *stripe.SubscriptionUpdateParams) (*stripe.Subscription, error)
@@ -56,6 +57,20 @@ func (c *Client) CreateCheckoutSession(ctx context.Context, params *stripe.Check
 // ExpireCheckoutSession implements API.
 func (c *Client) ExpireCheckoutSession(ctx context.Context, id string) (*stripe.CheckoutSession, error) {
 	return c.sc.V1CheckoutSessions.Expire(ctx, id, nil)
+}
+
+// ListOpenCheckoutSessions returns the customer's Checkout Sessions that can still be paid.
+func (c *Client) ListOpenCheckoutSessions(ctx context.Context, customerID string) ([]*stripe.CheckoutSession, error) {
+	params := &stripe.CheckoutSessionListParams{Customer: stripe.String(customerID), Status: stripe.String(string(stripe.CheckoutSessionStatusOpen))}
+	params.Limit = stripe.Int64(listLimit)
+	var out []*stripe.CheckoutSession
+	for cs, err := range c.sc.V1CheckoutSessions.List(ctx, params) {
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, cs)
+	}
+	return out, nil
 }
 
 // GetSubscription fetches one subscription with its item prices expanded.

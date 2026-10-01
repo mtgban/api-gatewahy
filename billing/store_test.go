@@ -1,8 +1,10 @@
 package billing
 
 import (
+	"cmp"
 	"context"
-	"sort"
+	"errors"
+	"slices"
 	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
@@ -16,6 +18,8 @@ type memStore struct {
 	nextEnt    int64
 	notified   int
 	failUpsert error
+	refsCalls  int
+	refsErrAt  int // 1-based ListActiveStripeRefs call that fails
 }
 
 func newMemStore(accounts ...apiaccess.Account) *memStore {
@@ -89,14 +93,31 @@ func (s *memStore) UpsertStripeEntitlement(_ context.Context, e apiaccess.Entitl
 	return e, nil
 }
 
-func (s *memStore) ListActiveStripeRefs(context.Context) ([]string, error) {
-	var out []string
-	for ref, e := range s.ents {
-		if e.Status == "active" {
-			out = append(out, ref)
+func (s *memStore) ListEntitlements(_ context.Context, accountID int64) ([]apiaccess.Entitlement, error) {
+	var out []apiaccess.Entitlement
+	for _, e := range s.ents {
+		if e.AccountID == accountID {
+			out = append(out, e)
 		}
 	}
-	sort.Strings(out)
+	slices.SortFunc(out, func(a, b apiaccess.Entitlement) int { return cmp.Compare(a.ID, b.ID) })
+	return out, nil
+}
+
+func (s *memStore) ListActiveStripeRefs(context.Context) ([]apiaccess.StripeRef, error) {
+	s.refsCalls++
+	if s.refsCalls == s.refsErrAt {
+		return nil, errors.New("refs down")
+	}
+	var out []apiaccess.StripeRef
+	for ref, e := range s.ents {
+		if e.Status == "active" {
+			out = append(out, apiaccess.StripeRef{AccountID: e.AccountID, SubID: ref})
+		}
+	}
+	slices.SortFunc(out, func(a, b apiaccess.StripeRef) int {
+		return cmp.Or(cmp.Compare(a.AccountID, b.AccountID), cmp.Compare(a.SubID, b.SubID))
+	})
 	return out, nil
 }
 

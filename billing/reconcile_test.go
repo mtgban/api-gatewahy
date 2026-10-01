@@ -328,6 +328,30 @@ func TestReconcileWhenStoresDoNotResolve(t *testing.T) {
 	}
 }
 
+func TestReconcileAllAlertsOnTwoActiveSubscriptions(t *testing.T) {
+	f := seededFake(t)
+	s := newMemStore(testAccount, apiaccess.Account{ID: 8, Status: "active"}, apiaccess.Account{ID: 9, Status: "active"})
+	var alerts []string
+	r := newTestReconciler(f, s, &alerts)
+	plan, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
+	f.addSub(t, "sub_a", "cus_x", stripe.SubscriptionStatusActive, plan.Metadata(7), periodEnd, fakeItem{"all_data_monthly", 1})
+	f.addSub(t, "sub_b", "cus_x", stripe.SubscriptionStatusActive, plan.Metadata(7), periodEnd, fakeItem{"all_data_monthly", 1})
+	f.addSub(t, "sub_c", "cus_y", stripe.SubscriptionStatusActive, plan.Metadata(8), periodEnd, fakeItem{"all_data_monthly", 1})
+	f.addSub(t, "sub_d", "cus_z", stripe.SubscriptionStatusActive, plan.Metadata(9), periodEnd, fakeItem{"all_data_monthly", 1})
+
+	res, err := r.All(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "api-gatewahy: account 7 has 2 active Stripe subscriptions (sub_a, sub_b)"
+	if len(alerts) != 1 || alerts[0] != want {
+		t.Errorf("alerts %q, want only %q", alerts, want)
+	}
+	if res.Duplicates != 1 || res.Failed != 0 || !strings.Contains(res.Summary(), "1 account with more than one subscription") {
+		t.Errorf("result %+v, summary %q", res, res.Summary())
+	}
+}
+
 // TestReconcileAllAlertsOncePerFailure counts what a nightly pass posts:
 // its alerts, then the summary serve.go sends.
 func TestReconcileAllAlertsOncePerFailure(t *testing.T) {
@@ -709,5 +733,29 @@ func TestReconcileAllRefetchesAStaleListing(t *testing.T) {
 	}
 	if e := s.ents["sub_1"]; e.Status != "ended" || e.ValidUntil == nil || !e.ValidUntil.Equal(endedAt) {
 		t.Errorf("row %+v, want ended at %s", e, endedAt)
+	}
+}
+
+// TestReconcileAllAlertsWhenTheDuplicateCheckFails pins that a failed
+// post-pass listing alerts and still returns the pass.
+func TestReconcileAllAlertsWhenTheDuplicateCheckFails(t *testing.T) {
+	f := seededFake(t)
+	s := newMemStore(testAccount)
+	s.refsErrAt = 2
+	var alerts []string
+	r := newTestReconciler(f, s, &alerts)
+	plan, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
+	f.addSub(t, "sub_a", "cus_x", stripe.SubscriptionStatusActive, plan.Metadata(7), periodEnd, fakeItem{"all_data_monthly", 1})
+
+	res, err := r.All(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "api-gatewahy: duplicate subscription check: refs down"
+	if len(alerts) != 1 || alerts[0] != want {
+		t.Errorf("alerts %q, want only %q", alerts, want)
+	}
+	if res.Checked != 1 || res.Failed != 0 || res.Duplicates != 0 {
+		t.Errorf("result %+v", res)
 	}
 }

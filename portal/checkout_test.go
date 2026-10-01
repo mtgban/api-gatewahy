@@ -99,6 +99,29 @@ func TestCheckoutBlocksSecondSubscription(t *testing.T) {
 	}
 }
 
+// planLandsStore reports a Stripe plan to Checkout that the portal's own pre-check did not see.
+type planLandsStore struct {
+	*memStore
+	ent apiaccess.Entitlement
+}
+
+func (s planLandsStore) ListEntitlements(context.Context, int64) ([]apiaccess.Entitlement, error) {
+	return []apiaccess.Entitlement{s.ent}, nil
+}
+
+func TestCheckoutPlanLandingAfterThePreCheck(t *testing.T) {
+	ts := newTestServer(t)
+	f := ts.withStripe()
+	a, ck, csrf := ts.signIn(t, "ann@example.com")
+	ts.Checkout.Store = planLandsStore{memStore: ts.store, ent: entitlementFor(a.ID, "stripe", "BASE_ACCESS")}
+
+	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"monthly"}, "games": {"magic,pokemon"}, "stores": {"cardkingdom,starcitygames"}}
+	rec := ts.do("POST", "/checkout", form.Encode(), ck)
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "You already have a plan") || f.checkouts != 0 {
+		t.Errorf("post: %d %d %s", rec.Code, f.checkouts, rec.Body.String())
+	}
+}
+
 func TestManySubscriptionsShowsContactMessage(t *testing.T) {
 	ts := newTestServer(t)
 	ts.withStripe()

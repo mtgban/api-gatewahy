@@ -225,18 +225,24 @@ func (c *Client) UpsertStripeEntitlement(ctx context.Context, e Entitlement) (En
 		e.Status, e.ValidFrom, until, ext, e.Note))
 }
 
-// ListActiveStripeRefs returns the subscription ids of every active stripe row.
-func (c *Client) ListActiveStripeRefs(ctx context.Context) ([]string, error) {
+// StripeRef is one active stripe row: the account and its subscription id.
+type StripeRef struct {
+	AccountID int64
+	SubID     string
+}
+
+// ListActiveStripeRefs returns every active stripe row, ordered by account and subscription id.
+func (c *Client) ListActiveStripeRefs(ctx context.Context) ([]StripeRef, error) {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT external_ref FROM entitlements WHERE source = 'stripe' AND status = 'active' AND external_ref IS NOT NULL ORDER BY external_ref`)
+		`SELECT account_id, external_ref FROM entitlements WHERE source = 'stripe' AND status = 'active' AND external_ref IS NOT NULL ORDER BY account_id, external_ref`)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	var out []string
+	var out []StripeRef
 	for rows.Next() {
-		var ref string
-		if err := rows.Scan(&ref); err != nil {
+		var ref StripeRef
+		if err := rows.Scan(&ref.AccountID, &ref.SubID); err != nil {
 			return nil, err
 		}
 		out = append(out, ref)

@@ -41,6 +41,9 @@ var releaseTimeout = 10 * time.Second
 // ErrPriceNotSeeded means Stripe has no active Price for a lookup key.
 var ErrPriceNotSeeded = errors.New("billing: price not seeded; run catalog seed")
 
+// ErrHasPlan means the account already pays through Stripe; a change goes through ChangePlan.
+var ErrHasPlan = errors.New("billing: account already has an active Stripe plan")
+
 func (c *Checkout) now() time.Time {
 	if c.Now != nil {
 		return c.Now()
@@ -55,11 +58,18 @@ type Session struct {
 	URL string
 }
 
-// Create validates the plan, consumes the invite if one is needed, ensures
-// the Stripe customer, and returns the Checkout Session to hand to the customer.
+// Create refuses an account with a Stripe plan, validates the plan, consumes a needed invite,
+// ensures the Stripe customer, expires its other open sessions, and returns a new one.
 func (c *Checkout) Create(ctx context.Context, req Request) (sess Session, err error) {
 	if req.Account.Status != "active" {
 		return Session{}, fmt.Errorf("billing: account %d is %s", req.Account.ID, req.Account.Status)
+	}
+	ents, err := c.Store.ListEntitlements(ctx, req.Account.ID)
+	if err != nil {
+		return Session{}, fmt.Errorf("billing: list entitlements: %w", err)
+	}
+	if apiaccess.HasActiveStripePlan(ents, c.now()) {
+		return Session{}, ErrHasPlan
 	}
 	plan, err := req.Plan.Validate(c.Catalog, c.Games, req.Invite != "")
 	if err != nil {
@@ -96,9 +106,15 @@ func (c *Checkout) Create(ctx context.Context, req Request) (sess Session, err e
 	if err != nil {
 		return Session{}, err
 	}
-	customerID, err := c.ensureCustomer(ctx, req.Account)
+	customerID, created, err := c.ensureCustomer(ctx, req.Account)
 	if err != nil {
 		return Session{}, err
+	}
+	// Another tab's session could still be paid, giving the account a second subscription.
+	if !created {
+		if err = c.expireOpenSessions(ctx, req.Account.ID, customerID); err != nil {
+			return Session{}, err
+		}
 	}
 	cs, err := c.API.CreateCheckoutSession(ctx, &stripe.CheckoutSessionCreateParams{
 		Mode:                stripe.String(string(stripe.CheckoutSessionModeSubscription)),
@@ -133,24 +149,40 @@ func (c *Checkout) Abandon(ctx context.Context, sessionID, invite string) error 
 	return c.Store.ReleaseInvite(ctx, invite)
 }
 
-// ensureCustomer returns the account's Stripe customer, creating one if needed.
-func (c *Checkout) ensureCustomer(ctx context.Context, a apiaccess.Account) (string, error) {
+// expireOpenSessions expires the customer's open Checkout Sessions. Stripe may
+// have completed one meanwhile, so a failed expire is logged, not returned.
+func (c *Checkout) expireOpenSessions(ctx context.Context, accountID int64, customerID string) error {
+	open, err := c.API.ListOpenCheckoutSessions(ctx, customerID)
+	if err != nil {
+		return fmt.Errorf("billing: list open checkout sessions: %w", err)
+	}
+	for _, cs := range open {
+		if _, err := c.API.ExpireCheckoutSession(ctx, cs.ID); err != nil {
+			log.Printf("billing: expire checkout session %s for account %d: %v", cs.ID, accountID, err)
+		}
+	}
+	return nil
+}
+
+// ensureCustomer returns the account's Stripe customer, creating one if
+// needed; created reports that this call made it, so it has no sessions yet.
+func (c *Checkout) ensureCustomer(ctx context.Context, a apiaccess.Account) (id string, created bool, err error) {
 	if a.StripeCustomerID != "" {
-		return a.StripeCustomerID, nil
+		return a.StripeCustomerID, false, nil
 	}
 	cust, err := c.API.CreateCustomer(ctx, &stripe.CustomerCreateParams{
 		Email:    stripe.String(a.Email),
 		Metadata: map[string]string{"account_id": strconv.FormatInt(a.ID, 10)},
 	})
 	if err != nil {
-		return "", fmt.Errorf("billing: create customer: %w", err)
+		return "", false, fmt.Errorf("billing: create customer: %w", err)
 	}
 	// Two racing checkouts may both create one; the first stored id wins.
-	id, err := c.Store.SetStripeCustomerID(ctx, a.ID, cust.ID)
+	id, err = c.Store.SetStripeCustomerID(ctx, a.ID, cust.ID)
 	if err != nil {
-		return "", fmt.Errorf("billing: store customer: %w", err)
+		return "", false, fmt.Errorf("billing: store customer: %w", err)
 	}
-	return id, nil
+	return id, id == cust.ID, nil
 }
 
 func (c *Checkout) lineItems(ctx context.Context, plan Plan) ([]*stripe.CheckoutSessionCreateLineItemParams, error) {
