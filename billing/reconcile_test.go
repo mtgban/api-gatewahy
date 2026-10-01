@@ -1,9 +1,11 @@
 package billing
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"slices"
 	"strings"
 	"testing"
@@ -45,10 +47,17 @@ func TestMapStatus(t *testing.T) {
 		{"something_new", "ended", &reconNow},
 	}
 	for _, c := range cases {
-		status, until := MapStatus(c.status, periodEnd, grace, reconNow)
+		status, until := MapStatus(c.status, periodEnd, time.Time{}, grace, reconNow)
 		if status != c.want || (until == nil) != (c.until == nil) || (until != nil && !until.Equal(*c.until)) {
 			t.Errorf("%s: got %s %v want %s %v", c.status, status, until, c.want, c.until)
 		}
+	}
+	endedAt := reconNow.Add(-time.Hour)
+	if _, until := MapStatus(stripe.SubscriptionStatusCanceled, periodEnd, endedAt, grace, reconNow); until == nil || !until.Equal(endedAt) {
+		t.Errorf("canceled with ended_at: until %v want %s", until, endedAt)
+	}
+	if status, until := MapStatus(stripe.SubscriptionStatusActive, periodEnd, endedAt, grace, reconNow); status != "active" || until != nil {
+		t.Errorf("active with ended_at: %s %v", status, until)
 	}
 }
 
@@ -313,5 +322,109 @@ func TestReconcileWhenStoresDoNotResolve(t *testing.T) {
 	}
 	if len(alerts) != 2 {
 		t.Errorf("alerts %v", alerts)
+	}
+}
+
+// TestReconcileAllAlertsOncePerFailure counts what a nightly pass posts:
+// its alerts, then the summary serve.go sends.
+func TestReconcileAllAlertsOncePerFailure(t *testing.T) {
+	f := seededFake(t)
+	s := newMemStore(testAccount)
+	var alerts []string
+	r := newTestReconciler(f, s, &alerts)
+	plan, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
+	f.addSub(t, "sub_ok", "cus_x", stripe.SubscriptionStatusActive, plan.Metadata(7), periodEnd, fakeItem{"all_data_monthly", 1})
+	f.addSub(t, "sub_bad", "cus_x", stripe.SubscriptionStatusActive, map[string]string{}, periodEnd, fakeItem{"all_data_monthly", 1})
+	f.addSub(t, "sub_orphan", "cus_nobody", stripe.SubscriptionStatusActive, plan.Metadata(999), periodEnd, fakeItem{"all_data_monthly", 1})
+
+	res, err := r.All(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	posted := append(slices.Clone(alerts), res.Summary())
+	for sub, cause := range map[string]string{"sub_bad": "carries no plan", "sub_orphan": "no known account"} {
+		n := 0
+		for _, msg := range posted {
+			if strings.Contains(msg, cause) {
+				n++
+			}
+		}
+		if n != 1 || !strings.Contains(res.Summary(), sub+": ") {
+			t.Errorf("%s posted %d times, want once and named: %q", sub, n, posted)
+		}
+	}
+}
+
+func TestIsPermanent(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"no plan metadata", fmt.Errorf("subscription sub_1: %w", ErrNoPlan), true},
+		{"unknown package", invalid("unknown package %q", "gold"), true},
+		{"no account", fmt.Errorf("subscription sub_1: %w", ErrNoAccount), true},
+		{"validation", &ValidationError{Msg: "Store x is not available for the games you picked."}, true},
+		{"stores down", fmt.Errorf("%w: magic: refused", ErrStoresUnavailable), false},
+		{"stores down wrapping a validation", fmt.Errorf("%w: %w", ErrStoresUnavailable, invalid("odd")), false},
+		{"stripe", &stripe.Error{Msg: "api error", HTTPStatusCode: 500}, false},
+		{"db", errors.New("billing: upsert sub_1: db down"), false},
+		{"cancelled", context.Canceled, false},
+	}
+	for _, c := range cases {
+		if got := isPermanent(c.err); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestReconcileEndedKeepsItsEndDate checks an ended row ends when Stripe
+// says it did, and a later event does not move that.
+func TestReconcileEndedKeepsItsEndDate(t *testing.T) {
+	f := seededFake(t)
+	s := newMemStore(testAccount)
+	var alerts []string
+	r := newTestReconciler(f, s, &alerts)
+	plan, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
+	sub := f.addSub(t, "sub_gone", "cus_x", stripe.SubscriptionStatusCanceled, plan.Metadata(7), periodEnd, fakeItem{"all_data_monthly", 1})
+	endedAt := reconNow.Add(-48 * time.Hour)
+	sub.EndedAt = endedAt.Unix()
+
+	for _, now := range []time.Time{reconNow, reconNow.Add(72 * time.Hour)} {
+		r.Now = func() time.Time { return now }
+		if err := r.Subscription(context.Background(), "sub_gone"); err != nil {
+			t.Fatal(err)
+		}
+		if e := s.ents["sub_gone"]; e.Status != "ended" || e.ValidUntil == nil || !e.ValidUntil.Equal(endedAt) {
+			t.Errorf("at %s: row %+v, want ended at %s", now, e, endedAt)
+		}
+	}
+}
+
+// TestReconcileAllLogsEveryFailure checks the log names the failures the summary leaves out.
+func TestReconcileAllLogsEveryFailure(t *testing.T) {
+	f := seededFake(t)
+	s := newMemStore(testAccount)
+	var alerts []string
+	r := newTestReconciler(f, s, &alerts)
+	for i := range 7 {
+		f.addSub(t, fmt.Sprintf("sub_bad%d", i), "cus_x", stripe.SubscriptionStatusActive, map[string]string{}, periodEnd, fakeItem{"all_data_monthly", 1})
+	}
+	var logged bytes.Buffer
+	saved := log.Writer()
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(saved) })
+
+	res, err := r.All(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Failed != 7 || !strings.Contains(res.Summary(), "(+2 more)") {
+		t.Fatalf("result %+v", res)
+	}
+	for i := range 7 {
+		if id := fmt.Sprintf("sub_bad%d", i); strings.Count(logged.String(), "reconcile "+id+":") != 1 {
+			t.Errorf("%s not logged once: %q", id, logged.String())
+		}
 	}
 }

@@ -1,8 +1,11 @@
 package billing
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -285,5 +288,92 @@ func TestCheckoutReusesTheCallersResolve(t *testing.T) {
 	}
 	if lister.calls != 1 {
 		t.Errorf("%d site lookups, want the caller's one", lister.calls)
+	}
+}
+
+// releaseStore fails a release on a cancelled context, as Postgres does.
+type releaseStore struct {
+	*memStore
+	released []string
+	fail     error
+}
+
+func (s *releaseStore) ReleaseInvite(ctx context.Context, token string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.fail != nil {
+		return s.fail
+	}
+	s.released = append(s.released, token)
+	return s.memStore.ReleaseInvite(ctx, token)
+}
+
+func TestCheckoutReleasesInviteAfterTheClientLeaves(t *testing.T) {
+	f := seededFake(t)
+	s := &releaseStore{memStore: newMemStore(testAccount)}
+	co := newTestCheckout(f, s.memStore)
+	co.Store = s
+	later := co.Now().Add(24 * time.Hour)
+	quarterly := Plan{Package: "all_stores", Interval: "quarterly", Games: []string{"magic"}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	f.fail["CreateCheckoutSession"] = context.Canceled
+
+	s.addInvite("left", "quarterly", "", later)
+	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: quarterly, Invite: "left"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("create: %v", err)
+	}
+	if s.invites["left"].UsedAt != nil || !slices.Equal(s.released, []string{"left"}) {
+		t.Errorf("invite still spent after the client left; released %v", s.released)
+	}
+
+	var logged bytes.Buffer
+	saved := log.Writer()
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(saved) })
+	s.fail = errors.New("db down")
+	s.addInvite("stuck", "quarterly", "", later)
+	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: quarterly, Invite: "stuck"}); err == nil {
+		t.Fatal("create succeeded")
+	}
+	if !strings.Contains(logged.String(), "db down") {
+		t.Errorf("failed release not logged: %q", logged.String())
+	}
+}
+
+// stuckStore holds every invite release until its context ends.
+type stuckStore struct {
+	*memStore
+}
+
+func (s *stuckStore) ReleaseInvite(ctx context.Context, _ string) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestCheckoutBoundsTheInviteRelease(t *testing.T) {
+	f := seededFake(t)
+	s := &stuckStore{memStore: newMemStore(testAccount)}
+	co := newTestCheckout(f, s.memStore)
+	co.Store = s
+	saved := releaseTimeout
+	releaseTimeout = time.Millisecond
+	t.Cleanup(func() { releaseTimeout = saved })
+	s.addInvite("stuck", "quarterly", "", co.Now().Add(24*time.Hour))
+	f.fail["CreateCheckoutSession"] = errors.New("stripe down")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := co.Create(context.Background(), Request{Account: testAccount, Plan: Plan{Package: "all_stores", Interval: "quarterly", Games: []string{"magic"}}, Invite: "stuck"})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("create succeeded")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the invite release was not bounded")
 	}
 }

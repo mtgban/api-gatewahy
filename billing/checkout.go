@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -33,6 +34,9 @@ type Request struct {
 	// Resolved is the caller's Resolve of Plan, reused so a request resolves once.
 	Resolved *ResolvedPlan
 }
+
+// releaseTimeout bounds the invite release that outlives the request; a var for tests.
+var releaseTimeout = 10 * time.Second
 
 // ErrPriceNotSeeded means Stripe has no active Price for a lookup key.
 var ErrPriceNotSeeded = errors.New("billing: price not seeded; run catalog seed")
@@ -74,8 +78,14 @@ func (c *Checkout) Create(ctx context.Context, req Request) (sess Session, err e
 			return Session{}, err
 		}
 		defer func() {
-			if err != nil {
-				_ = c.Store.ReleaseInvite(ctx, req.Invite)
+			if err == nil {
+				return
+			}
+			// Released even when the client has gone, or the invite stays spent.
+			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+			defer cancel()
+			if rerr := c.Store.ReleaseInvite(rctx, req.Invite); rerr != nil {
+				log.Printf("billing: release invite for account %d: %v", req.Account.ID, rerr)
 			}
 		}()
 		if inv.IntervalKey != plan.Interval {

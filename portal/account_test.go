@@ -403,3 +403,24 @@ func TestPlanChangeRejectsAStoreTheSitesDoNotSell(t *testing.T) {
 		t.Errorf("%d %v %s", rec.Code, f.updated != nil, rec.Body.String())
 	}
 }
+
+func TestPlanChangeThatStripeTookButReconcileMissed(t *testing.T) {
+	ts := newTestServer(t)
+	f := ts.withStripe()
+	a, ck, csrf := ts.signIn(t, "ann@example.com")
+	ctx := context.Background()
+	_, _ = ts.store.SetStripeCustomerID(ctx, a.ID, "cus_test")
+	_, _ = ts.store.AddEntitlement(ctx, entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
+	f.sub = &stripe.Subscription{ID: "sub_1", Customer: &stripe.Customer{ID: "cus_test"},
+		Metadata: billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID)}
+	ts.Reconcile = func(context.Context, string) error { return errors.New("db down") }
+
+	rec := ts.do("POST", "/account/plan", "csrf="+csrf+"&package=all_stores&interval=monthly&games=magic", ck)
+	if rec.Code != 302 || rec.Header().Get("Location") != "/account?notice=plan_pending" || f.updated == nil {
+		t.Fatalf("%d %q updated %v: %s", rec.Code, rec.Header().Get("Location"), f.updated != nil, rec.Body.String())
+	}
+	rec = ts.do("GET", "/account?notice=plan_pending", "", ck)
+	if body := rec.Body.String(); !strings.Contains(body, "Plan changed; your access updates shortly.") || strings.Contains(body, "Could not start checkout") {
+		t.Errorf("account page: %s", body)
+	}
+}
