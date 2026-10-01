@@ -13,8 +13,8 @@
   <h2 style="margin-top:0">{{if .HasKeys}}Create another key{{else}}Create your first key{{end}}</h2>
   <form method="POST" action="/account/keys">
     <input type="hidden" name="csrf" value="{{$.CSRF}}">
-    <label for="label">Label (optional)</label>
-    <input id="label" type="text" name="label" maxlength="64" placeholder="laptop, spreadsheet, prod">
+    <label for="label">New key</label>
+    <input id="label" type="text" name="label" maxlength="64" placeholder="laptop, spreadsheet, prod" required>
     <p><button type="submit" class="btn">Create key</button></p>
   </form>
 </div>

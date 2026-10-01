@@ -125,8 +125,13 @@ func (s *Server) adminTarget(w http.ResponseWriter, r *http.Request) (apiaccess.
 		return apiaccess.Account{}, false
 	}
 	a, err := s.Store.GetAccount(r.Context(), id)
-	if err != nil {
+	if errors.Is(err, apiaccess.ErrNotFound) {
 		http.NotFound(w, r)
+		return apiaccess.Account{}, false
+	}
+	if err != nil {
+		s.logf("admin target %d: %v", id, err)
+		s.fail(w, r, http.StatusInternalServerError, tryAgainMsg)
 		return apiaccess.Account{}, false
 	}
 	return a, true
@@ -326,8 +331,13 @@ func (s *Server) adminEndEntitlement(w http.ResponseWriter, r *http.Request, ses
 		return
 	}
 	ents, err := s.Store.ListEntitlements(r.Context(), a.ID)
+	if err != nil {
+		s.logf("admin end entitlement %d: entitlements: %v", eid, err)
+		s.renderAdminAccount(w, r, sess, a, http.StatusInternalServerError, "", tryAgainMsg, "")
+		return
+	}
 	i := slices.IndexFunc(ents, func(e apiaccess.Entitlement) bool { return e.ID == eid })
-	if err != nil || i == -1 {
+	if i == -1 {
 		http.NotFound(w, r)
 		return
 	}
@@ -340,6 +350,11 @@ func (s *Server) adminEndEntitlement(w http.ResponseWriter, r *http.Request, ses
 			s.renderAdminAccount(w, r, sess, a, http.StatusBadRequest, "", stripeEndMsg, "")
 			return
 		}
+		if errors.Is(err, apiaccess.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		s.logf("admin end entitlement %d: %v", eid, err)
 		s.renderAdminAccount(w, r, sess, a, http.StatusInternalServerError, "", tryAgainMsg, "")
 		return
 	}

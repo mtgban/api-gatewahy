@@ -47,11 +47,20 @@ type memStore struct {
 
 	// entitlementErr, when set, is what AddEntitlement returns instead of succeeding.
 	entitlementErr error
-	// listKeysErr, listEntitlementsErr, listActionsErr, and usageErr inject failures for their namesakes.
+	// endEntitlementErr, when set, is what EndEntitlement returns instead of succeeding.
+	endEntitlementErr error
+	// getAccountErr fires only for getAccountErrID, so it can target one customer
+	// without breaking the admin's own session lookup; the others are global.
+	getAccountErr       error
+	getAccountErrID     int64
 	listKeysErr         error
 	listEntitlementsErr error
-	listActionsErr      error
-	usageErr            error
+	// listEntitlementsFailAfter and listEntitlementsCalls let a test target a
+	// later call to ListEntitlements within the same request; see the method.
+	listEntitlementsFailAfter int
+	listEntitlementsCalls     int
+	listActionsErr            error
+	usageErr                  error
 	// usageByKeyCalls counts UsageByKey calls, so a test can prove it stayed unrun.
 	usageByKeyCalls int
 }
@@ -74,6 +83,9 @@ func (m *memStore) nowOr() time.Time {
 func (m *memStore) GetAccount(_ context.Context, id int64) (apiaccess.Account, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.getAccountErr != nil && id == m.getAccountErrID {
+		return apiaccess.Account{}, m.getAccountErr
+	}
 	a, ok := m.accounts[id]
 	if !ok {
 		return apiaccess.Account{}, apiaccess.ErrNotFound
@@ -253,7 +265,10 @@ func (m *memStore) RevokeKey(_ context.Context, id, accountID int64) (apiaccess.
 func (m *memStore) ListEntitlements(_ context.Context, accountID int64) ([]apiaccess.Entitlement, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.listEntitlementsErr != nil {
+	m.listEntitlementsCalls++
+	// listEntitlementsFailAfter, when set, only errors from that call number on,
+	// so a test can let an earlier call in the same request succeed.
+	if m.listEntitlementsErr != nil && (m.listEntitlementsFailAfter == 0 || m.listEntitlementsCalls >= m.listEntitlementsFailAfter) {
 		return nil, m.listEntitlementsErr
 	}
 	var out []apiaccess.Entitlement
@@ -313,6 +328,9 @@ func (m *memStore) ListActiveStripeRefs(context.Context) ([]string, error) {
 func (m *memStore) EndEntitlement(_ context.Context, id, accountID int64, at time.Time) (apiaccess.Entitlement, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.endEntitlementErr != nil {
+		return apiaccess.Entitlement{}, m.endEntitlementErr
+	}
 	e, ok := m.ents[id]
 	if !ok || (accountID != 0 && e.AccountID != accountID) {
 		return apiaccess.Entitlement{}, apiaccess.ErrNotFound

@@ -143,7 +143,8 @@ func (s *Server) currentIntervalFor(r *http.Request, sess session.Session, plan 
 	}
 	ents, err := s.Store.ListEntitlements(r.Context(), sess.AccountID)
 	if err != nil {
-		return plan, http.StatusBadRequest, tryAgainMsg
+		s.logf("current interval %s: entitlements: %v", sess.Email, err)
+		return plan, http.StatusInternalServerError, tryAgainMsg
 	}
 	subID, err := billing.SubscriptionFor(ents)
 	if errors.Is(err, billing.ErrManySubscriptions) {
@@ -154,11 +155,14 @@ func (s *Server) currentIntervalFor(r *http.Request, sess session.Session, plan 
 	}
 	sub, err := s.Stripe.GetSubscription(r.Context(), subID)
 	if err != nil {
-		return plan, http.StatusBadRequest, tryAgainMsg
+		s.logf("current interval %s: stripe: %v", sess.Email, err)
+		return plan, http.StatusBadGateway, tryAgainMsg
 	}
 	current, _, err := billing.PlanFromMetadata(sub.Metadata)
 	if err != nil {
-		return plan, http.StatusBadRequest, tryAgainMsg
+		// Metadata we wrote ourselves at checkout being unreadable is our bug, not Stripe's.
+		s.logf("current interval %s: metadata: %v", sess.Email, err)
+		return plan, http.StatusInternalServerError, tryAgainMsg
 	}
 	plan.Interval = current.Interval
 	// The interval was authorized when the subscription began, so an invite is not needed again.
@@ -220,6 +224,7 @@ func (s *Server) checkoutPost(w http.ResponseWriter, r *http.Request, sess sessi
 	}
 	hasPlan, err := s.hasActiveStripePlan(r, a.ID)
 	if err != nil {
+		s.logf("checkout for %s: has plan: %v", a.Email, err)
 		s.fail(w, r, http.StatusInternalServerError, tryAgainMsg)
 		return
 	}

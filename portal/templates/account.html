@@ -32,7 +32,7 @@
   </tbody>
 </table>
 {{if .TrialEnds}}<p>Your trial ends on <strong>{{.TrialEnds}}</strong>. Nothing is charged automatically; <a href="{{$.PricingURL}}">pick a plan</a> to keep access.</p>{{end}}
-{{else}}
+{{else if not .EntsFailed}}
 <p class="dim" style="margin:0">No active access. <a href="{{$.PricingURL}}">Pick a plan</a> to get started.</p>
 {{end}}
 {{if or .HasStripe .ChangeURL}}
@@ -57,7 +57,7 @@
   </tr>{{end}}
   </tbody>
 </table>
-{{else}}
+{{else if not .KeysFailed}}
 <p class="dim" style="margin:0">No keys yet.</p>
 {{end}}
 <form method="POST" action="/account/keys" class="row-form">

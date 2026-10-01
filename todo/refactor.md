@@ -98,7 +98,7 @@ fails before the fix.
 - [x] apiaccess: #5, #18, #21 (`EndEntitlement` returns the row), #27. Issue [#37](https://github.com/mtgban/api-gatewahy/issues/37)
 - [x] Jobs: #8 (recover per run, log, alert). Issue [#38](https://github.com/mtgban/api-gatewahy/issues/38)
 - [x] Discord: #6 (split on line boundaries). Issue [#39](https://github.com/mtgban/api-gatewahy/issues/39)
-- [ ] Portal: #15, #16, #20, #24. Issue [#40](https://github.com/mtgban/api-gatewahy/issues/40)
+- [x] Portal: #15, #16, #20, #24. Issue [#40](https://github.com/mtgban/api-gatewahy/issues/40)
 - [x] Mailer: #17. Issue [#41](https://github.com/mtgban/api-gatewahy/issues/41)
 - [x] Meter and summary: #22, #26. Issue [#42](https://github.com/mtgban/api-gatewahy/issues/42)
 
