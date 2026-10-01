@@ -121,7 +121,7 @@ fails before the fix.
   direction. Issue [#47](https://github.com/mtgban/api-gatewahy/issues/47)
 - [ ] D6: block in `Checkout.Create`, expire sibling sessions, alert in
   reconcile. Issue [#48](https://github.com/mtgban/api-gatewahy/issues/48)
-- [ ] D7a: rewrite the 6 test files, then turn the lint rule on in the same
+- [x] D7a: rewrite the 6 test files, then turn the lint rule on in the same
   PR. Issue [#49](https://github.com/mtgban/api-gatewahy/issues/49)
 - [ ] D2: refuse End on Stripe rows in the web admin and the CLI, with
   tests. Issue [#44](https://github.com/mtgban/api-gatewahy/issues/44)
