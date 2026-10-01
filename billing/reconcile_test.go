@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -252,8 +254,9 @@ func TestReconcileAll(t *testing.T) {
 	if s.ents["sub_a"].Status != "active" || s.ents["sub_b"].Status != "active" || s.ents["sub_c"].Status != "ended" {
 		t.Errorf("rows %+v", s.ents)
 	}
-	if f.calls["GetSubscription"] != 1 {
-		t.Errorf("listed subscriptions were refetched: %d", f.calls["GetSubscription"])
+	// Three listed plus the unlisted sub_c, each fetched once.
+	if f.calls["GetSubscription"] != 4 {
+		t.Errorf("GetSubscription called %d times, want 4", f.calls["GetSubscription"])
 	}
 	if !strings.Contains(res.Summary(), "4 subscriptions, 1 failed") {
 		t.Errorf("summary %q", res.Summary())
@@ -426,5 +429,285 @@ func TestReconcileAllLogsEveryFailure(t *testing.T) {
 		if id := fmt.Sprintf("sub_bad%d", i); strings.Count(logged.String(), "reconcile "+id+":") != 1 {
 			t.Errorf("%s not logged once: %q", id, logged.String())
 		}
+	}
+}
+
+// overlapStore counts applies between the account read and the row write.
+type overlapStore struct {
+	*memStore
+	mu       sync.Mutex
+	inFlight int
+	most     int
+	waited   bool
+	second   chan struct{}
+}
+
+// GetAccount holds the first apply until a second one arrives, or a bounded guard runs out.
+func (s *overlapStore) GetAccount(ctx context.Context, id int64) (apiaccess.Account, error) {
+	s.mu.Lock()
+	s.inFlight++
+	s.most = max(s.most, s.inFlight)
+	wait := !s.waited
+	s.waited = true
+	if s.inFlight == 2 {
+		close(s.second)
+	}
+	s.mu.Unlock()
+	if wait {
+		select {
+		case <-s.second:
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.memStore.GetAccount(ctx, id)
+}
+
+func (s *overlapStore) UpsertStripeEntitlement(ctx context.Context, e apiaccess.Entitlement) (apiaccess.Entitlement, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inFlight--
+	return s.memStore.UpsertStripeEntitlement(ctx, e)
+}
+
+func (s *overlapStore) Notify(ctx context.Context, payload string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.memStore.Notify(ctx, payload)
+}
+
+// TestReconcileSerializesPerSubscription runs two reconciles of one
+// subscription at once and checks they never overlap.
+func TestReconcileSerializesPerSubscription(t *testing.T) {
+	f := seededFake(t)
+	s := &overlapStore{memStore: newMemStore(testAccount), second: make(chan struct{})}
+	var alerts []string
+	r := newTestReconciler(f, s.memStore, &alerts)
+	r.Store = s
+	r.Alert = nil
+	plan, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
+	f.addSub(t, "sub_1", "cus_x", stripe.SubscriptionStatusActive, plan.Metadata(7), periodEnd, fakeItem{"all_data_monthly", 1})
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Go(func() { errs[i] = r.Subscription(context.Background(), "sub_1") })
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s.most != 1 {
+		t.Errorf("%d applies of sub_1 ran at once, want 1", s.most)
+	}
+	if s.ents["sub_1"].Status != "active" || s.notified != 2 {
+		t.Errorf("row %+v, notified %d", s.ents["sub_1"], s.notified)
+	}
+}
+
+// TestSubLocksAreKeyedAndFreed checks another id does not wait and a released id leaves no entry.
+func TestSubLocksAreKeyedAndFreed(t *testing.T) {
+	var l subLocks
+	unlockA := l.lock("sub_a")
+	done := make(chan struct{})
+	go func() {
+		l.lock("sub_b")()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sub_b waited on sub_a's lock")
+	}
+	unlockA()
+	if len(l.locks) != 0 {
+		t.Errorf("%d entries left after every unlock", len(l.locks))
+	}
+}
+
+// TestSubLocksKeepAnAwaitedEntry checks the holder's unlock leaves the entry
+// a waiter holds, so a newcomer queues behind the waiter.
+func TestSubLocksKeepAnAwaitedEntry(t *testing.T) {
+	var l subLocks
+	var mu sync.Mutex
+	inFlight, most := 0, 0
+	enter := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		inFlight++
+		most = max(most, inFlight)
+	}
+	leave := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		inFlight--
+	}
+	refs := func() int {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		if e := l.locks["sub_a"]; e != nil {
+			return e.refs
+		}
+		return 0
+	}
+
+	unlockHolder := l.lock("sub_a")
+	enter()
+	waiterIn, releaseWaiter, waiterDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(waiterDone)
+		unlock := l.lock("sub_a")
+		enter()
+		close(waiterIn)
+		<-releaseWaiter
+		leave()
+		unlock()
+	}()
+	deadline := time.After(5 * time.Second)
+	for refs() != 2 {
+		select {
+		case <-deadline:
+			t.Fatal("the waiter never queued on sub_a")
+		default:
+			runtime.Gosched()
+		}
+	}
+	leave()
+	unlockHolder()
+	select {
+	case <-waiterIn:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the waiter never got sub_a")
+	}
+
+	newDone := make(chan struct{})
+	go func() {
+		defer close(newDone)
+		unlock := l.lock("sub_a")
+		enter()
+		leave()
+		unlock()
+	}()
+	select {
+	case <-newDone:
+		t.Error("the newcomer got sub_a while the waiter held it")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseWaiter)
+	for _, done := range []chan struct{}{waiterDone, newDone} {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("a contender never finished")
+		}
+	}
+	if most != 1 || len(l.locks) != 0 {
+		t.Errorf("%d held sub_a at once, %d entries left", most, len(l.locks))
+	}
+}
+
+// gatedAPI holds the first fetch open until release closes and reports each fetch as it starts.
+type gatedAPI struct {
+	*fakeAPI
+	mu      sync.Mutex
+	fetches int
+	started chan int
+	release chan struct{}
+}
+
+func (a *gatedAPI) GetSubscription(ctx context.Context, id string) (*stripe.Subscription, error) {
+	a.mu.Lock()
+	a.fetches++
+	n := a.fetches
+	a.mu.Unlock()
+	a.started <- n
+	if n == 1 {
+		<-a.release
+	}
+	return a.fakeAPI.GetSubscription(ctx, id)
+}
+
+// TestReconcileSerializesTheFetch holds the first fetch of sub_1 open and
+// checks a second reconcile does not fetch until it is released.
+func TestReconcileSerializesTheFetch(t *testing.T) {
+	f := seededFake(t)
+	s := newMemStore(testAccount)
+	var alerts []string
+	r := newTestReconciler(f, s, &alerts)
+	r.Alert = nil
+	api := &gatedAPI{fakeAPI: f, started: make(chan int, 2), release: make(chan struct{})}
+	r.API = api
+	plan, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
+	f.addSub(t, "sub_1", "cus_x", stripe.SubscriptionStatusActive, plan.Metadata(7), periodEnd, fakeItem{"all_data_monthly", 1})
+
+	errs := make(chan error, 2)
+	reconcile := func() { errs <- r.Subscription(context.Background(), "sub_1") }
+	go reconcile()
+	select {
+	case <-api.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first fetch never started")
+	}
+	go reconcile()
+	early := false
+	select {
+	case <-api.started:
+		early = true
+		t.Error("the second fetch started while the first held sub_1's lock")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(api.release)
+	if !early {
+		select {
+		case <-api.started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the second fetch never started")
+		}
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// staleListAPI lists a snapshot taken before Stripe changed.
+type staleListAPI struct {
+	*fakeAPI
+	listed []*stripe.Subscription
+}
+
+func (a staleListAPI) ListSubscriptions(context.Context) ([]*stripe.Subscription, error) {
+	return a.listed, a.enter("ListSubscriptions")
+}
+
+// TestReconcileAllRefetchesAStaleListing cancels a subscription after the
+// pass listed it; the webhook's ended row must survive the pass.
+func TestReconcileAllRefetchesAStaleListing(t *testing.T) {
+	f := seededFake(t)
+	s := newMemStore(testAccount)
+	var alerts []string
+	r := newTestReconciler(f, s, &alerts)
+	plan, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
+	sub := f.addSub(t, "sub_1", "cus_x", stripe.SubscriptionStatusActive, plan.Metadata(7), periodEnd, fakeItem{"all_data_monthly", 1})
+	listed := *sub
+	r.API = staleListAPI{fakeAPI: f, listed: []*stripe.Subscription{&listed}}
+
+	endedAt := reconNow.Add(-time.Hour)
+	sub.Status = stripe.SubscriptionStatusCanceled
+	sub.EndedAt = endedAt.Unix()
+	if err := r.Subscription(context.Background(), "sub_1"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := r.All(context.Background())
+	if err != nil || res.Failed != 0 {
+		t.Fatalf("result %+v, err %v", res, err)
+	}
+	if e := s.ents["sub_1"]; e.Status != "ended" || e.ValidUntil == nil || !e.ValidUntil.Equal(endedAt) {
+		t.Errorf("row %+v, want ended at %s", e, endedAt)
 	}
 }

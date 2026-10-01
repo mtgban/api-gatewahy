@@ -100,6 +100,9 @@ handoff needs no secret of its own. Token-consuming posts (`/login/{token}`, `/t
 (`Sec-Fetch-Site` or `Origin`), so a foreign page cannot sign a visitor
 into someone else's account; the sign-in email form (`POST /login`) has
 the same requirement. An account can create at most 10 keys per hour.
+That limit and `login_links_per_hour` are counted in the gateway's
+process, and the app runs one instance, so they hold across the whole
+service (see Configuration).
 
 ## Admin subcommands
 
@@ -255,6 +258,17 @@ lookups. The per account limit (`per_key_requests_per_sec`, `per_key_burst`)
 applies after the key resolves. Usage rows are
 buffered and dropped rather than blocking a request when the buffer is full;
 the drop count is logged each flush interval.
+
+The App Platform app runs a single instance, and the code relies on it.
+The daily jobs (the usage summary, the nightly reconcile, the trial
+reminders) run once, and every limit is kept in that one process: the
+per-hour limits (10 keys per account, `login_links_per_hour`) and the
+per-second request limits above are global, not per instance, and the
+per-hour counters reset on a deploy. Reconciles of one subscription (its
+webhooks, a plan change, the nightly pass) take a lock in the process, so
+they apply one at a time; the CLI's `stripe reconcile` and `plan change`
+run in a separate process and are not serialized with `serve`. A second
+instance would run each job twice and multiply each limit.
 
 `shutdown_grace_seconds` is how long a shutdown waits for in-flight requests
 after SIGTERM, and any request still running when it expires is logged and
