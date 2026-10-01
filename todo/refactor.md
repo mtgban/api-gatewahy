@@ -117,7 +117,7 @@ fails before the fix.
 
 - [x] D3: reconcile mutex, README note. Issue [#45](https://github.com/mtgban/api-gatewahy/issues/45)
 - [x] D4: liveness `/healthz`, DB check in the prober. Issue [#46](https://github.com/mtgban/api-gatewahy/issues/46)
-- [ ] D5: `always_invoice` on upgrade, with a fake-Stripe test for each
+- [x] D5: `always_invoice` on upgrade, with a fake-Stripe test for each
   direction. Issue [#47](https://github.com/mtgban/api-gatewahy/issues/47)
 - [ ] D6: block in `Checkout.Create`, expire sibling sessions, alert in
   reconcile. Issue [#48](https://github.com/mtgban/api-gatewahy/issues/48)
