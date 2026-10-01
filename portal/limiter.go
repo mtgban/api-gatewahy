@@ -12,8 +12,8 @@ type limiter struct {
 	calls int
 }
 
-// allow records one event for key unless max already happened in the last hour.
-func (l *limiter) allow(key string, max int, now time.Time) bool {
+// allow records one event for key unless limit already happened in the last hour.
+func (l *limiter) allow(key string, limit int, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.hits == nil {
@@ -31,7 +31,7 @@ func (l *limiter) allow(key string, max int, now time.Time) bool {
 			kept = append(kept, t)
 		}
 	}
-	if len(kept) >= max {
+	if len(kept) >= limit {
 		return false
 	}
 	l.hits[key] = append(kept, now)

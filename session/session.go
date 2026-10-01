@@ -94,7 +94,8 @@ func (c *Codec) Open(token string) (url.Values, error) {
 
 func (c *Codec) sign(body string) string {
 	mac := hmac.New(sha256.New, c.Secret)
-	mac.Write([]byte(body))
+	// hash.Hash.Write never returns an error.
+	_, _ = mac.Write([]byte(body))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
