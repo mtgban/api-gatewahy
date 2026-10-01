@@ -114,8 +114,8 @@ github.com/mileusna/useragent v1.3.5 h1:SJM5NzBmh/hO+4LGeATKpaEX9+b4vcGg2qXGLiNG
 github.com/mileusna/useragent v1.3.5/go.mod h1:3d8TOmwL/5I8pJjyVDteHtgDGcefrFUX4ccGOMKNYYc=
 github.com/mtgban/mtgban-website v0.0.0-20260924120930-987f4c3bd492 h1:W8bDnPjSSFMYfPtvfDXvExlxW2oFNxxLFuSoAuI/y/c=
 github.com/mtgban/mtgban-website v0.0.0-20260924120930-987f4c3bd492/go.mod h1:qgrinoNFrFxfng62W12N9gvU8fxuf4mDTMHcBcU1SPY=
-github.com/mtgban/simplecloud v0.0.13 h1:X6e5XIyOYI2StBZJrMLENIm+/lb3/hFou8RrnFqXWkI=
-github.com/mtgban/simplecloud v0.0.13/go.mod h1:hSBmXeDmp2lrZS5z/eCTVakmLsBW1PsS1RVCrXMG3s0=
+github.com/mtgban/simplecloud v0.0.16 h1:yQGXqSHlyio6atwbRuFKZ5zPGi+dm2V/neBed2UpCGc=
+github.com/mtgban/simplecloud v0.0.16/go.mod h1:hSBmXeDmp2lrZS5z/eCTVakmLsBW1PsS1RVCrXMG3s0=
 github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 h1:GFCKgmp0tecUJ0sJuv4pzYCqS9+RGSn52M3FUwPs+uo=
 github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10/go.mod h1:t/avpk3KcrXxUnYOhZhMXJlSEyie6gQbtLq5NM3loB8=
 github.com/spiffe/go-spiffe/v2 v2.8.1 h1:eXZMLsu+3MLEPJyGJkolqtVrteZfQdUpOWj6LTiDl/E=
