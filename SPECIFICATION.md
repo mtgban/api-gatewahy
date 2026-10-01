@@ -119,7 +119,8 @@ HTTP server timeouts: ReadHeader 10 s, Read 30 s, Write
 
 ### 2.3 Background jobs
 
-All run under one `jobsCtx` and a `sync.WaitGroup`, on **every instance**:
+All run under one `jobsCtx` and a `sync.WaitGroup`. The app runs a single
+instance, so each job runs once:
 
 | Job | When | What |
 |---|---|---|
@@ -129,7 +130,8 @@ All run under one `jobsCtx` and a `sync.WaitGroup`, on **every instance**:
 | Trial reminders | 09:00 UTC (portal on) | Mails trials ending within 3 days, marks each reminded |
 
 `runDaily(ctx, hour, minute, fn)` sleeps to the next hh:mm UTC. Jobs do not
-recover panics, and nothing stops two instances running the same job.
+recover panics, and nothing would stop a second instance running the same
+job.
 
 ### 2.4 Mux (`newMux`)
 
@@ -454,8 +456,8 @@ built in Go (`mail.go`), not templates.
 ### 7.5 In-process limiters
 
 `limiter.go`: per-key sliding-hour timestamps in one mutex map (`ip:`,
-`email:`, `keys:<id>`, `keyattempts:<id>`). They reset on restart and are
-per instance.
+`email:`, `keys:<id>`, `keyattempts:<id>`). They reset on restart; with
+one instance they are global.
 
 ## 8. Support packages
 

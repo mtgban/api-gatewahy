@@ -87,9 +87,12 @@ trust their output; todo/refactor.md records the last measurement.
   tests can freeze it. Don't call `time.Now()` in code a test drives.
 - Plain stdlib tests: internal (`package x`), table-driven where it fits,
   no assertion library, no `t.Parallel`.
-- Not adopted here, though go-mtgban and mtgban-website have them: the
-  `reflect` ban and the no-call-in-`if`-init rule. Follow the surrounding
-  code until todo/refactor.md D7 is decided.
+- **No `reflect`**, tests included, as in go-mtgban and mtgban-website:
+  compare with `slices`/`maps` or a comparison written for the type. Six
+  billing test files still import it until todo/refactor.md D7a lands the
+  lint rule; don't add a seventh.
+- Calls folded into an `if` (`if err := f(); err != nil`) are not yet
+  ruled on here (todo/refactor.md D7b): follow the surrounding code.
 
 ## Where things live
 
@@ -153,8 +156,9 @@ trust their output; todo/refactor.md records the last measurement.
     website PR merges. `apisig` and `apihandoff` bytes are frozen by golden
     tests on the website side, so never re-implement them here.
 11. **Background work runs under `jobsCtx` in `newServer`**, is added to
-    its `WaitGroup`, and stops on shutdown. It runs on every instance;
-    todo/refactor.md D3 covers whether that is safe.
+    its `WaitGroup`, and stops on shutdown. The app runs a single
+    instance, so jobs and the in-process limiters assume one process; a
+    second instance would duplicate every daily job.
 
 ## Testing patterns
 
