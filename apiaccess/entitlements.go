@@ -246,11 +246,30 @@ func (c *Client) ListActiveStripeRefs(ctx context.Context) ([]string, error) {
 
 // EndEntitlement marks the row ended as of at and returns it. accountID 0
 // means any account; otherwise the row must belong to it, as with RevokeKey.
+// A source = 'stripe' row is never updated: the next reconcile would just
+// restore it from Stripe, so this refuses with ErrStripeEntitlement instead.
 func (c *Client) EndEntitlement(ctx context.Context, id, accountID int64, at time.Time) (Entitlement, error) {
-	return scanEntitlement(c.db.QueryRowContext(ctx,
+	e, err := scanEntitlement(c.db.QueryRowContext(ctx,
 		`UPDATE entitlements SET status = 'ended', valid_until = $2
-		  WHERE id = $1 AND status <> 'ended' AND ($3 = 0 OR account_id = $3)
+		  WHERE id = $1 AND status <> 'ended' AND source <> 'stripe' AND ($3 = 0 OR account_id = $3)
 		  RETURNING `+entitlementCols, id, at, accountID))
+	if err == nil {
+		return e, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return Entitlement{}, err
+	}
+	// No row matched the update; look at the row as-is to tell a stripe
+	// refusal apart from a genuine not-found or already-ended row.
+	row, rowErr := scanEntitlement(c.db.QueryRowContext(ctx,
+		`SELECT `+entitlementCols+` FROM entitlements WHERE id = $1 AND ($2 = 0 OR account_id = $2)`, id, accountID))
+	if rowErr != nil {
+		return Entitlement{}, rowErr
+	}
+	if row.Source == "stripe" {
+		return Entitlement{}, ErrStripeEntitlement
+	}
+	return Entitlement{}, ErrNotFound
 }
 
 // ListEntitlements returns every row for the account, oldest first.

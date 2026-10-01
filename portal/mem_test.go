@@ -314,7 +314,14 @@ func (m *memStore) EndEntitlement(_ context.Context, id, accountID int64, at tim
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e, ok := m.ents[id]
-	if !ok || e.Status == "ended" || (accountID != 0 && e.AccountID != accountID) {
+	if !ok || (accountID != 0 && e.AccountID != accountID) {
+		return apiaccess.Entitlement{}, apiaccess.ErrNotFound
+	}
+	// Stripe first, as the real store refuses an ended stripe row the same way.
+	if e.Source == "stripe" {
+		return apiaccess.Entitlement{}, apiaccess.ErrStripeEntitlement
+	}
+	if e.Status == "ended" {
 		return apiaccess.Entitlement{}, apiaccess.ErrNotFound
 	}
 	e.Status = "ended"

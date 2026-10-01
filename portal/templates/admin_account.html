@@ -50,7 +50,7 @@
   <thead><tr><th>ID</th><th>Source</th><th>Status</th><th>Games</th><th>Stores</th><th>Modes</th><th>From</th><th>Until</th><th>Note</th><th></th></tr></thead>
   <tbody>
   {{range .Entitlements}}<tr><td>{{.ID}}</td><td>{{.Source}}</td><td>{{.Status}}</td><td>{{join .Games ","}}</td><td title="{{.StoreScope}}">{{.View.Stores}}</td><td>{{join .Modes ","}}</td><td>{{date .ValidFrom}}</td><td>{{if .ValidUntil}}{{date .ValidUntil}}{{else}}-{{end}}</td><td>{{.Note}}</td>
-    <td class="right">{{if eq .Status "active"}}<form method="POST" action="/admin/accounts/{{$.Data.Account.ID}}/entitlements/{{.ID}}/end" class="inline" onsubmit="return confirm('End this access? The customer loses it within a minute and it cannot be reopened.')"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="btn btn-danger btn-small">End</button></form>{{end}}</td></tr>{{end}}
+    <td class="right">{{if eq .Status "active"}}{{if eq .Source "stripe"}}Cancel in Stripe{{else}}<form method="POST" action="/admin/accounts/{{$.Data.Account.ID}}/entitlements/{{.ID}}/end" class="inline" onsubmit="return confirm('End this access? The customer loses it within a minute and it cannot be reopened.')"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="btn btn-danger btn-small">End</button></form>{{end}}{{end}}</td></tr>{{end}}
   </tbody>
 </table>
 {{else}}
