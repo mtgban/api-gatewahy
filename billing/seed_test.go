@@ -2,7 +2,7 @@ package billing
 
 import (
 	"context"
-	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/mtgban/mtgban-website/apiproductlist"
@@ -65,7 +65,7 @@ func TestSeedReplacesChangedAmount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(res.Created, []string{"all_stores_monthly", "all_stores_quarterly"}) || len(res.Archived) != 2 || len(res.Updated) != 0 {
+	if !slices.Equal(res.Created, []string{"all_stores_monthly", "all_stores_quarterly"}) || len(res.Archived) != 2 || len(res.Updated) != 0 {
 		t.Errorf("replace: %+v", res)
 	}
 	if old.Active || old.LookupKey != "" {
@@ -92,7 +92,7 @@ func TestSeedRefreshesDriftAndReactivates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(res.Updated, []string{ProductID("starter"), ProductID("extra_store"), "all_data_monthly"}) || len(res.Created) != 0 || len(res.Archived) != 0 {
+	if !slices.Equal(res.Updated, []string{ProductID("starter"), ProductID("extra_store"), "all_data_monthly"}) || len(res.Created) != 0 || len(res.Archived) != 0 {
 		t.Errorf("refresh: %+v", res)
 	}
 	if !p.Active || p.Metadata["package"] != "all_data" || p.Metadata["stale"] != "" {
@@ -125,7 +125,7 @@ func TestSeedIgnoresExtraMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(res.Updated, []string{"starter_monthly"}) || len(res.Created) != 0 || len(res.Archived) != 0 {
+	if !slices.Equal(res.Updated, []string{"starter_monthly"}) || len(res.Created) != 0 || len(res.Archived) != 0 {
 		t.Errorf("changed metadata value not caught: %+v", res)
 	}
 }

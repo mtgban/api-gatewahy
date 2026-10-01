@@ -2,7 +2,8 @@ package billing
 
 import (
 	"errors"
-	"reflect"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,11 +21,11 @@ func TestNormalizeCanonicalizes(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom", "starcitygames"}}
-	if !reflect.DeepEqual(p, want) {
+	if !planEqual(p, want) {
 		t.Errorf("got %+v want %+v", p, want)
 	}
 	p, err = Plan{Package: "all_data", Interval: "quarterly", Games: []string{"Pokemon"}}.Normalize(testCatalog)
-	if err != nil || !reflect.DeepEqual(p.Games, []string{"pokemon"}) || len(p.Stores) != 0 {
+	if err != nil || !slices.Equal(p.Games, []string{"pokemon"}) || len(p.Stores) != 0 {
 		t.Errorf("any game can be the included one: %+v %v", p, err)
 	}
 	if _, err := (Plan{Package: "all_data", Interval: "quarterly"}).Normalize(testCatalog); !IsValidation(err) {
@@ -103,7 +104,7 @@ func TestLineItemsAndTotal(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
-		if got := p.LineItems(testCatalog); !reflect.DeepEqual(got, c.items) {
+		if got := p.LineItems(testCatalog); !slices.Equal(got, c.items) {
 			t.Errorf("%s: items %+v want %+v", c.name, got, c.items)
 		}
 		if got, err := p.Total(testCatalog); err != nil || got != c.total {
@@ -116,11 +117,11 @@ func TestMetadataRoundTrip(t *testing.T) {
 	p, _ := Plan{Package: "starter", Interval: "quarterly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom", "starcitygames"}}.Normalize(testCatalog)
 	m := p.Metadata(42)
 	want := map[string]string{"package": "starter", "interval": "quarterly", "games": "magic,pokemon", "stores": "cardkingdom,starcitygames", "account_id": "42"}
-	if !reflect.DeepEqual(m, want) {
+	if !maps.Equal(m, want) {
 		t.Errorf("metadata %v", m)
 	}
 	back, accountID, err := PlanFromMetadata(m)
-	if err != nil || accountID != 42 || !reflect.DeepEqual(back, p) {
+	if err != nil || accountID != 42 || !planEqual(back, p) {
 		t.Errorf("round trip %+v %d %v", back, accountID, err)
 	}
 	empty, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
@@ -138,7 +139,7 @@ func TestMetadataRoundTrip(t *testing.T) {
 
 func TestAddons(t *testing.T) {
 	starter, _ := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"starcitygames", "cardkingdom"}}.Normalize(testCatalog)
-	if got := starter.Addons(testCatalog); !reflect.DeepEqual(got, []string{"extra_store:1", "extra_game:1"}) {
+	if got := starter.Addons(testCatalog); !slices.Equal(got, []string{"extra_store:1", "extra_game:1"}) {
 		t.Errorf("starter addons %v", got)
 	}
 	allData, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
@@ -181,4 +182,9 @@ func TestDescribeAndDollars(t *testing.T) {
 	if Dollars(5) != "$0.05" || Dollars(123456) != "$1,234.56" || Dollars(20000) != "$200" {
 		t.Errorf("dollars %q %q %q", Dollars(5), Dollars(123456), Dollars(20000))
 	}
+}
+
+func planEqual(a, b Plan) bool {
+	return a.Package == b.Package && a.Interval == b.Interval &&
+		slices.Equal(a.Games, b.Games) && slices.Equal(a.Stores, b.Stores)
 }

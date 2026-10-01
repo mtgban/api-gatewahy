@@ -6,7 +6,7 @@ import (
 	"errors"
 	"net/url"
 	"os"
-	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -112,7 +112,7 @@ func TestCatalogEntitlementRoundtrip(t *testing.T) {
 		if got.StoreScope != want {
 			t.Errorf("%s: store_scope %q want %q", pkg.Key, got.StoreScope, want)
 		}
-		if !reflect.DeepEqual(got.Modes, modes) {
+		if !slices.Equal(got.Modes, modes) {
 			t.Errorf("%s: modes %v want %v", pkg.Key, got.Modes, modes)
 		}
 	}

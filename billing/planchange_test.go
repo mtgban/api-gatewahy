@@ -3,7 +3,7 @@ package billing
 import (
 	"context"
 	"errors"
-	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/stripe/stripe-go/v84"
@@ -36,7 +36,7 @@ func TestChangePlanRewritesItems(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Package != "all_stores" || got.Interval != "quarterly" || !reflect.DeepEqual(got.Games, []string{"magic", "pokemon"}) {
+	if got.Package != "all_stores" || got.Interval != "quarterly" || !slices.Equal(got.Games, []string{"magic", "pokemon"}) {
 		t.Errorf("new plan %+v", got)
 	}
 	ups := f.updates["sub_1"]
@@ -48,13 +48,13 @@ func TestChangePlanRewritesItems(t *testing.T) {
 		{price: f.priceByKey("all_stores_quarterly").ID, qty: 1},
 		{price: f.priceByKey("extra_game_quarterly").ID, qty: 1},
 	}
-	if !reflect.DeepEqual(changes(ups[0]), want) {
+	if !slices.Equal(changes(ups[0]), want) {
 		t.Errorf("items %+v want %+v", changes(ups[0]), want)
 	}
 	if stripe.StringValue(ups[0].ProrationBehavior) != "create_prorations" || ups[0].Metadata["package"] != "all_stores" || ups[0].Metadata["interval"] != "quarterly" || ups[0].Metadata["games"] != "magic,pokemon" {
 		t.Errorf("params %+v", ups[0])
 	}
-	if !reflect.DeepEqual(rc.ids, []string{"sub_1"}) {
+	if !slices.Equal(rc.ids, []string{"sub_1"}) {
 		t.Errorf("reconciled %v", rc.ids)
 	}
 }
@@ -70,7 +70,7 @@ func TestChangePlanAdjustsQuantities(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []itemChange{{id: "si_sub_1_1", qty: 2}}
-	if got := changes(f.updates["sub_1"][0]); !reflect.DeepEqual(got, want) {
+	if got := changes(f.updates["sub_1"][0]); !slices.Equal(got, want) {
 		t.Errorf("items %+v want %+v", got, want)
 	}
 }

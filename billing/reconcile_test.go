@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -69,8 +69,8 @@ func TestReconcileWritesTheRow(t *testing.T) {
 		t.Fatal("no row written")
 	}
 	if e.AccountID != 7 || e.Source != "stripe" || e.Status != "active" || e.ValidUntil != nil || e.ExternalRef != "sub_1" ||
-		!reflect.DeepEqual(e.Games, []string{"magic", "pokemon"}) || e.StoreScope != "CK,CKBLLast,SCG,TCGDirect,TCGDirectNet,TCGLow,TCGMarket,TCGPlayer" ||
-		!reflect.DeepEqual(e.Modes, []string{"retail", "buylist"}) || !reflect.DeepEqual(e.Addons, []string{"extra_store:1", "extra_game:1"}) ||
+		!slices.Equal(e.Games, []string{"magic", "pokemon"}) || e.StoreScope != "CK,CKBLLast,SCG,TCGDirect,TCGDirectNet,TCGLow,TCGMarket,TCGPlayer" ||
+		!slices.Equal(e.Modes, []string{"retail", "buylist"}) || !slices.Equal(e.Addons, []string{"extra_store:1", "extra_game:1"}) ||
 		!strings.Contains(e.Note, "À la carte") {
 		t.Errorf("row %+v", e)
 	}
@@ -154,7 +154,7 @@ func TestReconcileMetadataWinsOverItems(t *testing.T) {
 	if err := r.Subscription(context.Background(), "sub_1"); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.ents["sub_1"].Games; !reflect.DeepEqual(got, []string{"magic", "pokemon"}) {
+	if got := s.ents["sub_1"].Games; !slices.Equal(got, []string{"magic", "pokemon"}) {
 		t.Errorf("games %v", got)
 	}
 	if len(alerts) != 1 || !strings.Contains(alerts[0], "metadata wins") {
