@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,10 +29,10 @@ func TestResolveUnionsImpliedAndSelected(t *testing.T) {
 	if r.Scope != "CK,CKBLLast,SCG,TCGDirect,TCGDirectNet,TCGLow,TCGMarket,TCGPlayer" {
 		t.Errorf("scope %q", r.Scope)
 	}
-	if !reflect.DeepEqual(r.Modes, []string{"retail", "buylist"}) {
+	if !slices.Equal(r.Modes, []string{"retail", "buylist"}) {
 		t.Errorf("modes %v", r.Modes)
 	}
-	if got := r.StoreNames(); !reflect.DeepEqual(got, []string{"TCGplayer", "Card Kingdom", "Star City Games"}) {
+	if got := r.StoreNames(); !slices.Equal(got, []string{"TCGplayer", "Card Kingdom", "Star City Games"}) {
 		t.Errorf("names %v", got)
 	}
 }
@@ -111,7 +112,7 @@ func TestSiteStoreClientFetchesAndCaches(t *testing.T) {
 	ctx := context.Background()
 
 	got, err := c.SiteStores(ctx, "magic")
-	if err != nil || !reflect.DeepEqual(got, want) {
+	if err != nil || !siteStoresEqual(got, want) {
 		t.Fatalf("first fetch %+v %v", got, err)
 	}
 	if _, err := c.SiteStores(ctx, "magic"); err != nil || hits.Load() != 1 {
@@ -120,7 +121,7 @@ func TestSiteStoreClientFetchesAndCaches(t *testing.T) {
 	now = now.Add(6 * time.Minute)
 	status.Store(http.StatusInternalServerError)
 	got, err = c.SiteStores(ctx, "magic")
-	if err != nil || !reflect.DeepEqual(got, want) || hits.Load() != 2 {
+	if err != nil || !siteStoresEqual(got, want) || hits.Load() != 2 {
 		t.Errorf("stale value after a failed refresh: %+v %v hits %d", got, err, hits.Load())
 	}
 	if _, err := c.SiteStores(ctx, "pokemon"); err == nil {
@@ -170,7 +171,7 @@ func TestNewSiteStoreClientUsesTheUpstreamOrigins(t *testing.T) {
 		"pokemon": {Upstream: "http://localhost:8081/some/path?x=1", Secret: "s"},
 	}}, nil)
 	want := map[string]string{"magic": "https://www.mtgban.com", "pokemon": "http://localhost:8081"}
-	if !reflect.DeepEqual(c.Origins, want) || c.TTL != 5*time.Minute || c.HTTP == nil || c.HTTP.Timeout != 5*time.Second {
+	if !maps.Equal(c.Origins, want) || c.TTL != 5*time.Minute || c.HTTP == nil || c.HTTP.Timeout != 5*time.Second {
 		t.Errorf("client %+v", c)
 	}
 }
@@ -283,4 +284,14 @@ func TestSiteStoreClientRejectsBadLists(t *testing.T) {
 	if site, err := c.SiteStores(context.Background(), "magic"); err != nil || site.Stores[0].Key != "cardkingdom" {
 		t.Errorf("keys not lowercased: %+v %v", site, err)
 	}
+}
+
+func storeFamilyEqual(a, b StoreFamily) bool {
+	return a.Key == b.Key && a.Name == b.Name && slices.Equal(a.Shorthands, b.Shorthands)
+}
+
+func siteStoresEqual(a, b SiteStores) bool {
+	return a.Game == b.Game &&
+		slices.EqualFunc(a.Implied, b.Implied, storeFamilyEqual) &&
+		slices.EqualFunc(a.Stores, b.Stores, storeFamilyEqual)
 }
