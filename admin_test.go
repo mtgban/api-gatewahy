@@ -78,7 +78,14 @@ func (m *memStore) AddEntitlement(_ context.Context, e apiaccess.Entitlement) (a
 }
 func (m *memStore) EndEntitlement(_ context.Context, id, accountID int64, at time.Time) (apiaccess.Entitlement, error) {
 	for i := range m.ents {
-		if m.ents[i].ID == id && m.ents[i].Status != "ended" && (accountID == 0 || m.ents[i].AccountID == accountID) {
+		if m.ents[i].ID != id || (accountID != 0 && m.ents[i].AccountID != accountID) {
+			continue
+		}
+		// Stripe first, as the real store refuses an ended stripe row the same way.
+		if m.ents[i].Source == "stripe" {
+			return apiaccess.Entitlement{}, apiaccess.ErrStripeEntitlement
+		}
+		if m.ents[i].Status != "ended" {
 			m.ents[i].Status = "ended"
 			m.ents[i].ValidUntil = &at
 			return m.ents[i], nil
@@ -254,6 +261,23 @@ func TestAdminGrantEndAuditsTheRealAccount(t *testing.T) {
 	want := s.accounts[1].ID
 	if got := s.auditAccount[len(s.auditAccount)-1]; got != want {
 		t.Errorf("grant end audited account %d, want %d", got, want)
+	}
+}
+
+func TestAdminGrantEndRefusesStripeRow(t *testing.T) {
+	s := &memStore{}
+	admin(t, s, "account", "add", "-email", "ck@example.com")
+	s.ents = append(s.ents, apiaccess.Entitlement{ID: 1, AccountID: s.accounts[0].ID, Source: "stripe", Status: "active"})
+	auditsBefore, notifiedBefore := len(s.audit), s.notified
+	code, _, errb := admin(t, s, "grant", "end", "-id", "1")
+	if code != 1 || !strings.Contains(strings.ToLower(errb), "cancel") || !strings.Contains(errb, "Stripe") || !strings.Contains(strings.ToLower(errb), "suspend") {
+		t.Errorf("end stripe row: %d %q", code, errb)
+	}
+	if s.ents[0].Status != "active" {
+		t.Errorf("stripe row ended: %+v", s.ents[0])
+	}
+	if len(s.audit) != auditsBefore || s.notified != notifiedBefore {
+		t.Errorf("stripe refusal audited or notified: %v, notified %d", s.audit, s.notified)
 	}
 }
 

@@ -311,6 +311,10 @@ func (s *Server) adminAddEntitlement(w http.ResponseWriter, r *http.Request, ses
 	s.adminRedirect(w, r, a, "granted")
 }
 
+// stripeEndMsg is shown when an admin tries to end a Stripe-sourced row:
+// the next reconcile would just restore it from Stripe.
+const stripeEndMsg = "Stripe plans are cancelled in Stripe. Suspend the account for an immediate cut-off."
+
 func (s *Server) adminEndEntitlement(w http.ResponseWriter, r *http.Request, sess session.Session, _ apiaccess.Account) {
 	a, ok := s.adminTarget(w, r)
 	if !ok {
@@ -322,11 +326,20 @@ func (s *Server) adminEndEntitlement(w http.ResponseWriter, r *http.Request, ses
 		return
 	}
 	ents, err := s.Store.ListEntitlements(r.Context(), a.ID)
-	if err != nil || !slices.ContainsFunc(ents, func(e apiaccess.Entitlement) bool { return e.ID == eid }) {
+	i := slices.IndexFunc(ents, func(e apiaccess.Entitlement) bool { return e.ID == eid })
+	if err != nil || i == -1 {
 		http.NotFound(w, r)
 		return
 	}
+	if ents[i].Source == "stripe" {
+		s.renderAdminAccount(w, r, sess, a, http.StatusBadRequest, "", stripeEndMsg, "")
+		return
+	}
 	if _, err := s.Store.EndEntitlement(r.Context(), eid, a.ID, s.now()); err != nil {
+		if errors.Is(err, apiaccess.ErrStripeEntitlement) {
+			s.renderAdminAccount(w, r, sess, a, http.StatusBadRequest, "", stripeEndMsg, "")
+			return
+		}
 		s.renderAdminAccount(w, r, sess, a, http.StatusInternalServerError, "", tryAgainMsg, "")
 		return
 	}

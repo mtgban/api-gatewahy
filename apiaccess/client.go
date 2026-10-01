@@ -17,6 +17,10 @@ import (
 // ErrNotFound is returned when a lookup matches no row.
 var ErrNotFound = errors.New("apiaccess: not found")
 
+// ErrStripeEntitlement is returned when EndEntitlement is asked to end a
+// Stripe-sourced row: the next reconcile would just restore it from Stripe.
+var ErrStripeEntitlement = errors.New("apiaccess: a Stripe entitlement is cancelled in Stripe; suspend the account for an immediate cut-off")
+
 // Client wraps a connection pool and the schema it expects.
 type Client struct {
 	db *sql.DB

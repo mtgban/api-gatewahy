@@ -132,7 +132,8 @@ may appear anywhere in the command line, before or after the verb:
   `TCGLow` or `CK`; they are case-sensitive and only their syntax is checked
   (no spaces inside a shorthand), so a typo grants nothing rather than
   failing. The admin page's manual entitlement form works the same way.
-- `end -id`: ends an entitlement by id as of now.
+- `end -id`: ends a manual or trial entitlement by id as of now. A Stripe row is
+  refused: cancel it in Stripe, or `account suspend` for an immediate cut-off.
 - `list -email`: table of an account's entitlements.
 
 `usage`: `-since -until -email`, dates as `YYYY-MM-DD`. Defaults to the

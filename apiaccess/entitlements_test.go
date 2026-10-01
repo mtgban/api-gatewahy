@@ -167,6 +167,38 @@ func TestEndEntitlementSecondCallIsNotFound(t *testing.T) {
 	}
 }
 
+func TestEndEntitlementRefusesStripeRow(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	a, _ := c.CreateAccount(ctx, "end-stripe@example.com", "")
+	e, err := c.UpsertStripeEntitlement(ctx, Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}, ExternalRef: "sub_end1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.EndEntitlement(ctx, e.ID, 0, time.Now()); !errors.Is(err, ErrStripeEntitlement) {
+		t.Errorf("stripe row ended: %v", err)
+	}
+	all, err := c.ListEntitlements(ctx, a.ID)
+	if err != nil || len(all) != 1 || all[0].Status != "active" || all[0].ValidUntil != nil {
+		t.Errorf("stripe row changed: %+v", all)
+	}
+	// An ended stripe row is still a stripe row, not a not-found.
+	if _, err := c.UpsertStripeEntitlement(ctx, Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}, ExternalRef: "sub_end1", Status: "ended"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.EndEntitlement(ctx, e.ID, 0, time.Now()); !errors.Is(err, ErrStripeEntitlement) {
+		t.Errorf("ended stripe row: %v", err)
+	}
+
+	m, err := c.AddEntitlement(ctx, Entitlement{AccountID: a.ID, Source: "manual", Games: []string{"magic"}, StoreScope: "BASE_ACCESS", Modes: []string{"retail"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.EndEntitlement(ctx, m.ID, 0, time.Now()); err != nil || got.Status != "ended" {
+		t.Errorf("manual row not ended: %+v %v", got, err)
+	}
+}
+
 func TestAddEntitlementValidates(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()

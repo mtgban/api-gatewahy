@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -290,6 +291,41 @@ func TestAdminUsageAndReconcile(t *testing.T) {
 	ts.ReconcileAll = func(context.Context) (billing.Result, error) { return billing.Result{}, errors.New("stripe down") }
 	if rec := ts.do("POST", "/admin/reconcile", "csrf="+csrf, ck); rec.Code != 502 {
 		t.Errorf("reconcile failure: %d", rec.Code)
+	}
+}
+
+func TestAdminEndRefusesStripeRow(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, csrf := ts.signIn(t, "admin@example.com")
+	ctx := context.Background()
+	a, _ := ts.store.GetOrCreateAccount(ctx, "cust@example.com", "")
+	stripeEnt, _ := ts.store.AddEntitlement(ctx, entitlementFor(a.ID, "stripe", "ALL_ACCESS"))
+	manualEnt, _ := ts.store.AddEntitlement(ctx, entitlementFor(a.ID, "manual", "BASE_ACCESS"))
+	id := strconv.FormatInt(a.ID, 10)
+
+	body := ts.do("GET", "/admin/accounts/"+id, "", ck).Body.String()
+	if strings.Contains(body, "/entitlements/"+itoa(stripeEnt.ID)+"/end") {
+		t.Error("end form rendered for an active stripe row")
+	}
+	if !strings.Contains(body, "/entitlements/"+itoa(manualEnt.ID)+"/end") {
+		t.Error("no end form for the manual row")
+	}
+	if !strings.Contains(body, "Cancel in Stripe") {
+		t.Error("no Cancel in Stripe text for the stripe row")
+	}
+
+	auditsBefore, notifiedBefore := len(ts.store.actions), len(ts.store.notified)
+	rec := ts.do("POST", "/admin/accounts/"+id+"/entitlements/"+itoa(stripeEnt.ID)+"/end", "csrf="+csrf, ck)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), stripeEndMsg) {
+		t.Fatalf("end stripe row: %d %s", rec.Code, rec.Body.String())
+	}
+	if len(ts.store.actions) != auditsBefore || len(ts.store.notified) != notifiedBefore {
+		t.Error("stripe refusal audited or notified")
+	}
+	ents, _ := ts.store.ListEntitlements(ctx, a.ID)
+	i := slices.IndexFunc(ents, func(e apiaccess.Entitlement) bool { return e.ID == stripeEnt.ID })
+	if i == -1 || ents[i].Status != "active" {
+		t.Errorf("stripe row changed: %+v", ents)
 	}
 }
 
