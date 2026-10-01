@@ -52,7 +52,7 @@ func TestChangePlanRewritesItems(t *testing.T) {
 	if !slices.Equal(changes(ups[0]), want) {
 		t.Errorf("items %+v want %+v", changes(ups[0]), want)
 	}
-	if stripe.StringValue(ups[0].ProrationBehavior) != "create_prorations" || ups[0].Metadata["package"] != "all_stores" || ups[0].Metadata["interval"] != "quarterly" || ups[0].Metadata["games"] != "magic,pokemon" {
+	if stripe.StringValue(ups[0].ProrationBehavior) != "always_invoice" || ups[0].Metadata["package"] != "all_stores" || ups[0].Metadata["interval"] != "quarterly" || ups[0].Metadata["games"] != "magic,pokemon" {
 		t.Errorf("params %+v", ups[0])
 	}
 	if !slices.Equal(rc.ids, []string{"sub_1"}) {
@@ -129,6 +129,84 @@ func TestChangePlanKeepsReplacedPrice(t *testing.T) {
 	want := []itemChange{{id: "si_sub_1_1", qty: 2}}
 	if got := changes(f.updates["sub_1"][0]); !slices.Equal(got, want) {
 		t.Errorf("items %+v want %+v", got, want)
+	}
+}
+
+func TestChangePlanInvoicesUpgradeImmediately(t *testing.T) {
+	f := seededFake(t)
+	ctx := context.Background()
+	current, _ := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}}.Normalize(testCatalog)
+	f.addSub(t, "sub_1", "cus_7", stripe.SubscriptionStatusActive, current.Metadata(7), periodEnd, fakeItem{"starter_monthly", 1})
+	rc := &recorder{}
+
+	if _, err := ChangePlan(ctx, f, testCatalog, newFakeStores(), testGames, testAccount, "sub_1",
+		Plan{Package: "all_stores", Games: []string{"magic"}}, rc.reconcile); err != nil {
+		t.Fatal(err)
+	}
+	ups := f.updates["sub_1"]
+	if len(ups) != 1 {
+		t.Fatalf("updates %d", len(ups))
+	}
+	if got := stripe.StringValue(ups[0].ProrationBehavior); got != "always_invoice" {
+		t.Errorf("proration %q, want always_invoice", got)
+	}
+}
+
+func TestChangePlanCreditsDowngradeOnNextInvoice(t *testing.T) {
+	f := seededFake(t)
+	ctx := context.Background()
+	current, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
+	f.addSub(t, "sub_1", "cus_7", stripe.SubscriptionStatusActive, current.Metadata(7), periodEnd, fakeItem{"all_data_monthly", 1})
+	rc := &recorder{}
+
+	if _, err := ChangePlan(ctx, f, testCatalog, newFakeStores(), testGames, testAccount, "sub_1",
+		Plan{Package: "starter", Games: []string{"magic"}, Stores: []string{"cardkingdom"}}, rc.reconcile); err != nil {
+		t.Fatal(err)
+	}
+	ups := f.updates["sub_1"]
+	if len(ups) != 1 {
+		t.Fatalf("updates %d", len(ups))
+	}
+	if got := stripe.StringValue(ups[0].ProrationBehavior); got != "create_prorations" {
+		t.Errorf("proration %q, want create_prorations", got)
+	}
+}
+
+// TestChangePlanProratesEqualTotal covers a switch between packages that
+// bill the same amount: starter plus two extra stores costs what all_stores
+// costs outright, so this is neither an upgrade nor a downgrade.
+func TestChangePlanProratesEqualTotal(t *testing.T) {
+	f := seededFake(t)
+	ctx := context.Background()
+	current, _ := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"},
+		Stores: []string{"cardkingdom", "coolstuffinc", "starcitygames"}}.Normalize(testCatalog)
+	next, _ := Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
+	currentTotal, err := current.Total(testCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextTotal, err := next.Total(testCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pin the fixture: a future catalog price change must not turn this into a downgrade.
+	if currentTotal != nextTotal {
+		t.Fatalf("fixture totals differ: current %d, next %d", currentTotal, nextTotal)
+	}
+	f.addSub(t, "sub_1", "cus_7", stripe.SubscriptionStatusActive, current.Metadata(7), periodEnd,
+		fakeItem{"starter_monthly", 1}, fakeItem{"extra_store_monthly", 2})
+	rc := &recorder{}
+
+	if _, err := ChangePlan(ctx, f, testCatalog, newFakeStores(), testGames, testAccount, "sub_1",
+		next, rc.reconcile); err != nil {
+		t.Fatal(err)
+	}
+	ups := f.updates["sub_1"]
+	if len(ups) != 1 {
+		t.Fatalf("updates %d", len(ups))
+	}
+	if got := stripe.StringValue(ups[0].ProrationBehavior); got != "create_prorations" {
+		t.Errorf("proration %q, want create_prorations", got)
 	}
 }
 

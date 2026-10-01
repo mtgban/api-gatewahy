@@ -179,8 +179,9 @@ customer can update their card, see invoices, and cancel at period end.
 
 `plan change -email -package [-games] [-stores] [-sub]`: rewrites the
 subscription's items and metadata to the new plan with proration, keeping the
-current interval, then reconciles. `-sub` is only needed when the account has
-more than one active Stripe subscription.
+current interval, then reconciles. An upgrade is invoiced immediately; a
+downgrade credits the next invoice instead. `-sub` is only needed when the
+account has more than one active Stripe subscription.
 
 `serve -config`: runs the gateway HTTP server.
 

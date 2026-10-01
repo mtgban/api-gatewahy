@@ -75,7 +75,7 @@ func ChangePlan(ctx context.Context, api API, cat *apiproductlist.ProductList, s
 	if _, err := api.UpdateSubscription(ctx, subID, &stripe.SubscriptionUpdateParams{
 		Items:             items,
 		Metadata:          newPlan.Metadata(account.ID),
-		ProrationBehavior: stripe.String("create_prorations"),
+		ProrationBehavior: stripe.String(prorationBehavior(current, newPlan, cat)),
 	}); err != nil {
 		return resolved, fmt.Errorf("billing: update %s: %w", subID, err)
 	}
@@ -83,4 +83,21 @@ func ChangePlan(ctx context.Context, api API, cat *apiproductlist.ProductList, s
 		return resolved, fmt.Errorf("%w: %w", ErrChangeNotReconciled, err)
 	}
 	return resolved, nil
+}
+
+// prorationBehavior invoices an upgrade immediately, so a cancel right after
+// cannot dodge it; a downgrade still credits the next invoice.
+func prorationBehavior(current, next Plan, cat *apiproductlist.ProductList) string {
+	currentTotal, err := current.Total(cat)
+	if err != nil {
+		return "create_prorations" // no total, proceed as a non-upgrade
+	}
+	nextTotal, err := next.Total(cat)
+	if err != nil {
+		return "create_prorations" // no total, proceed as a non-upgrade
+	}
+	if nextTotal > currentTotal {
+		return "always_invoice"
+	}
+	return "create_prorations"
 }
