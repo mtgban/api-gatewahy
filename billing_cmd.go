@@ -46,11 +46,20 @@ func init() {
 // billingDeps is what the billing verbs need; tests leave store and api nil
 // for the paths that fail before reaching them.
 type billingDeps struct {
-	store  *apiaccess.Client
+	store  billingStore
 	api    billing.API
 	cfg    *config.Config
 	cat    *apiproductlist.ProductList
 	stores billing.StoreLister
+}
+
+// billingStore is billing.Store plus the account and invite lookups the
+// billing verbs do directly, outside the billing package.
+type billingStore interface {
+	billing.Store
+	GetAccountByEmail(ctx context.Context, email string) (apiaccess.Account, error)
+	ListEntitlements(ctx context.Context, accountID int64) ([]apiaccess.Entitlement, error)
+	CreateInvite(ctx context.Context, intervalKey, email string, ttl time.Duration, note string) (string, apiaccess.Invite, error)
 }
 
 // stripeFromEnv builds the Stripe client; the key never lives in the config file.
@@ -100,6 +109,8 @@ func runBilling(ctx context.Context, d billingDeps, cmd string, args []string, s
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 	need := func(name, val string) bool {
 		if val == "" {
 			fmt.Fprintf(stderr, "api-gatewahy: -%s is required\n", name)
@@ -234,8 +245,27 @@ func runBilling(ctx context.Context, d billingDeps, cmd string, args []string, s
 				return fail(err)
 			}
 		}
+		stripeSub, err := d.api.GetSubscription(ctx, subID)
+		if err != nil {
+			return fail(fmt.Errorf("billing: fetch %s: %w", subID, err))
+		}
+		want, _, err := billing.PlanFromMetadata(stripeSub.Metadata)
+		if err != nil {
+			return fail(err)
+		}
+		// Start from the subscription's current plan; only change what was given.
+		want.Package = *pkg
+		if given["games"] {
+			want.Games = splitList(*games)
+		}
+		if given["stores"] {
+			want.Stores = splitList(*stores)
+		} else if catPkg, ok := d.cat.Package(*pkg); !ok || catPkg.StoreScope != apiproductlist.StoreScopeExplicit {
+			// The old plan's stores only carry over onto a package that still picks stores.
+			want.Stores = nil
+		}
 		rec := newReconciler(d.store, d.api, d.cfg, d.cat, d.stores, alert)
-		newPlan, err := billing.ChangePlan(ctx, d.api, d.cat, d.stores, d.cfg.GameNames(), a, subID, plan(), rec.Subscription)
+		newPlan, err := billing.ChangePlan(ctx, d.api, d.cat, d.stores, d.cfg.GameNames(), a, subID, want, rec.Subscription)
 		if err != nil {
 			return fail(err)
 		}

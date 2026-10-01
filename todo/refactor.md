@@ -89,7 +89,7 @@ fails before the fix.
 
 ### Phase 1 checklist
 
-- [ ] CLI billing: #1, #9 (land with Phase 3's per-verb flag sets, or fix
+- [x] CLI billing: #1, #9 (land with Phase 3's per-verb flag sets, or fix
   the defaults in place first). Issue [#33](https://github.com/mtgban/api-gatewahy/issues/33)
 - [x] Resolver: #2 (generation counter), #3 (lookup deadline, then
   stale-on-timeout); add a `-race` test with a blocking source. Issue [#34](https://github.com/mtgban/api-gatewahy/issues/34)
