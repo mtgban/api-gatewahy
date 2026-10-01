@@ -135,12 +135,13 @@ func paramsFrom(ctx context.Context) proxyParams {
 
 // newProxy builds the reverse proxy for one game. The game name travels per request.
 func (h *Handler) newProxy(_ string, up Upstream) *httputil.ReverseProxy {
+	// Clone the default transport so a blackholed upstream still hits a dial
+	// and TLS handshake timeout instead of waiting out UpstreamTimeout.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = h.opts.UpstreamTimeout
+	transport.MaxIdleConnsPerHost = 16
 	return &httputil.ReverseProxy{
-		Transport: &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
-			ResponseHeaderTimeout: h.opts.UpstreamTimeout,
-			MaxIdleConnsPerHost:   16,
-		},
+		Transport: transport,
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			p := paramsFrom(pr.In.Context())
 			pr.SetURL(up.URL)
@@ -168,6 +169,8 @@ func (h *Handler) newProxy(_ string, up Upstream) *httputil.ReverseProxy {
 			pr.Out.Header.Set("X-Forwarded-Proto", "https")
 		},
 		ModifyResponse: func(resp *http.Response) error {
+			// Only the gateway's own RateLimit-Limit reaches the client.
+			resp.Header.Del("RateLimit-Limit")
 			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusNotModified {
 				return nil
 			}
@@ -195,6 +198,8 @@ func (h *Handler) newProxy(_ string, up Upstream) *httputil.ReverseProxy {
 			var status errUpstreamStatus
 			var netErr net.Error
 			switch {
+			case errors.Is(err, context.Canceled) && r.Context().Err() != nil:
+				// The client went away; there is no one to write to.
 			case errors.As(err, &errSigRejected{}):
 				log.Printf("gateway: %s: backend rejected gateway signature", p.game)
 				writeError(w, http.StatusBadGateway, "upstream rejected gateway signature", p.game)
@@ -227,13 +232,18 @@ func sigRejected(head []byte) bool {
 	return false
 }
 
-// bearerKey reads the key from the Authorization header or ?key=.
+// bearerKey reads the key from a Bearer Authorization header, else ?key=.
+// A Bearer scheme is authoritative even with an empty token, so a bare
+// "Bearer" never falls back to ?key=; only a non-Bearer scheme does.
 func bearerKey(r *http.Request) string {
 	if auth := r.Header.Get("Authorization"); auth != "" {
-		if k, ok := strings.CutPrefix(auth, "Bearer "); ok {
-			return strings.TrimSpace(k)
+		scheme, token, ok := strings.Cut(auth, " ")
+		if !ok {
+			scheme, token = auth, ""
 		}
-		return auth
+		if strings.EqualFold(scheme, "Bearer") {
+			return strings.TrimSpace(token)
+		}
 	}
 	return r.URL.Query().Get("key")
 }
@@ -244,8 +254,8 @@ func bearerKey(r *http.Request) string {
 // zoned IPv6 literal, falls back to the peer.
 func ClientIP(r *http.Request, header string) string {
 	if header != "" {
-		if v := r.Header.Get(header); v != "" {
-			parts := strings.Split(v, ",")
+		if vs := r.Header.Values(header); len(vs) > 0 {
+			parts := strings.Split(vs[len(vs)-1], ",")
 			if ip, err := netip.ParseAddr(strings.TrimSpace(parts[len(parts)-1])); err == nil && ip.Zone() == "" {
 				return ip.Unmap().String()
 			}
