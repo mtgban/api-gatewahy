@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -91,9 +92,47 @@ func TestKeysRoundTrip(t *testing.T) {
 		t.Errorf("second revoke: %v", err)
 	}
 
-	recent, _ := c.KeysCreatedSince(ctx, time.Now().Add(-time.Minute))
+	recent, _ := c.KeysCreatedBetween(ctx, time.Now().Add(-time.Minute), time.Now().Add(time.Minute))
 	if len(recent) != 1 {
 		t.Errorf("recent keys %d", len(recent))
+	}
+}
+
+func TestKeysCreatedBetweenHalfOpenWindow(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	a, _ := c.CreateAccount(ctx, "window@example.com", "")
+
+	from := time.Now().UTC().Truncate(time.Second)
+	to := from.Add(time.Hour)
+
+	seed := func(at time.Time, label string) {
+		_, hash, prefix, err := GenerateKey(KeyLive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.db.ExecContext(ctx,
+			`INSERT INTO api_keys (account_id, key_hash, prefix, label, kind, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+			a.ID, hash, prefix, label, string(KeyLive), at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed(from.Add(-time.Second), "before-from")
+	seed(from, "at-from")
+	seed(to.Add(-time.Second), "before-to")
+	seed(to, "at-to")
+
+	got, err := c.KeysCreatedBetween(ctx, from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var labels []string
+	for _, k := range got {
+		labels = append(labels, k.Label)
+	}
+	want := []string{"at-from", "before-to"}
+	if !slices.Equal(labels, want) {
+		t.Errorf("labels %v, want %v", labels, want)
 	}
 }
 

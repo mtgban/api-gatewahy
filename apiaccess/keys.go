@@ -199,9 +199,11 @@ func (c *Client) ListKeys(ctx context.Context, accountID int64) ([]Key, error) {
 	return c.queryKeys(ctx, `SELECT `+keyCols+` FROM api_keys WHERE account_id = $1 ORDER BY id`, accountID)
 }
 
-// KeysCreatedSince returns keys created at or after since, for the daily summary.
-func (c *Client) KeysCreatedSince(ctx context.Context, since time.Time) ([]Key, error) {
-	return c.queryKeys(ctx, `SELECT `+keyCols+` FROM api_keys WHERE created_at >= $1 ORDER BY id`, since)
+// KeysCreatedBetween returns keys created in the half-open window [from, to),
+// for the daily summary.
+func (c *Client) KeysCreatedBetween(ctx context.Context, from, to time.Time) ([]Key, error) {
+	return c.queryKeys(ctx,
+		`SELECT `+keyCols+` FROM api_keys WHERE created_at >= $1 AND created_at < $2 ORDER BY id`, from, to)
 }
 
 func (c *Client) queryKeys(ctx context.Context, query string, args ...any) ([]Key, error) {

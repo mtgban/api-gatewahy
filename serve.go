@@ -522,7 +522,7 @@ func dailySummary(ctx context.Context, store *apiaccess.Client, alert func(strin
 		log.Println("daily summary:", err)
 		return
 	}
-	keys, err := store.KeysCreatedSince(ctx, day)
+	keys, err := store.KeysCreatedBetween(ctx, day, day.AddDate(0, 0, 1))
 	if err != nil {
 		log.Println("daily summary keys:", err)
 	}
