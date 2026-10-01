@@ -300,9 +300,10 @@ customer-facing reminders during that window.
 - `GATEWAY_SESSION_SECRET`: turns the customer pages on; at least 32
   characters. Signs the session, pending-checkout, and CSRF tokens.
 - `MAIL_SMTP_HOST`, `MAIL_SMTP_PORT` (587), `MAIL_SMTP_USER`,
-  `MAIL_SMTP_PASS`: STARTTLS SMTP for sign-in links and notices. With no
-  host, mail is written to the log instead, sign-in links included, which
-  is only acceptable while no customer can reach the host.
+  `MAIL_SMTP_PASS`: SMTP for sign-in links and notices, STARTTLS except on
+  port 465, which is implicit TLS. With no host, mail is written to the
+  log instead, sign-in links included, which is only acceptable while no
+  customer can reach the host.
 
 ## Running locally
 

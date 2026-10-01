@@ -99,7 +99,7 @@ fails before the fix.
 - [x] Jobs: #8 (recover per run, log, alert). Issue [#38](https://github.com/mtgban/api-gatewahy/issues/38)
 - [ ] Discord: #6 (split on line boundaries). Issue [#39](https://github.com/mtgban/api-gatewahy/issues/39)
 - [ ] Portal: #15, #16, #20, #24. Issue [#40](https://github.com/mtgban/api-gatewahy/issues/40)
-- [ ] Mailer: #17. Issue [#41](https://github.com/mtgban/api-gatewahy/issues/41)
+- [x] Mailer: #17. Issue [#41](https://github.com/mtgban/api-gatewahy/issues/41)
 - [ ] Meter and summary: #22, #26. Issue [#42](https://github.com/mtgban/api-gatewahy/issues/42)
 
 ## Phase 2: decision-dependent
