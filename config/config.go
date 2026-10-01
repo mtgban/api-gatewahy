@@ -53,6 +53,7 @@ type Config struct {
 	Games                  map[string]Game       `json:"games"`
 	CacheTTLSeconds        int                   `json:"cache_ttl_seconds"`
 	StaleGraceSeconds      int                   `json:"stale_grace_seconds"`
+	LookupTimeoutSeconds   int                   `json:"lookup_timeout_seconds"`
 	PerKeyRequestsPerSec   float64               `json:"per_key_requests_per_sec"`
 	PerKeyBurst            int                   `json:"per_key_burst"`
 	PerIPRequestsPerSec    float64               `json:"per_ip_requests_per_sec"`
@@ -139,6 +140,9 @@ func (c *Config) applyDefaults(defaultClientIPHeader, defaultGraceDays bool) {
 	}
 	if c.StaleGraceSeconds <= 0 {
 		c.StaleGraceSeconds = 600
+	}
+	if c.LookupTimeoutSeconds <= 0 {
+		c.LookupTimeoutSeconds = 5
 	}
 	if c.PerKeyRequestsPerSec <= 0 {
 		c.PerKeyRequestsPerSec = 10
