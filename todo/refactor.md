@@ -19,6 +19,16 @@ places:
 
 Recorded 2026-10-01. The items that depended on them are in Phase 2.
 
+- [x] **D1 Grace runs from the last paid period.** A `past_due`
+  subscription keeps access until the start of the unpaid period (the
+  items' `current_period_start`) plus `stripe.grace_days`, so
+  `grace_days = 0` ends access at the failed renewal. README's
+  `stripe.grace_days` paragraph changes with it.
+- [x] **D2 End refuses Stripe rows.** A Stripe entitlement mirrors its
+  subscription, so the admin page hides End for `source = stripe` and the
+  handler refuses it with "cancel it in Stripe". Suspending the account
+  stays the immediate cut-off; the gateway rejects every key of a
+  suspended account and reconcile does not touch account status.
 - [x] **D3 One instance.** The App Platform app runs a single instance.
   Daily jobs and in-process limits need no cross-instance locks; a
   per-subscription mutex is enough to serialize reconciles. README says so.
@@ -38,16 +48,6 @@ Recorded 2026-10-01. The items that depended on them are in Phase 2.
   go-mtgban and mtgban-website: revive's `imports-blocklist` through
   golangci-lint, after the 6 billing test files that import it are
   rewritten.
-- [x] **D1 Grace runs from the last paid period.** A `past_due`
-  subscription keeps access until the start of the unpaid period (the
-  items' `current_period_start`) plus `stripe.grace_days`, so
-  `grace_days = 0` ends access at the failed renewal. README's
-  `stripe.grace_days` paragraph changes with it.
-- [x] **D2 End refuses Stripe rows.** A Stripe entitlement mirrors its
-  subscription, so the admin page hides End for `source = stripe` and the
-  handler refuses it with "cancel it in Stripe". Suspending the account
-  stays the immediate cut-off; the gateway rejects every key of a
-  suspended account and reconcile does not touch account status.
 - [x] **D7b No rule on calls folded into an `if`.** Follow the
   surrounding code; not a review point and not a sweep target.
 
