@@ -3,6 +3,7 @@ package apiaccess
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -289,9 +290,16 @@ func TestListActiveStripeRefs(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
 	a, _ := c.CreateAccount(ctx, "refs@example.com", "")
+	b, _ := c.CreateAccount(ctx, "refs2@example.com", "")
 	base := Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}}
 	live := base
 	live.ExternalRef = "sub_live"
+	second := base
+	second.ExternalRef = "sub_z"
+	// Sorts before a's refs by id, after them by account.
+	other := base
+	other.AccountID = b.ID
+	other.ExternalRef = "sub_a"
 	gone := base
 	gone.ExternalRef = "sub_gone"
 	gone.Status = "ended"
@@ -302,13 +310,14 @@ func TestListActiveStripeRefs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, e := range []Entitlement{live, gone} {
+	for _, e := range []Entitlement{other, live, gone, second} {
 		if _, err := c.UpsertStripeEntitlement(ctx, e); err != nil {
 			t.Fatal(err)
 		}
 	}
 	refs, err := c.ListActiveStripeRefs(ctx)
-	if err != nil || len(refs) != 1 || refs[0] != "sub_live" {
+	want := []StripeRef{{a.ID, "sub_live"}, {a.ID, "sub_z"}, {b.ID, "sub_a"}}
+	if err != nil || !slices.Equal(refs, want) {
 		t.Errorf("refs %v %v", refs, err)
 	}
 }

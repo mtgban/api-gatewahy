@@ -15,7 +15,8 @@ type Store interface {
 	ConsumeInvite(ctx context.Context, token, email string, now time.Time) (apiaccess.Invite, error)
 	ReleaseInvite(ctx context.Context, token string) error
 	UpsertStripeEntitlement(ctx context.Context, e apiaccess.Entitlement) (apiaccess.Entitlement, error)
-	ListActiveStripeRefs(ctx context.Context) ([]string, error)
+	ListEntitlements(ctx context.Context, accountID int64) ([]apiaccess.Entitlement, error)
+	ListActiveStripeRefs(ctx context.Context) ([]apiaccess.StripeRef, error)
 	Notify(ctx context.Context, payload string) error
 }
 

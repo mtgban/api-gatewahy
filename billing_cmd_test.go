@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
 	"github.com/mtgban/api-gatewahy/billing"
@@ -41,19 +42,27 @@ func TestBillingUsageErrors(t *testing.T) {
 }
 
 func TestStripeSubscriptionFor(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	stripeActive := apiaccess.Entitlement{Source: "stripe", Status: "active", ExternalRef: "sub_1"}
 	stripeEnded := apiaccess.Entitlement{Source: "stripe", Status: "ended", ExternalRef: "sub_0"}
 	manual := apiaccess.Entitlement{Source: "manual", Status: "active"}
-	if id, err := billing.SubscriptionFor([]apiaccess.Entitlement{manual, stripeEnded, stripeActive}); err != nil || id != "sub_1" {
+	if id, err := billing.SubscriptionFor([]apiaccess.Entitlement{manual, stripeEnded, stripeActive}, now); err != nil || id != "sub_1" {
 		t.Errorf("one live: %q %v", id, err)
 	}
-	if _, err := billing.SubscriptionFor([]apiaccess.Entitlement{manual, stripeEnded}); err == nil {
+	if _, err := billing.SubscriptionFor([]apiaccess.Entitlement{manual, stripeEnded}, now); err == nil {
 		t.Error("none live accepted")
 	}
 	other := stripeActive
 	other.ExternalRef = "sub_2"
-	if _, err := billing.SubscriptionFor([]apiaccess.Entitlement{stripeActive, other}); err == nil || !strings.Contains(err.Error(), "-sub") {
+	if _, err := billing.SubscriptionFor([]apiaccess.Entitlement{stripeActive, other}, now); err == nil || !strings.Contains(err.Error(), "-sub") {
 		t.Errorf("two live: %v", err)
+	}
+	// A past_due row past its grace still says active until reconcile ends it.
+	lapsed := other
+	past := now.Add(-time.Hour)
+	lapsed.ValidUntil = &past
+	if id, err := billing.SubscriptionFor([]apiaccess.Entitlement{stripeActive, lapsed}, now); err != nil || id != "sub_1" {
+		t.Errorf("lapsed row picked: %q %v", id, err)
 	}
 }
 

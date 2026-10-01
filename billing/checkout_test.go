@@ -377,3 +377,80 @@ func TestCheckoutBoundsTheInviteRelease(t *testing.T) {
 		t.Fatal("the invite release was not bounded")
 	}
 }
+
+func TestCheckoutRefusesAnAccountWithAPlan(t *testing.T) {
+	f := seededFake(t)
+	s := newMemStore(testAccount)
+	co := newTestCheckout(f, s)
+	ctx := context.Background()
+	s.addInvite("inv", "quarterly", "", co.Now().Add(24*time.Hour))
+	s.ents["sub_1"] = apiaccess.Entitlement{ID: 1, AccountID: 7, Source: "stripe", Status: "active", ValidFrom: co.Now().Add(-24 * time.Hour), ExternalRef: "sub_1"}
+	monthly := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}
+	quarterly := Plan{Package: "all_stores", Interval: "quarterly", Games: []string{"magic"}}
+
+	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: monthly}); !errors.Is(err, ErrHasPlan) {
+		t.Errorf("monthly with a plan: %v", err)
+	}
+	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: quarterly, Invite: "inv"}); !errors.Is(err, ErrHasPlan) {
+		t.Errorf("quarterly with a plan: %v", err)
+	}
+	if s.invites["inv"].UsedAt != nil {
+		t.Error("refused checkout consumed the invite")
+	}
+	if len(f.sessions) != 0 || f.calls["CreateCustomer"] != 0 {
+		t.Error("a refused checkout reached Stripe")
+	}
+
+	// A row past its valid_until no longer counts, whatever its status says.
+	past := co.Now().Add(-time.Hour)
+	lapsed := s.ents["sub_1"]
+	lapsed.ValidUntil = &past
+	s.ents["sub_1"] = lapsed
+	s.ents["manual"] = apiaccess.Entitlement{ID: 2, AccountID: 7, Source: "manual", Status: "active", ValidFrom: past}
+	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: monthly}); err != nil {
+		t.Errorf("lapsed stripe row and a manual row blocked checkout: %v", err)
+	}
+}
+
+func TestCheckoutExpiresTheCustomersOtherSessions(t *testing.T) {
+	f := seededFake(t)
+	s := newMemStore(testAccount, apiaccess.Account{ID: 8, Email: "other@example.com", Status: "active"})
+	co := newTestCheckout(f, s)
+	ctx := context.Background()
+	plan := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}
+
+	first, err := co.Create(ctx, Request{Account: testAccount, Plan: plan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.calls["ListOpenCheckoutSessions"] != 0 {
+		t.Errorf("a new customer listed sessions %d times", f.calls["ListOpenCheckoutSessions"])
+	}
+	other, err := co.Create(ctx, Request{Account: s.accounts[8], Plan: plan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := co.Create(ctx, Request{Account: s.accounts[7], Plan: plan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.sessionStatus[other.ID] != stripe.CheckoutSessionStatusOpen {
+		t.Errorf("another customer's session %s", f.sessionStatus[other.ID])
+	}
+	if f.sessionStatus[first.ID] != stripe.CheckoutSessionStatusExpired || f.sessionStatus[second.ID] != stripe.CheckoutSessionStatusOpen {
+		t.Errorf("first %s, second %s", f.sessionStatus[first.ID], f.sessionStatus[second.ID])
+	}
+
+	// An expire Stripe refuses is logged, not fatal; a failed listing fails the checkout.
+	f.fail["ExpireCheckoutSession"] = errors.New("already complete")
+	if _, err := co.Create(ctx, Request{Account: s.accounts[7], Plan: plan}); err != nil {
+		t.Errorf("expire failure failed the checkout: %v", err)
+	}
+	f.fail["ListOpenCheckoutSessions"] = errors.New("stripe down")
+	if _, err := co.Create(ctx, Request{Account: s.accounts[7], Plan: plan}); err == nil {
+		t.Error("list failure swallowed")
+	}
+	if len(f.sessions) != 4 {
+		t.Errorf("sessions %d", len(f.sessions))
+	}
+}

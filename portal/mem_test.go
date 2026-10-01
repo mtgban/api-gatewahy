@@ -313,13 +313,13 @@ func (m *memStore) UpsertStripeEntitlement(ctx context.Context, e apiaccess.Enti
 	return m.AddEntitlement(ctx, e)
 }
 
-func (m *memStore) ListActiveStripeRefs(context.Context) ([]string, error) {
+func (m *memStore) ListActiveStripeRefs(context.Context) ([]apiaccess.StripeRef, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var out []string
+	var out []apiaccess.StripeRef
 	for _, e := range m.ents {
 		if e.Source == "stripe" && e.Status == "active" {
-			out = append(out, e.ExternalRef)
+			out = append(out, apiaccess.StripeRef{AccountID: e.AccountID, SubID: e.ExternalRef})
 		}
 	}
 	return out, nil

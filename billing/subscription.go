@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
 )
@@ -12,10 +13,10 @@ import (
 var ErrManySubscriptions = errors.New("billing: account has more than one active Stripe subscription")
 
 // SubscriptionFor picks the account's one active Stripe subscription from its entitlements.
-func SubscriptionFor(ents []apiaccess.Entitlement) (string, error) {
+func SubscriptionFor(ents []apiaccess.Entitlement, now time.Time) (string, error) {
 	var refs []string
 	for _, e := range ents {
-		if e.Source == "stripe" && e.Status == "active" && e.ExternalRef != "" {
+		if e.IsActiveStripePlan(now) && e.ExternalRef != "" {
 			refs = append(refs, e.ExternalRef)
 		}
 	}
