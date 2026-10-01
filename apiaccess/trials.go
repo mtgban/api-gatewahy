@@ -33,10 +33,15 @@ func scanTrial(row scanner) (Trial, error) {
 	return t, err
 }
 
-// CreateTrial records a trial unless one for email was granted after notBefore.
-// A per-email advisory lock serializes concurrent grants.
-func (c *Client) CreateTrial(ctx context.Context, email string, accountID int64, endsAt, notBefore time.Time) (Trial, error) {
+// CreateTrial validates ent before opening a transaction, then inserts the
+// trial and entitlement together, serialized per email by an advisory lock.
+func (c *Client) CreateTrial(ctx context.Context, email string, endsAt, notBefore time.Time, ent Entitlement) (Trial, error) {
 	email = NormalizeEmail(email)
+	ent.ValidUntil = &endsAt
+	ent, until, ext, err := prepareEntitlement(ent)
+	if err != nil {
+		return Trial{}, err
+	}
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Trial{}, err
@@ -49,14 +54,20 @@ func (c *Client) CreateTrial(ctx context.Context, email string, accountID int64,
 		`INSERT INTO trials (patreon_email, account_id, ends_at)
 		 SELECT $1, $2, $3
 		  WHERE NOT EXISTS (SELECT 1 FROM trials WHERE patreon_email = $1 AND granted_at > $4)
-		 RETURNING `+trialCols, email, accountID, endsAt, notBefore))
+		 RETURNING `+trialCols, email, ent.AccountID, endsAt, notBefore))
 	if errors.Is(err, ErrNotFound) {
 		return Trial{}, ErrTrialTooSoon
 	}
 	if err != nil {
 		return Trial{}, err
 	}
-	return t, tx.Commit()
+	if _, err := insertEntitlement(ctx, tx, ent, until, ext); err != nil {
+		return Trial{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Trial{}, err
+	}
+	return t, nil
 }
 
 // LastTrial is the most recent trial for email, or ErrNotFound.
@@ -98,10 +109,4 @@ func (c *Client) MarkTrialReminded(ctx context.Context, id int64, at time.Time) 
 		return ErrNotFound
 	}
 	return nil
-}
-
-// DeleteTrial removes a trial whose entitlement could not be written.
-func (c *Client) DeleteTrial(ctx context.Context, id int64) error {
-	_, err := c.db.ExecContext(ctx, `DELETE FROM trials WHERE id = $1`, id)
-	return err
 }

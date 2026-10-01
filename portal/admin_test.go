@@ -334,9 +334,7 @@ func TestAdminHomeListsDemoAccess(t *testing.T) {
 	a, _ := ts.store.GetOrCreateAccount(ctx, "trial@example.com", "")
 	ends := ts.now.Add(15 * 24 * time.Hour)
 	e := entitlementFor(a.ID, "trial", "ALL_ACCESS")
-	e.ValidUntil = &ends
-	_, _ = ts.store.AddEntitlement(ctx, e)
-	_, _ = ts.store.CreateTrial(ctx, "patron@example.com", a.ID, ends, ts.now.Add(-time.Hour))
+	_, _ = ts.store.CreateTrial(ctx, "patron@example.com", ends, ts.now.Add(-time.Hour), e)
 	_, _, _ = ts.store.CreateKey(ctx, a.ID, "k", apiaccess.KeyDemo)
 	body := ts.do("GET", "/admin", "", ck).Body.String()
 	for _, want := range []string{"Demo access", "trial@example.com", "patron@example.com", "<td>1</td>"} {

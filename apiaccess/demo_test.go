@@ -13,10 +13,8 @@ func TestListDemoAccess(t *testing.T) {
 	paid, _ := c.CreateAccount(ctx, "paid@example.com", "")
 	manual, _ := c.CreateAccount(ctx, "manual@example.com", "")
 	ends := time.Now().Add(15 * 24 * time.Hour)
-	if _, err := c.AddEntitlement(ctx, Entitlement{AccountID: trial.ID, Source: "trial", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}, ValidUntil: &ends}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.CreateTrial(ctx, "patron@example.com", trial.ID, ends, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := c.CreateTrial(ctx, "patron@example.com", ends, time.Now().Add(-time.Hour),
+		Entitlement{AccountID: trial.ID, Source: "trial", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.AddEntitlement(ctx, Entitlement{AccountID: paid.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}}); err != nil {
@@ -26,7 +24,9 @@ func TestListDemoAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A past trial on the manual account must not become its requester.
-	if _, err := c.CreateTrial(ctx, "lapsed@example.com", manual.ID, ends, time.Now().Add(-time.Hour)); err != nil {
+	lapsedEnds := time.Now().Add(-time.Hour)
+	if _, err := c.CreateTrial(ctx, "lapsed@example.com", lapsedEnds, time.Now().Add(-48*time.Hour),
+		Entitlement{AccountID: manual.ID, Source: "trial", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}}); err != nil {
 		t.Fatal(err)
 	}
 	for _, label := range []string{"a", "b"} {

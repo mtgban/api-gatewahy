@@ -13,12 +13,13 @@ import (
 )
 
 type memStore struct {
-	accounts  []apiaccess.Account
-	keys      []apiaccess.Key
-	ents      []apiaccess.Entitlement
-	notified  int
-	notifyErr error
-	audit     []string
+	accounts     []apiaccess.Account
+	keys         []apiaccess.Key
+	ents         []apiaccess.Entitlement
+	notified     int
+	notifyErr    error
+	audit        []string
+	auditAccount []int64
 }
 
 func (m *memStore) CreateAccount(_ context.Context, email, note string) (apiaccess.Account, error) {
@@ -75,15 +76,15 @@ func (m *memStore) AddEntitlement(_ context.Context, e apiaccess.Entitlement) (a
 	m.ents = append(m.ents, e)
 	return e, nil
 }
-func (m *memStore) EndEntitlement(_ context.Context, id int64, at time.Time) error {
+func (m *memStore) EndEntitlement(_ context.Context, id, accountID int64, at time.Time) (apiaccess.Entitlement, error) {
 	for i := range m.ents {
-		if m.ents[i].ID == id {
+		if m.ents[i].ID == id && m.ents[i].Status != "ended" && (accountID == 0 || m.ents[i].AccountID == accountID) {
 			m.ents[i].Status = "ended"
 			m.ents[i].ValidUntil = &at
-			return nil
+			return m.ents[i], nil
 		}
 	}
-	return apiaccess.ErrNotFound
+	return apiaccess.Entitlement{}, apiaccess.ErrNotFound
 }
 func (m *memStore) ListEntitlements(_ context.Context, accountID int64) ([]apiaccess.Entitlement, error) {
 	var out []apiaccess.Entitlement
@@ -104,6 +105,7 @@ func (m *memStore) RecordAdminAction(_ context.Context, actor, action string, ac
 		return errors.New("actor must name the cli")
 	}
 	m.audit = append(m.audit, action+" "+target)
+	m.auditAccount = append(m.auditAccount, accountID)
 	return nil
 }
 
@@ -134,8 +136,8 @@ func TestAdminAccountLifecycle(t *testing.T) {
 	if s.notified != 2 {
 		t.Errorf("notified %d times, want 2 (suspend, reinstate)", s.notified)
 	}
-	if len(s.audit) != 2 || s.audit[0] != "status " || s.audit[1] != "status " {
-		t.Errorf("audit %v, want the suspend and the reinstate", s.audit)
+	if len(s.audit) != 3 || !strings.HasPrefix(s.audit[0], "account add") || s.audit[1] != "status " || s.audit[2] != "status " {
+		t.Errorf("audit %v, want the add, the suspend and the reinstate", s.audit)
 	}
 }
 
@@ -177,8 +179,8 @@ func TestAdminKeys(t *testing.T) {
 	if s.notified != 2 {
 		t.Errorf("notified %d, want 2 (create, revoke)", s.notified)
 	}
-	if len(s.audit) != 2 || !strings.HasPrefix(s.audit[0], "key create ") || !strings.HasPrefix(s.audit[1], "key revoke ") {
-		t.Errorf("audit %v, want the create and the revoke", s.audit)
+	if len(s.audit) != 3 || !strings.HasPrefix(s.audit[0], "account add") || !strings.HasPrefix(s.audit[1], "key create ") || !strings.HasPrefix(s.audit[2], "key revoke ") {
+		t.Errorf("audit %v, want the add, the create and the revoke", s.audit)
 	}
 }
 
@@ -223,6 +225,49 @@ func TestAdminGrants(t *testing.T) {
 	}
 	if code, _, _ := admin(t, s, "grant", "end", "-id", "1"); code != 0 || s.ents[0].Status != "ended" {
 		t.Errorf("end: %d %+v", code, s.ents[0])
+	}
+}
+
+func TestAdminAccountAddIsAudited(t *testing.T) {
+	s := &memStore{}
+	if code, _, errb := admin(t, s, "account", "add", "-email", "ck@example.com"); code != 0 {
+		t.Fatalf("add: %d %q", code, errb)
+	}
+	if len(s.audit) != 1 || !strings.HasPrefix(s.audit[0], "account add") {
+		t.Errorf("audit %v, want account add logged", s.audit)
+	}
+	if len(s.auditAccount) != 1 || s.auditAccount[0] != s.accounts[0].ID {
+		t.Errorf("audit account %v, want %d", s.auditAccount, s.accounts[0].ID)
+	}
+}
+
+func TestAdminGrantEndAuditsTheRealAccount(t *testing.T) {
+	s := &memStore{}
+	// A throwaway account first keeps the granted account's id (2) different
+	// from the entitlement's id (1), so auditing the wrong one still fails.
+	admin(t, s, "account", "add", "-email", "other@example.com")
+	admin(t, s, "account", "add", "-email", "ck@example.com")
+	admin(t, s, "grant", "add", "-email", "ck@example.com", "-games", "magic", "-stores", "TCG", "-modes", "retail")
+	if code, _, errb := admin(t, s, "grant", "end", "-id", "1"); code != 0 {
+		t.Fatalf("end: %d %q", code, errb)
+	}
+	want := s.accounts[1].ID
+	if got := s.auditAccount[len(s.auditAccount)-1]; got != want {
+		t.Errorf("grant end audited account %d, want %d", got, want)
+	}
+}
+
+func TestAdminGrantEndSecondCallIsNotAudited(t *testing.T) {
+	s := &memStore{}
+	admin(t, s, "account", "add", "-email", "ck@example.com")
+	admin(t, s, "grant", "add", "-email", "ck@example.com", "-games", "magic", "-stores", "TCG", "-modes", "retail")
+	admin(t, s, "grant", "end", "-id", "1")
+	auditsBefore := len(s.audit)
+	if code, _, errb := admin(t, s, "grant", "end", "-id", "1"); code != 1 || !strings.Contains(errb, "not found") {
+		t.Errorf("second end: %d %q", code, errb)
+	}
+	if len(s.audit) != auditsBefore {
+		t.Errorf("second end audited again: %v", s.audit)
 	}
 }
 

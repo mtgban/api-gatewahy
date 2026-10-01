@@ -138,6 +138,9 @@ func TestTrialRollsBackOnEntitlementFailure(t *testing.T) {
 	if ents, _ := ts.store.ListEntitlements(context.Background(), a.ID); len(ents) != 0 {
 		t.Errorf("entitlement leaked: %+v", ents)
 	}
+	if _, err := ts.store.LastTrial(context.Background(), "dana@example.com"); !errors.Is(err, apiaccess.ErrNotFound) {
+		t.Errorf("trial row leaked: %v", err)
+	}
 
 	ts.store.entitlementErr = nil
 	tok2 := ts.handoff(apihandoff.PurposeTrial, "dana@example.com")

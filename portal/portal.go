@@ -46,12 +46,11 @@ type Store interface {
 	RevokeKey(ctx context.Context, id, accountID int64) (apiaccess.Key, error)
 	ListEntitlements(ctx context.Context, accountID int64) ([]apiaccess.Entitlement, error)
 	AddEntitlement(ctx context.Context, e apiaccess.Entitlement) (apiaccess.Entitlement, error)
-	EndEntitlement(ctx context.Context, id int64, at time.Time) error
+	EndEntitlement(ctx context.Context, id, accountID int64, at time.Time) (apiaccess.Entitlement, error)
 	SummarizeUsage(ctx context.Context, since, until time.Time, accountID int64) ([]apiaccess.UsageRow, error)
 	UsageByKey(ctx context.Context, since, until time.Time, accountID int64) ([]apiaccess.KeyUsageRow, error)
 	TopPaths(ctx context.Context, since, until time.Time, keyID int64, limit int) ([]apiaccess.PathUsageRow, error)
-	CreateTrial(ctx context.Context, email string, accountID int64, endsAt, notBefore time.Time) (apiaccess.Trial, error)
-	DeleteTrial(ctx context.Context, id int64) error
+	CreateTrial(ctx context.Context, email string, endsAt, notBefore time.Time, ent apiaccess.Entitlement) (apiaccess.Trial, error)
 	LastTrial(ctx context.Context, email string) (apiaccess.Trial, error)
 	TrialsToRemind(ctx context.Context, from, to time.Time) ([]apiaccess.Trial, error)
 	MarkTrialReminded(ctx context.Context, id int64, at time.Time) error

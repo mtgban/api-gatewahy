@@ -105,19 +105,41 @@ func TestRevokeKeyIsScopedToAccount(t *testing.T) {
 	}
 }
 
+// trialEnt is a minimal valid trial entitlement for a.
+func trialEnt(a Account) Entitlement {
+	return Entitlement{AccountID: a.ID, Source: "trial", Games: []string{"magic"}, StoreScope: ScopeAll, Modes: ValidModes}
+}
+
+// TestCreateTrialRejectsBadScopeWithNoTrialRow checks validation runs before
+// any row is written, not just before the transaction commits.
+func TestCreateTrialRejectsBadScopeWithNoTrialRow(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	a, _ := c.CreateAccount(ctx, "bad-scope-trial@example.com", "")
+	ent := trialEnt(a)
+	ent.StoreScope = "DEV_ACCESS"
+	now := time.Now().Truncate(time.Second)
+	if _, err := c.CreateTrial(ctx, "bad-scope-trial@example.com", now.AddDate(0, 0, 15), now.AddDate(0, 0, -180), ent); err == nil {
+		t.Fatal("DEV_ACCESS was accepted")
+	}
+	if _, err := c.LastTrial(ctx, "bad-scope-trial@example.com"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("trial row written despite the bad scope: %v", err)
+	}
+}
+
 func TestTrialOncePerCooldown(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
 	a, _ := c.CreateAccount(ctx, "trial@example.com", "")
 	now := time.Now().Truncate(time.Second)
-	tr, err := c.CreateTrial(ctx, "Trial@Example.com", a.ID, now.AddDate(0, 0, 15), now.AddDate(0, 0, -180))
+	tr, err := c.CreateTrial(ctx, "Trial@Example.com", now.AddDate(0, 0, 15), now.AddDate(0, 0, -180), trialEnt(a))
 	if err != nil || tr.PatreonEmail != "trial@example.com" {
 		t.Fatalf("first: %+v %v", tr, err)
 	}
-	if _, err := c.CreateTrial(ctx, "trial@example.com", a.ID, now.AddDate(0, 0, 15), now.AddDate(0, 0, -180)); !errors.Is(err, ErrTrialTooSoon) {
+	if _, err := c.CreateTrial(ctx, "trial@example.com", now.AddDate(0, 0, 15), now.AddDate(0, 0, -180), trialEnt(a)); !errors.Is(err, ErrTrialTooSoon) {
 		t.Errorf("second: %v", err)
 	}
-	if _, err := c.CreateTrial(ctx, "trial@example.com", a.ID, now.AddDate(0, 0, 15), now.Add(time.Minute)); err != nil {
+	if _, err := c.CreateTrial(ctx, "trial@example.com", now.AddDate(0, 0, 15), now.Add(time.Minute), trialEnt(a)); err != nil {
 		t.Errorf("after cooldown: %v", err)
 	}
 	last, err := c.LastTrial(ctx, "trial@example.com")
@@ -139,20 +161,28 @@ func TestTrialOncePerCooldown(t *testing.T) {
 	}
 }
 
-func TestDeleteTrialAllowsImmediateRetry(t *testing.T) {
+// TestCreateTrialLeavesNoRowWhenEntitlementFails fails the entitlement half
+// on a real constraint and checks the trial row did not survive.
+func TestCreateTrialLeavesNoRowWhenEntitlementFails(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
-	a, _ := c.CreateAccount(ctx, "retry@example.com", "")
+	a, _ := c.CreateAccount(ctx, "atomic-trial@example.com", "")
+	// Occupy the unique external_ref the trial's entitlement will collide with.
+	if _, err := c.AddEntitlement(ctx, Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"},
+		StoreScope: "BASE_ACCESS", Modes: []string{"retail"}, ExternalRef: "dup-trial-ref"}); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().Truncate(time.Second)
-	tr, err := c.CreateTrial(ctx, "retry@example.com", a.ID, now.AddDate(0, 0, 15), now.AddDate(0, 0, -180))
-	if err != nil {
-		t.Fatalf("first: %v", err)
+	ent := trialEnt(a)
+	ent.ExternalRef = "dup-trial-ref"
+	if _, err := c.CreateTrial(ctx, "atomic-trial@example.com", now.AddDate(0, 0, 15), now.AddDate(0, 0, -180), ent); err == nil {
+		t.Fatal("conflicting external_ref was stored")
 	}
-	if err := c.DeleteTrial(ctx, tr.ID); err != nil {
-		t.Fatalf("delete: %v", err)
+	if _, err := c.LastTrial(ctx, "atomic-trial@example.com"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("trial row leaked despite the entitlement failing: %v", err)
 	}
-	if _, err := c.CreateTrial(ctx, "retry@example.com", a.ID, now.AddDate(0, 0, 15), now.AddDate(0, 0, -180)); err != nil {
-		t.Errorf("retry after delete: %v", err)
+	if ents, _ := c.ListEntitlements(ctx, a.ID); len(ents) != 1 {
+		t.Errorf("a second entitlement was stored anyway: %+v", ents)
 	}
 }
 
@@ -165,7 +195,7 @@ func TestCreateTrialSerializesConcurrentGrants(t *testing.T) {
 	results := make(chan error, 8)
 	for range 8 {
 		wg.Go(func() {
-			_, err := c.CreateTrial(ctx, "race@example.com", a.ID, now.AddDate(0, 0, 15), now.AddDate(0, 0, -180))
+			_, err := c.CreateTrial(ctx, "race@example.com", now.AddDate(0, 0, 15), now.AddDate(0, 0, -180), trialEnt(a))
 			results <- err
 		})
 	}
