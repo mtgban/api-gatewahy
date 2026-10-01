@@ -15,17 +15,9 @@ places:
 - two operator CLIs built on one shared flag set;
 - test fakes that have drifted from the store they stand in for.
 
-## Open decisions
+## Decisions
 
-These block the items that reference them. Each needs an owner's answer,
-not a code reading. Answers are recorded under Decided.
-
-- [ ] **D1 past_due grace.** Today a failed renewal keeps access until
-  the end of the *new*, unpaid period plus `grace_days`: a whole extra
-  interval, so with `grace_days = 0` a quarterly customer still keeps three
-  months. Should grace run from the end of the last *paid* period?
-
-### Decided (2026-10-01)
+Recorded 2026-10-01. The items that depended on them are in Phase 2.
 
 - [x] **D3 One instance.** The App Platform app runs a single instance.
   Daily jobs and in-process limits need no cross-instance locks; a
@@ -46,6 +38,11 @@ not a code reading. Answers are recorded under Decided.
   go-mtgban and mtgban-website: revive's `imports-blocklist` through
   golangci-lint, after the 6 billing test files that import it are
   rewritten.
+- [x] **D1 Grace runs from the last paid period.** A `past_due`
+  subscription keeps access until the start of the unpaid period (the
+  items' `current_period_start`) plus `stripe.grace_days`, so
+  `grace_days = 0` ends access at the failed renewal. README's
+  `stripe.grace_days` paragraph changes with it.
 - [x] **D2 End refuses Stripe rows.** A Stripe entitlement mirrors its
   subscription, so the admin page hides End for `source = stripe` and the
   handler refuses it with "cancel it in Stripe". Suspending the account
@@ -108,7 +105,7 @@ fails before the fix.
 
 | Item | Decision | Evidence |
 |---|---|---|
-| Grace from the last paid period | D1 (open) | `subPeriodEnd` uses the current, unpaid period |
+| `past_due` access ends at the unpaid period's start + `grace_days` | D1 | `subPeriodEnd` uses the current period's end, which a failed renewal has already advanced |
 | Hide End on Stripe rows and refuse it in `adminEndEntitlement` (and CLI `grant end`), pointing to Stripe and to Suspend | D2 | `admin_account.html`; `UpsertStripeEntitlement` rewrites status from Stripe |
 | Serialize reconciles per subscription with a mutex; `All` re-fetches before writing a status change | D3 | `Reconciler.apply`; `UpsertStripeEntitlement` is last-writer-wins |
 | README: one instance; the per-hour limits are per process | D3 | README "Customer pages", Configuration |
@@ -123,7 +120,7 @@ fails before the fix.
 - [ ] D6: block in `Checkout.Create`, expire sibling sessions, alert in reconcile
 - [ ] D7a: rewrite the 6 test files, then turn the lint rule on in the same PR
 - [ ] D2: refuse End on Stripe rows in the web admin and the CLI, with tests
-- [ ] D1: once decided
+- [ ] D1: grace from `current_period_start`, a test per interval, README
 
 ## Phase 3: structure
 
