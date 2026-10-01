@@ -27,7 +27,7 @@ type adminStore interface {
 	RevokeKeyByPrefix(ctx context.Context, prefix string) (apiaccess.Key, error)
 	ListKeys(ctx context.Context, accountID int64) ([]apiaccess.Key, error)
 	AddEntitlement(ctx context.Context, e apiaccess.Entitlement) (apiaccess.Entitlement, error)
-	EndEntitlement(ctx context.Context, id int64, at time.Time) error
+	EndEntitlement(ctx context.Context, id, accountID int64, at time.Time) (apiaccess.Entitlement, error)
 	ListEntitlements(ctx context.Context, accountID int64) ([]apiaccess.Entitlement, error)
 	SummarizeUsage(ctx context.Context, since, until time.Time, accountID int64) ([]apiaccess.UsageRow, error)
 	Notify(ctx context.Context, payload string) error
@@ -163,6 +163,7 @@ func runAdmin(ctx context.Context, store adminStore, knownGames []string, cmd st
 		if err != nil {
 			return fail(err)
 		}
+		audit("account add", a.ID, "", *note)
 		fmt.Fprintf(stdout, "account %d %s created\n", a.ID, a.Email)
 		return 0
 	case "account suspend", "account reinstate":
@@ -282,10 +283,11 @@ func runAdmin(ctx context.Context, store adminStore, knownGames []string, cmd st
 			fmt.Fprintln(stderr, "api-gatewahy: -id is required")
 			return 2
 		}
-		if err := store.EndEntitlement(ctx, *id, time.Now()); err != nil {
+		e, err := store.EndEntitlement(ctx, *id, 0, time.Now())
+		if err != nil {
 			return fail(err)
 		}
-		audit("end", 0, "entitlement "+strconv.FormatInt(*id, 10), "")
+		audit("end", e.AccountID, "entitlement "+strconv.FormatInt(*id, 10), "")
 		notify()
 		fmt.Fprintf(stdout, "entitlement %d ended\n", *id)
 		return 0

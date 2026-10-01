@@ -67,8 +67,11 @@ func ValidateStoreScope(scope string) (string, error) {
 	return canonicalStoreScope(scope)
 }
 
+// presetScopeNames are only valid standing alone; one inside a comma list is rejected.
+var presetScopeNames = []string{ScopeAll, ScopeBase, "DEV_ACCESS"}
+
 // canonicalStoreScope canonicalizes scope; operators type shorthands and nothing checks them against a list.
-// Presets are case-insensitive; explicit tokens are backend shorthands and keep their case.
+// Presets are case-insensitive and must stand alone; explicit tokens are backend shorthands and keep their case.
 func canonicalStoreScope(scope string) (string, error) {
 	scope = strings.TrimSpace(scope)
 	switch strings.ToUpper(scope) {
@@ -82,6 +85,9 @@ func canonicalStoreScope(scope string) (string, error) {
 		s := strings.TrimSpace(part)
 		if s == "" {
 			continue
+		}
+		if slices.ContainsFunc(presetScopeNames, func(p string) bool { return strings.EqualFold(p, s) }) {
+			return "", fmt.Errorf("%q is a preset and must stand alone", s)
 		}
 		if strings.ContainsFunc(s, unicode.IsSpace) {
 			return "", fmt.Errorf("store %q has a space; separate stores with commas", s)
@@ -140,8 +146,13 @@ func scanEntitlement(row scanner) (Entitlement, error) {
 	return e, err
 }
 
-// prepare canonicalizes and validates e and returns the nullable columns.
-func (c *Client) prepare(e Entitlement) (Entitlement, sql.NullTime, sql.NullString, error) {
+// querier is satisfied by both *sql.DB and *sql.Tx.
+type querier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// prepareEntitlement canonicalizes and validates e and returns the nullable columns.
+func prepareEntitlement(e Entitlement) (Entitlement, sql.NullTime, sql.NullString, error) {
 	scope, err := canonicalStoreScope(e.StoreScope)
 	if err != nil {
 		return Entitlement{}, sql.NullTime{}, sql.NullString{}, err
@@ -173,13 +184,19 @@ func (c *Client) prepare(e Entitlement) (Entitlement, sql.NullTime, sql.NullStri
 }
 
 // AddEntitlement canonicalizes and validates e, then inserts it. Every writer
-// goes through here, so no caller can store a scope or mode the gateway rejects.
+// goes through canonicalStoreScope, which rejects a preset anywhere but alone.
 func (c *Client) AddEntitlement(ctx context.Context, e Entitlement) (Entitlement, error) {
-	e, until, ext, err := c.prepare(e)
+	e, until, ext, err := prepareEntitlement(e)
 	if err != nil {
 		return Entitlement{}, err
 	}
-	return scanEntitlement(c.db.QueryRowContext(ctx,
+	return insertEntitlement(ctx, c.db, e, until, ext)
+}
+
+// insertEntitlement inserts an already-prepared e against q, a *sql.DB or a
+// *sql.Tx, so CreateTrial can add it inside its own transaction.
+func insertEntitlement(ctx context.Context, q querier, e Entitlement, until sql.NullTime, ext sql.NullString) (Entitlement, error) {
+	return scanEntitlement(q.QueryRowContext(ctx,
 		`INSERT INTO entitlements (account_id, source, games, store_scope, modes, addons, status, valid_from, valid_until, external_ref, note)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING `+entitlementCols,
 		e.AccountID, e.Source, pq.Array(e.Games), e.StoreScope, pq.Array(e.Modes), pq.Array(e.Addons),
@@ -192,7 +209,7 @@ func (c *Client) UpsertStripeEntitlement(ctx context.Context, e Entitlement) (En
 	if e.ExternalRef == "" {
 		return Entitlement{}, errors.New("apiaccess: external_ref is required")
 	}
-	e, until, ext, err := c.prepare(e)
+	e, until, ext, err := prepareEntitlement(e)
 	if err != nil {
 		return Entitlement{}, err
 	}
@@ -227,17 +244,13 @@ func (c *Client) ListActiveStripeRefs(ctx context.Context) ([]string, error) {
 	return out, rows.Err()
 }
 
-// EndEntitlement marks the row ended as of at.
-func (c *Client) EndEntitlement(ctx context.Context, id int64, at time.Time) error {
-	res, err := c.db.ExecContext(ctx,
-		`UPDATE entitlements SET status = 'ended', valid_until = $2 WHERE id = $1`, id, at)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
-	}
-	return nil
+// EndEntitlement marks the row ended as of at and returns it. accountID 0
+// means any account; otherwise the row must belong to it, as with RevokeKey.
+func (c *Client) EndEntitlement(ctx context.Context, id, accountID int64, at time.Time) (Entitlement, error) {
+	return scanEntitlement(c.db.QueryRowContext(ctx,
+		`UPDATE entitlements SET status = 'ended', valid_until = $2
+		  WHERE id = $1 AND status <> 'ended' AND ($3 = 0 OR account_id = $3)
+		  RETURNING `+entitlementCols, id, at, accountID))
 }
 
 // ListEntitlements returns every row for the account, oldest first.

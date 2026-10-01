@@ -127,7 +127,10 @@ func (s *Server) trial(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusForbidden, suspendedMsg)
 		return
 	}
-	t, err := s.Store.CreateTrial(ctx, claims.Email, a.ID, now.AddDate(0, 0, s.trialDays()), now.Add(-trialCooldown))
+	until := now.AddDate(0, 0, s.trialDays())
+	e := apiaccess.Entitlement{AccountID: a.ID, Source: "trial", Games: slices.Clone(s.Games), StoreScope: apiaccess.ScopeAll,
+		Modes: slices.Clone(apiaccess.ValidModes), Note: "patreon trial"}
+	_, err = s.Store.CreateTrial(ctx, claims.Email, until, now.Add(-trialCooldown), e)
 	if errors.Is(err, apiaccess.ErrTrialTooSoon) {
 		next := "later"
 		if last, err := s.Store.LastTrial(ctx, claims.Email); err == nil {
@@ -140,17 +143,6 @@ func (s *Server) trial(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		s.logf("trial %s: %v", claims.Email, err)
-		s.fail(w, r, http.StatusInternalServerError, tryAgainMsg)
-		return
-	}
-	until := t.EndsAt
-	e := apiaccess.Entitlement{AccountID: a.ID, Source: "trial", Games: slices.Clone(s.Games), StoreScope: apiaccess.ScopeAll,
-		Modes: slices.Clone(apiaccess.ValidModes), ValidUntil: &until, Note: "patreon trial"}
-	if _, err := s.Store.AddEntitlement(ctx, e); err != nil {
-		s.logf("trial %s: entitlement: %v", claims.Email, err)
-		if delErr := s.Store.DeleteTrial(ctx, t.ID); delErr != nil {
-			s.logf("trial %s: rollback: %v", claims.Email, delErr)
-		}
 		s.fail(w, r, http.StatusInternalServerError, tryAgainMsg)
 		return
 	}

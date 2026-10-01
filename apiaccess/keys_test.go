@@ -136,6 +136,82 @@ func TestKeysCreatedBetweenHalfOpenWindow(t *testing.T) {
 	}
 }
 
+// TestRevokeKeyByPrefixIsAtomic holds a row lock so RevokeKeyByPrefix reads
+// the key as live, then blocks on a revoke that lands first.
+func TestRevokeKeyByPrefixIsAtomic(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	a, _ := c.CreateAccount(ctx, "race-revoke@example.com", "")
+	_, k, err := c.CreateKey(ctx, a.ID, "", KeyLive)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT id FROM api_keys WHERE id = $1 FOR UPDATE`, k.ID); err != nil {
+		t.Fatal(err)
+	}
+	var lockerPID int
+	if err := tx.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&lockerPID); err != nil {
+		t.Fatal(err)
+	}
+
+	results := make(chan struct {
+		key Key
+		err error
+	}, 1)
+	go func() {
+		key, err := c.RevokeKeyByPrefix(ctx, k.Prefix)
+		results <- struct {
+			key Key
+			err error
+		}{key, err}
+	}()
+	if !waitUntilBlockedOn(ctx, t, c, lockerPID, 5*time.Second) {
+		t.Fatal("the revoke never blocked on the held row lock")
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE api_keys SET revoked_at = now() WHERE id = $1`, k.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	res := <-results
+	if !errors.Is(res.err, ErrNotFound) {
+		t.Errorf("stale caller's revoke: got %+v %v, want ErrNotFound", res.key, res.err)
+	}
+	got, err := c.ListKeys(ctx, a.ID)
+	if err != nil || len(got) != 1 || got[0].RevokedAt == nil {
+		t.Fatalf("key state after both calls: %+v %v", got, err)
+	}
+}
+
+// waitUntilBlockedOn polls until some backend is waiting on lockerPID's lock,
+// rather than sleeping a fixed guess at how long that takes.
+func waitUntilBlockedOn(ctx context.Context, t *testing.T, c *Client, lockerPID int, timeout time.Duration) bool {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		var blocked bool
+		err := c.db.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))`, lockerPID).Scan(&blocked)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
+}
+
 func TestCreateKeyRetriesTakenPrefix(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()

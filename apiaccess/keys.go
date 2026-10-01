@@ -176,22 +176,11 @@ func (c *Client) LookupKey(ctx context.Context, hash string) (Lookup, error) {
 	return lk, err
 }
 
-// RevokeKeyByPrefix revokes the one live key whose prefix matches.
+// RevokeKeyByPrefix revokes the one live key whose prefix matches. The live
+// prefix index is unique, so this touches at most one row.
 func (c *Client) RevokeKeyByPrefix(ctx context.Context, prefix string) (Key, error) {
-	matches, err := c.queryKeys(ctx,
-		`SELECT `+keyCols+` FROM api_keys WHERE prefix = $1 AND revoked_at IS NULL`, prefix)
-	if err != nil {
-		return Key{}, err
-	}
-	switch len(matches) {
-	case 0:
-		return Key{}, ErrNotFound
-	case 1:
-	default:
-		return Key{}, fmt.Errorf("apiaccess: prefix %q matches %d live keys", prefix, len(matches))
-	}
 	return scanKey(c.db.QueryRowContext(ctx,
-		`UPDATE api_keys SET revoked_at = now() WHERE id = $1 RETURNING `+keyCols, matches[0].ID))
+		`UPDATE api_keys SET revoked_at = now() WHERE prefix = $1 AND revoked_at IS NULL RETURNING `+keyCols, prefix))
 }
 
 // ListKeys returns the account's keys, oldest first, revoked included.

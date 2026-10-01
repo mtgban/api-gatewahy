@@ -326,7 +326,7 @@ func (s *Server) adminEndEntitlement(w http.ResponseWriter, r *http.Request, ses
 		http.NotFound(w, r)
 		return
 	}
-	if err := s.Store.EndEntitlement(r.Context(), eid, s.now()); err != nil {
+	if _, err := s.Store.EndEntitlement(r.Context(), eid, a.ID, s.now()); err != nil {
 		s.renderAdminAccount(w, r, sess, a, http.StatusInternalServerError, "", tryAgainMsg, "")
 		return
 	}

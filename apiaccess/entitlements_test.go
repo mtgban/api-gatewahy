@@ -2,6 +2,7 @@ package apiaccess
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -14,6 +15,12 @@ func TestValidateStoreScope(t *testing.T) {
 		{"ALL_ACCESS", "ALL_ACCESS", false},
 		{"BASE_ACCESS", "BASE_ACCESS", false},
 		{"DEV_ACCESS", "", true},
+		{"DEV_ACCESS,", "", true},
+		{"ALL_ACCESS,CK", "", true},
+		{"CK,all_access", "", true},
+		{"BASE_ACCESS,CK", "", true},
+		{",dev_access", "", true},
+		{" CK , all_access ", "", true},
 		{"CK, TCG,CK", "CK,TCG", false},
 		{"TCG,XYZ", "TCG,XYZ", false},
 		{"TCG,CK SCG", "", true},
@@ -105,7 +112,7 @@ func TestEntitlementsRoundTrip(t *testing.T) {
 		t.Errorf("list %+v", list)
 	}
 
-	if err := c.EndEntitlement(ctx, e.ID, time.Now()); err != nil {
+	if _, err := c.EndEntitlement(ctx, e.ID, 0, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	active, _ := c.listEntitlements(ctx, a.ID, true)
@@ -115,6 +122,48 @@ func TestEntitlementsRoundTrip(t *testing.T) {
 	all, _ := c.ListEntitlements(ctx, a.ID)
 	if len(all) != 1 || all[0].Status != "ended" || all[0].ValidUntil == nil {
 		t.Errorf("ended row wrong: %+v", all)
+	}
+}
+
+func TestEndEntitlementIsScopedToAccount(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	a, _ := c.CreateAccount(ctx, "end-a@example.com", "")
+	b, _ := c.CreateAccount(ctx, "end-b@example.com", "")
+	e, err := c.AddEntitlement(ctx, Entitlement{AccountID: a.ID, Source: "manual", Games: []string{"magic"}, StoreScope: "BASE_ACCESS", Modes: []string{"retail"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.EndEntitlement(ctx, e.ID, b.ID, time.Now()); !errors.Is(err, ErrNotFound) {
+		t.Errorf("other account ended the entitlement: %v", err)
+	}
+	got, err := c.EndEntitlement(ctx, e.ID, a.ID, time.Now())
+	if err != nil || got.ID != e.ID || got.AccountID != a.ID || got.Status != "ended" {
+		t.Fatalf("end: %+v %v", got, err)
+	}
+	if _, err := c.EndEntitlement(ctx, 999999, 0, time.Now()); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown id: %v", err)
+	}
+}
+
+func TestEndEntitlementSecondCallIsNotFound(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	a, _ := c.CreateAccount(ctx, "end-twice@example.com", "")
+	e, err := c.AddEntitlement(ctx, Entitlement{AccountID: a.ID, Source: "manual", Games: []string{"magic"}, StoreScope: "BASE_ACCESS", Modes: []string{"retail"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := c.EndEntitlement(ctx, e.ID, 0, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.EndEntitlement(ctx, e.ID, 0, time.Now().Add(time.Hour)); !errors.Is(err, ErrNotFound) {
+		t.Errorf("second end: %v", err)
+	}
+	all, err := c.ListEntitlements(ctx, a.ID)
+	if err != nil || len(all) != 1 || all[0].ValidUntil == nil || !all[0].ValidUntil.Equal(*first.ValidUntil) {
+		t.Errorf("valid_until moved on the second call: %+v", all)
 	}
 }
 

@@ -310,16 +310,16 @@ func (m *memStore) ListActiveStripeRefs(context.Context) ([]string, error) {
 	return out, nil
 }
 
-func (m *memStore) EndEntitlement(_ context.Context, id int64, at time.Time) error {
+func (m *memStore) EndEntitlement(_ context.Context, id, accountID int64, at time.Time) (apiaccess.Entitlement, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e, ok := m.ents[id]
-	if !ok {
-		return apiaccess.ErrNotFound
+	if !ok || e.Status == "ended" || (accountID != 0 && e.AccountID != accountID) {
+		return apiaccess.Entitlement{}, apiaccess.ErrNotFound
 	}
 	e.Status = "ended"
 	e.ValidUntil = &at
-	return nil
+	return *e, nil
 }
 
 func (m *memStore) SummarizeUsage(_ context.Context, since, until time.Time, accountID int64) ([]apiaccess.UsageRow, error) {
@@ -432,7 +432,9 @@ func (m *memStore) TopPaths(_ context.Context, since, until time.Time, keyID int
 	return out, nil
 }
 
-func (m *memStore) CreateTrial(_ context.Context, email string, accountID int64, endsAt, notBefore time.Time) (apiaccess.Trial, error) {
+// CreateTrial inserts the trial and its entitlement under one lock; an
+// injected entitlementErr leaves no trial row behind either.
+func (m *memStore) CreateTrial(_ context.Context, email string, endsAt, notBefore time.Time, ent apiaccess.Entitlement) (apiaccess.Trial, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	email = apiaccess.NormalizeEmail(email)
@@ -441,16 +443,21 @@ func (m *memStore) CreateTrial(_ context.Context, email string, accountID int64,
 			return apiaccess.Trial{}, apiaccess.ErrTrialTooSoon
 		}
 	}
-	t := &apiaccess.Trial{ID: m.id(), PatreonEmail: email, AccountID: accountID, GrantedAt: notBefore.Add(180 * 24 * time.Hour), EndsAt: endsAt}
+	if m.entitlementErr != nil {
+		return apiaccess.Trial{}, m.entitlementErr
+	}
+	t := &apiaccess.Trial{ID: m.id(), PatreonEmail: email, AccountID: ent.AccountID, GrantedAt: notBefore.Add(180 * 24 * time.Hour), EndsAt: endsAt}
+	ent.ID = m.id()
+	ent.ValidUntil = &endsAt
+	if ent.Status == "" {
+		ent.Status = "active"
+	}
+	if ent.ValidFrom.IsZero() {
+		ent.ValidFrom = time.Unix(0, 0)
+	}
 	m.trials[t.ID] = t
+	m.ents[ent.ID] = &ent
 	return *t, nil
-}
-
-func (m *memStore) DeleteTrial(_ context.Context, id int64) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.trials, id)
-	return nil
 }
 
 func (m *memStore) LastTrial(_ context.Context, email string) (apiaccess.Trial, error) {
