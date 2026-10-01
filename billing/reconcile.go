@@ -101,13 +101,14 @@ func (r *Reconciler) failed(sub *stripe.Subscription, err error, pass bool) erro
 }
 
 // MapStatus maps a Stripe status to entitlement status and end: past_due
-// keeps grace past periodEnd, ended rows end at endedAt (or now if zero).
-func MapStatus(status stripe.SubscriptionStatus, periodEnd, endedAt time.Time, grace time.Duration, now time.Time) (string, *time.Time) {
+// keeps grace past periodStart, the unpaid period's start; ended rows end
+// at endedAt (or now if zero).
+func MapStatus(status stripe.SubscriptionStatus, periodStart, endedAt time.Time, grace time.Duration, now time.Time) (string, *time.Time) {
 	switch status {
 	case stripe.SubscriptionStatusActive, stripe.SubscriptionStatusTrialing:
 		return "active", nil
 	case stripe.SubscriptionStatusPastDue:
-		until := periodEnd.Add(grace)
+		until := periodStart.Add(grace)
 		return "active", &until
 	}
 	if endedAt.IsZero() {
@@ -116,18 +117,19 @@ func MapStatus(status stripe.SubscriptionStatus, periodEnd, endedAt time.Time, g
 	return "ended", &endedAt
 }
 
-// subPeriodEnd is the latest item period end, or now when the items carry none.
-func subPeriodEnd(sub *stripe.Subscription, now time.Time) time.Time {
-	var end int64
+// subPeriodStart is the latest item's current period start, and whether any
+// item actually carried one, so a caller can tell a real start from nothing.
+func subPeriodStart(sub *stripe.Subscription, now time.Time) (time.Time, bool) {
+	var start int64
 	if sub.Items != nil {
 		for _, it := range sub.Items.Data {
-			end = max(end, it.CurrentPeriodEnd)
+			start = max(start, it.CurrentPeriodStart)
 		}
 	}
-	if end == 0 {
-		return now
+	if start == 0 {
+		return now, false
 	}
-	return time.Unix(end, 0).UTC()
+	return time.Unix(start, 0).UTC(), true
 }
 
 // subEndedAt is when Stripe ended the subscription, or zero.
@@ -216,7 +218,13 @@ func (r *Reconciler) apply(ctx context.Context, sub *stripe.Subscription, pass b
 		r.alertf("subscription %s: %s; metadata wins, fix the items or the metadata", sub.ID, msg)
 	}
 	now := r.now()
-	status, until := MapStatus(sub.Status, subPeriodEnd(sub, now), subEndedAt(sub), r.Grace, now)
+	start, hasStart := subPeriodStart(sub, now)
+	grace := r.Grace
+	if !hasStart {
+		// No trustworthy period start to anchor grace on: treat the window as already spent.
+		grace = 0
+	}
+	status, until := MapStatus(sub.Status, start, subEndedAt(sub), grace, now)
 	resolved, err := plan.Resolve(ctx, r.Catalog, r.Stores)
 	if err != nil {
 		// Without keys there is nothing to stand in for the scope, so the row cannot be written.

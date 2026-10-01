@@ -230,7 +230,7 @@ func runBilling(ctx context.Context, d billingDeps, cmd string, args []string, s
 			if err != nil {
 				return fail(err)
 			}
-			if subID, err = billing.SubscriptionFor(ents, time.Now()); err != nil {
+			if subID, err = billing.SubscriptionFor(ents); err != nil {
 				return fail(err)
 			}
 		}

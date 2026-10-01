@@ -180,8 +180,10 @@ customer can update their card, see invoices, and cancel at period end.
 `plan change -email -package [-games] [-stores] [-sub]`: rewrites the
 subscription's items and metadata to the new plan with proration, keeping the
 current interval, then reconciles. An upgrade is invoiced immediately; a
-downgrade credits the next invoice instead. `-sub` is only needed when the
-account has more than one active Stripe subscription.
+downgrade credits the next invoice instead. A declined card on an upgrade
+fails the update and keeps the current plan, rather than leaving the
+subscription past_due. `-sub` is only needed when the account has more
+than one active Stripe subscription.
 
 `serve -config`: runs the gateway HTTP server.
 
@@ -296,8 +298,8 @@ needs `CREATE` on the schema on the first boot after this deploy (the
 `public_url` is where customers land after Stripe Checkout:
 `stripe.success_path` and `stripe.cancel_path` are joined onto it.
 `stripe.grace_days` is how long a `past_due` subscription keeps its access
-past the end of the period it failed to pay for; `0` ends access at the
-period end. Stripe's own dunning emails and Smart Retries cover the
+past the start of the period it failed to pay for; `0` ends access at that
+period's start. Stripe's own dunning emails and Smart Retries cover the
 customer-facing reminders during that window.
 
 ## Environment variables
@@ -424,7 +426,10 @@ Dashboard setup, once per mode (test, then live):
    Plan changes go through `plan change`.
 4. Settings, Billing, Subscriptions and emails: turn on Smart Retries and the
    failed-payment emails, which are the customer-facing reminders during the
-   `stripe.grace_days` window.
+   `stripe.grace_days` window. Set the retry window's end action to cancel
+   the subscription: `stripe.grace_days` only gates API access, so until the
+   old subscription actually ends in Stripe the customer cannot buy a new
+   plan, however long the retries run.
 
 Every entitlement Stripe writes has `source = stripe` and `external_ref` set
 to the subscription id; `grant list` shows them beside manual grants.

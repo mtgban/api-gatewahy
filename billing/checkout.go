@@ -68,7 +68,7 @@ func (c *Checkout) Create(ctx context.Context, req Request) (sess Session, err e
 	if err != nil {
 		return Session{}, fmt.Errorf("billing: list entitlements: %w", err)
 	}
-	if apiaccess.HasActiveStripePlan(ents, c.now()) {
+	if apiaccess.HasActiveStripePlan(ents) {
 		return Session{}, ErrHasPlan
 	}
 	plan, err := req.Plan.Validate(c.Catalog, c.Games, req.Invite != "")

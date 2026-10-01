@@ -31,8 +31,9 @@ func newTestReconciler(f *fakeAPI, s *memStore, alerts *[]string) *Reconciler {
 }
 
 func TestMapStatus(t *testing.T) {
+	anchor := periodEnd.AddDate(0, -1, 0) // a period start, not an end
 	grace := 10 * 24 * time.Hour
-	graced := periodEnd.Add(grace)
+	graced := anchor.Add(grace)
 	cases := []struct {
 		status stripe.SubscriptionStatus
 		want   string
@@ -49,17 +50,88 @@ func TestMapStatus(t *testing.T) {
 		{"something_new", "ended", &reconNow},
 	}
 	for _, c := range cases {
-		status, until := MapStatus(c.status, periodEnd, time.Time{}, grace, reconNow)
+		status, until := MapStatus(c.status, anchor, time.Time{}, grace, reconNow)
 		if status != c.want || (until == nil) != (c.until == nil) || (until != nil && !until.Equal(*c.until)) {
 			t.Errorf("%s: got %s %v want %s %v", c.status, status, until, c.want, c.until)
 		}
 	}
 	endedAt := reconNow.Add(-time.Hour)
-	if _, until := MapStatus(stripe.SubscriptionStatusCanceled, periodEnd, endedAt, grace, reconNow); until == nil || !until.Equal(endedAt) {
+	if _, until := MapStatus(stripe.SubscriptionStatusCanceled, anchor, endedAt, grace, reconNow); until == nil || !until.Equal(endedAt) {
 		t.Errorf("canceled with ended_at: until %v want %s", until, endedAt)
 	}
-	if status, until := MapStatus(stripe.SubscriptionStatusActive, periodEnd, endedAt, grace, reconNow); status != "active" || until != nil {
+	if status, until := MapStatus(stripe.SubscriptionStatusActive, anchor, endedAt, grace, reconNow); status != "active" || until != nil {
 		t.Errorf("active with ended_at: %s %v", status, until)
+	}
+}
+
+// TestPastDueGraceByInterval runs a past_due subscription through apply per
+// interval and pins valid_until to a literal date the old end-based bug could not hit.
+func TestPastDueGraceByInterval(t *testing.T) {
+	yearlyPrice := &stripe.Price{ID: "price_yearly_test", LookupKey: "yearly_test",
+		Recurring: &stripe.PriceRecurring{Interval: stripe.PriceRecurringIntervalYear, IntervalCount: 1}}
+	cases := []struct {
+		name      string
+		plan      Plan
+		item      fakeItem
+		grace     time.Duration
+		wantUntil time.Time
+		wantAlert bool
+	}{
+		{
+			name:      "monthly",
+			plan:      Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}},
+			item:      fakeItem{"all_data_monthly", 1},
+			grace:     10 * 24 * time.Hour,
+			wantUntil: time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name:      "quarterly",
+			plan:      Plan{Package: "starter", Interval: "quarterly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}},
+			item:      fakeItem{"starter_quarterly", 1},
+			grace:     10 * 24 * time.Hour,
+			wantUntil: time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name:      "yearly",
+			plan:      Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}},
+			item:      fakeItem{"yearly_test", 1},
+			grace:     10 * 24 * time.Hour,
+			wantUntil: time.Date(2025, 10, 11, 0, 0, 0, 0, time.UTC),
+			wantAlert: true,
+		},
+		{
+			name:      "no grace",
+			plan:      Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}},
+			item:      fakeItem{"all_data_monthly", 1},
+			grace:     0,
+			wantUntil: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := seededFake(t)
+			f.prices[yearlyPrice.ID] = yearlyPrice
+			s := newMemStore(testAccount)
+			var alerts []string
+			r := newTestReconciler(f, s, &alerts)
+			r.Grace = c.grace
+			plan, err := c.plan.Normalize(testCatalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.addSub(t, "sub_1", "cus_x", stripe.SubscriptionStatusPastDue, plan.Metadata(7), periodEnd, c.item)
+			if err := r.Subscription(context.Background(), "sub_1"); err != nil {
+				t.Fatal(err)
+			}
+			e := s.ents["sub_1"]
+			if e.Status != "active" || e.ValidUntil == nil || !e.ValidUntil.Equal(c.wantUntil) {
+				t.Errorf("row %+v, want until %s", e, c.wantUntil)
+			}
+			gotAlert := len(alerts) == 1 && strings.Contains(alerts[0], "metadata wins")
+			if gotAlert != c.wantAlert {
+				t.Errorf("alerts %v, want a metadata-wins alert: %v", alerts, c.wantAlert)
+			}
+		})
 	}
 }
 
@@ -111,8 +183,10 @@ func TestReconcileStatusesAndGrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	due := s.ents["sub_due"]
-	if due.Status != "active" || due.ValidUntil == nil || !due.ValidUntil.Equal(periodEnd.Add(10*24*time.Hour)) {
-		t.Errorf("past_due row %+v", due)
+	// all_data_monthly's period starts a month before periodEnd; grace runs from there.
+	wantUntil := periodEnd.AddDate(0, -1, 0).Add(10 * 24 * time.Hour)
+	if due.Status != "active" || due.ValidUntil == nil || !due.ValidUntil.Equal(wantUntil) {
+		t.Errorf("past_due row %+v, want until %s", due, wantUntil)
 	}
 	if err := r.Subscription(context.Background(), "sub_gone"); err != nil {
 		t.Fatal(err)
@@ -120,6 +194,34 @@ func TestReconcileStatusesAndGrace(t *testing.T) {
 	gone := s.ents["sub_gone"]
 	if gone.Status != "ended" || gone.ValidUntil == nil || !gone.ValidUntil.Equal(reconNow) {
 		t.Errorf("canceled row %+v", gone)
+	}
+}
+
+// TestPastDueWithNoPeriodStartGetsNoGrace checks a missing current_period_start
+// ends access at now, not now plus grace, and does not slide forward on a later reconcile.
+func TestPastDueWithNoPeriodStartGetsNoGrace(t *testing.T) {
+	f := seededFake(t)
+	s := newMemStore(testAccount)
+	var alerts []string
+	r := newTestReconciler(f, s, &alerts)
+	plan, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
+	sub := f.addSub(t, "sub_1", "cus_x", stripe.SubscriptionStatusPastDue, plan.Metadata(7), periodEnd, fakeItem{"all_data_monthly", 1})
+	sub.Items.Data[0].CurrentPeriodStart = 0
+
+	if err := r.Subscription(context.Background(), "sub_1"); err != nil {
+		t.Fatal(err)
+	}
+	if e := s.ents["sub_1"]; e.Status != "active" || e.ValidUntil == nil || !e.ValidUntil.Equal(reconNow) {
+		t.Errorf("row %+v, want until %s (now, no grace)", e, reconNow)
+	}
+
+	r.Now = func() time.Time { return reconNow.Add(72 * time.Hour) }
+	if err := r.Subscription(context.Background(), "sub_1"); err != nil {
+		t.Fatal(err)
+	}
+	later := reconNow.Add(72 * time.Hour)
+	if got := s.ents["sub_1"].ValidUntil; got == nil || !got.Equal(later) {
+		t.Errorf("second reconcile: valid_until %v, want %s (still no grace)", got, later)
 	}
 }
 

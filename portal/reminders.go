@@ -32,7 +32,7 @@ func (s *Server) SendTrialReminders(ctx context.Context, now time.Time) {
 			s.logf("trial reminder %d: entitlements: %v", t.ID, err)
 			continue
 		}
-		if apiaccess.HasActiveStripePlan(ents, now) || trialEntitlementEnded(ents, now) {
+		if apiaccess.HasActiveStripePlan(ents) || trialEntitlementEnded(ents, now) {
 			continue
 		}
 		// Mark before sending, so a send failure cannot repeat the mail on the next run.
