@@ -15,27 +15,39 @@ import (
 	"github.com/mtgban/mtgban-website/apisig"
 )
 
-// Prober checks that each game accepts the gateway's signature.
+// dbProbeName keys the database's entry alongside the game names in failing.
+const dbProbeName = "database"
+
+// probePingTimeout bounds the database ping so a stalled DB cannot hold up
+// the tick and the upstream alerts already collected with it.
+const probePingTimeout = 5 * time.Second
+
+// Prober checks that each game accepts the gateway's signature, and that the
+// database answers, alerting Discord on either one's state change.
 type Prober struct {
 	games  map[string]Upstream
 	email  string
 	link   string
 	client *http.Client
+	pingDB func(context.Context) error
 	alert  func(string)
 
 	mu      sync.Mutex
 	failing map[string]bool
 }
 
-// NewProber builds a prober. alert may be nil.
-func NewProber(games map[string]Upstream, email, link string, client *http.Client, alert func(string)) *Prober {
+// NewProber builds a prober. pingDB and alert may both be nil.
+func NewProber(games map[string]Upstream, email, link string, client *http.Client, pingDB func(context.Context) error, alert func(string)) *Prober {
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	if pingDB == nil {
+		pingDB = func(context.Context) error { return nil }
 	}
 	if alert == nil {
 		alert = func(string) {}
 	}
-	return &Prober{games: games, email: email, link: link, client: client, alert: alert, failing: map[string]bool{}}
+	return &Prober{games: games, email: email, link: link, client: client, pingDB: pingDB, alert: alert, failing: map[string]bool{}}
 }
 
 // Check probes every game once and returns the failures by name.
@@ -85,9 +97,12 @@ func (p *Prober) probe(ctx context.Context, up Upstream) error {
 	return nil
 }
 
-// tick runs one check and alerts on each game whose state changed.
+// tick runs one check and alerts on each game, or the database, whose state changed.
 func (p *Prober) tick(ctx context.Context) {
 	results := p.Check(ctx)
+	dctx, cancel := context.WithTimeout(ctx, probePingTimeout)
+	results[dbProbeName] = p.pingDB(dctx)
+	cancel()
 	names := make([]string, 0, len(results))
 	for name := range results {
 		names = append(names, name)

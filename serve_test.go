@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -20,8 +19,6 @@ import (
 	"github.com/mtgban/api-gatewahy/session"
 	"github.com/mtgban/mtgban-website/apiproductlist"
 )
-
-var errDown = errors.New("down")
 
 func TestNextRunAt(t *testing.T) {
 	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
@@ -87,7 +84,6 @@ func TestRunOnRecoversPanicAndKeepsGoing(t *testing.T) {
 func TestMuxGamesAndHealth(t *testing.T) {
 	mux := newMux(muxDeps{
 		games:   []string{"magic", "pokemon"},
-		healthy: func(context.Context) error { return nil },
 		gateway: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(299) }),
 	})
 	rec := httptest.NewRecorder()
@@ -125,12 +121,21 @@ func TestMuxGamesAndHealth(t *testing.T) {
 	}
 }
 
-func TestHealthzUnhealthy(t *testing.T) {
-	mux := newMux(muxDeps{games: []string{"magic"}, healthy: func(context.Context) error { return errDown }, gateway: http.NotFoundHandler()})
+// TestHealthzIsLivenessOnly pins that healthz no longer depends on the
+// database: muxDeps carries no pinger, so a failing one can't reach it.
+func TestHealthzIsLivenessOnly(t *testing.T) {
+	mux := newMux(muxDeps{games: []string{"magic"}, gateway: http.NotFoundHandler()})
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
-	if rec.Code != 503 {
+	if rec.Code != 200 {
 		t.Errorf("healthz %d", rec.Code)
+	}
+
+	mux = newMux(muxDeps{games: nil, gateway: http.NotFoundHandler()})
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	if rec.Code != 503 {
+		t.Errorf("healthz with no games: %d", rec.Code)
 	}
 }
 
@@ -211,7 +216,6 @@ func TestServeUntilDoneReturnsServeError(t *testing.T) {
 func TestMuxRecoversPanic(t *testing.T) {
 	mux := newMux(muxDeps{
 		games:   []string{"magic"},
-		healthy: func(context.Context) error { return nil },
 		gateway: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { panic("boom") }),
 	})
 	rec := httptest.NewRecorder()
@@ -231,7 +235,6 @@ func TestMuxRecoversPanic(t *testing.T) {
 func TestMuxPropagatesAbortHandler(t *testing.T) {
 	mux := newMux(muxDeps{
 		games:   []string{"magic"},
-		healthy: func(context.Context) error { return nil },
 		gateway: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { panic(http.ErrAbortHandler) }),
 	})
 	defer func() {
@@ -243,29 +246,10 @@ func TestMuxPropagatesAbortHandler(t *testing.T) {
 	t.Error("the panic did not propagate")
 }
 
-func TestHealthzPingTimeout(t *testing.T) {
-	mux := newMux(muxDeps{
-		games: []string{"magic"},
-		healthy: func(ctx context.Context) error {
-			if _, ok := ctx.Deadline(); !ok {
-				return errors.New("no deadline on the health check")
-			}
-			return nil
-		},
-		gateway: http.NotFoundHandler(),
-	})
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
-	if rec.Code != 200 {
-		t.Errorf("healthz %d %s", rec.Code, rec.Body.String())
-	}
-}
-
 func TestMuxWebhookAndCheckoutPages(t *testing.T) {
 	webhookHit := false
 	mux := newMux(muxDeps{
 		games:       []string{"magic"},
-		healthy:     func(context.Context) error { return nil },
 		gateway:     http.NotFoundHandler(),
 		webhook:     http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { webhookHit = true; w.WriteHeader(http.StatusOK) }),
 		successPath: "/checkout/success",
@@ -291,7 +275,7 @@ func TestMuxWebhookAndCheckoutPages(t *testing.T) {
 }
 
 func TestMuxWithoutBilling(t *testing.T) {
-	mux := newMux(muxDeps{games: []string{"magic"}, healthy: func(context.Context) error { return nil }, gateway: http.NotFoundHandler()})
+	mux := newMux(muxDeps{games: []string{"magic"}, gateway: http.NotFoundHandler()})
 	for _, path := range []string{"/stripe/webhook", "/checkout/success"} {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest("POST", path, nil))
@@ -316,7 +300,7 @@ func TestMuxMountsPortal(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"error": "not found"}`))
 	})
-	mux := newMux(muxDeps{games: []string{"magic"}, healthy: func(context.Context) error { return nil }, gateway: jsonNotFound,
+	mux := newMux(muxDeps{games: []string{"magic"}, gateway: jsonNotFound,
 		portal: web, successPath: "/checkout/success", cancelPath: "/checkout/cancel"})
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))

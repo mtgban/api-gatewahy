@@ -11,10 +11,10 @@ Accounts, keys, and entitlements are managed by operators through this
 binary's admin subcommands in phase 1. Phase 2 adds Stripe billing so
 entitlements are written directly from checkout and webhooks, and phase 3
 adds the customer portal for self-service signup and account management.
-The gateway also runs a background prober, a daily
-usage summary posted to Discord, and cache invalidation over Postgres
-LISTEN/NOTIFY so key and entitlement changes take effect without a
-restart.
+The gateway also runs a background prober (which also pings the database,
+alerting Discord on a state change in either), a daily usage summary posted
+to Discord, and cache invalidation over Postgres LISTEN/NOTIFY so key and
+entitlement changes take effect without a restart.
 
 ## Public API
 
@@ -53,9 +53,11 @@ A request with neither returns 401. Errors are JSON:
 | 503 | Database unavailable or the lookup timed out, and the key was not in cache. |
 | 504 | Upstream exceeded the timeout. |
 
-Meta endpoints, unauthenticated: `/healthz` (200 when the database pings
-and at least one game is configured) and `/v1/games.json` (the configured
-game names).
+Meta endpoints, unauthenticated: `/healthz` (liveness only: 200 whenever the
+process is serving and at least one game is configured, with no database
+check, so a DB blip cannot get the container restarted and its resolver
+cache wiped; the background prober reports database health as a Discord
+alert instead) and `/v1/games.json` (the configured game names).
 
 ## Customer pages
 
