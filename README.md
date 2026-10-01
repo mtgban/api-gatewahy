@@ -50,7 +50,7 @@ A request with neither returns 401. Errors are JSON:
 | 405 | A method other than `GET` under `/v1/`. |
 | 429 | Per-account limit exceeded. Carries `RateLimit-Limit` like the backend does. |
 | 502 | Upstream unreachable, returned any status outside 2xx except 304 (redirects included), or is misconfigured. |
-| 503 | Database unavailable and the key was not in cache. |
+| 503 | Database unavailable or the lookup timed out, and the key was not in cache. |
 | 504 | Upstream exceeded the timeout. |
 
 Meta endpoints, unauthenticated: `/healthz` (200 when the database pings
@@ -197,6 +197,7 @@ JSON, named by `-config` or `BAN_CONFIG_PATH` (a `b2://` path needs
 | `games` | required, no default |
 | `cache_ttl_seconds` | `60` |
 | `stale_grace_seconds` | `600` |
+| `lookup_timeout_seconds` | `5` |
 | `per_key_requests_per_sec` | `10` |
 | `per_key_burst` | `5` |
 | `per_ip_requests_per_sec` | `50` |
@@ -220,6 +221,11 @@ returns 503 instead. A revoked key may therefore keep working for at most
 `cache_ttl_seconds + stale_grace_seconds` during a database outage, 11
 minutes on the defaults. LISTEN/NOTIFY drops the cached entry immediately
 when the database is reachable.
+
+`lookup_timeout_seconds` bounds a single store lookup; past it the lookup
+is treated as an error the same as a database failure, so a cached key is
+served stale and an uncached one gets 503. Raise it if a slow-but-healthy
+database routinely takes longer than the default 5 seconds to answer.
 
 `client_ip_header` names the one header the gateway and the portal trust for
 the client address. It defaults to `DO-Connecting-IP`, which DigitalOcean App

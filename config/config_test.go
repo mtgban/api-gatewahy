@@ -22,8 +22,8 @@ func TestParseAppliesDefaults(t *testing.T) {
 	}
 	if c.Port != "8080" || c.InstanceName != "api-gatewahy" || c.Link != "http://www.mtgban.com" || c.CacheTTLSeconds != 60 ||
 		c.PerKeyRequestsPerSec != 10 || c.PerKeyBurst != 5 || c.UpstreamTimeoutSeconds != 300 ||
-		c.ShutdownGraceSeconds != 60 || c.StaleGraceSeconds != 600 || c.UsageRetentionDays != 395 ||
-		c.ClientIPHeader != DefaultClientIPHeader {
+		c.ShutdownGraceSeconds != 60 || c.StaleGraceSeconds != 600 || c.LookupTimeoutSeconds != 5 ||
+		c.UsageRetentionDays != 395 || c.ClientIPHeader != DefaultClientIPHeader {
 		t.Errorf("defaults not applied: %+v", c)
 	}
 }

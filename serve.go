@@ -199,6 +199,7 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 
 	resolver := gateway.NewResolver(store, time.Duration(cfg.CacheTTLSeconds)*time.Second, nil)
 	resolver.SetStaleGrace(time.Duration(cfg.StaleGraceSeconds) * time.Second)
+	resolver.SetLookupTimeout(time.Duration(cfg.LookupTimeoutSeconds) * time.Second)
 	meter := gateway.NewUsageMeter(store, events, cfg.InstanceName, 5*time.Second, 200)
 	handler := gateway.New(gateway.Options{
 		Games:           games,
