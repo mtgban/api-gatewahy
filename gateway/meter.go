@@ -23,19 +23,27 @@ type EventSink interface {
 	Record(ev observability.Event)
 }
 
+// defaultFlushTimeout bounds each attempt flush makes, insert or touch alike.
+const defaultFlushTimeout = 30 * time.Second
+
 // UsageMeter batches usage rows so metering never blocks a request.
 type UsageMeter struct {
-	sink       UsageSink
-	events     EventSink
-	instance   string
-	flushEvery time.Duration
-	batch      int
-	retryPause time.Duration
+	sink         UsageSink
+	events       EventSink
+	instance     string
+	flushEvery   time.Duration
+	batch        int
+	retryPause   time.Duration
+	flushTimeout time.Duration
 
-	in      chan apiaccess.Usage
-	done    chan struct{}
-	wg      sync.WaitGroup
-	once    sync.Once
+	in   chan apiaccess.Usage
+	done chan struct{}
+	wg   sync.WaitGroup
+	once sync.Once
+
+	// mu orders Record's send against Close, so no send is lost uncounted.
+	mu      sync.RWMutex
+	closed  bool
 	dropped atomic.Int64
 }
 
@@ -48,14 +56,15 @@ func NewUsageMeter(sink UsageSink, events EventSink, instance string, flushEvery
 		flushEvery = time.Minute
 	}
 	m := &UsageMeter{
-		sink:       sink,
-		events:     events,
-		instance:   instance,
-		flushEvery: flushEvery,
-		batch:      batch,
-		retryPause: time.Second,
-		in:         make(chan apiaccess.Usage, 4*batch),
-		done:       make(chan struct{}),
+		sink:         sink,
+		events:       events,
+		instance:     instance,
+		flushEvery:   flushEvery,
+		batch:        batch,
+		retryPause:   time.Second,
+		flushTimeout: defaultFlushTimeout,
+		in:           make(chan apiaccess.Usage, 4*batch),
+		done:         make(chan struct{}),
 	}
 	m.wg.Add(1)
 	go m.run()
@@ -63,6 +72,7 @@ func NewUsageMeter(sink UsageSink, events EventSink, instance string, flushEvery
 }
 
 // Record queues u and emits its observability event. Never blocks.
+// A row recorded after Close counts as dropped.
 func (m *UsageMeter) Record(u apiaccess.Usage) {
 	if m.events != nil {
 		m.events.Record(observability.Event{
@@ -73,6 +83,12 @@ func (m *UsageMeter) Record(u apiaccess.Usage) {
 			Visitor:  strconv.FormatInt(u.AccountID, 10),
 			Instance: m.instance,
 		})
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.closed {
+		m.dropped.Add(1)
+		return
 	}
 	select {
 	case m.in <- u:
@@ -126,11 +142,12 @@ func (m *UsageMeter) run() {
 }
 
 func (m *UsageMeter) flush(rows []apiaccess.Usage) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
-		if err = m.sink.InsertUsage(ctx, rows); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), m.flushTimeout)
+		err = m.sink.InsertUsage(ctx, rows)
+		cancel()
+		if err == nil {
 			break
 		}
 		if attempt < 2 {
@@ -148,6 +165,8 @@ func (m *UsageMeter) flush(rows []apiaccess.Usage) {
 			seen[u.KeyID] = u.Ts
 		}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), m.flushTimeout)
+	defer cancel()
 	if err := m.sink.TouchKeys(ctx, seen); err != nil {
 		log.Printf("meter: touch keys: %v", err)
 	}
@@ -156,7 +175,10 @@ func (m *UsageMeter) flush(rows []apiaccess.Usage) {
 // Close flushes pending rows and stops the goroutine. Safe to call more than once.
 func (m *UsageMeter) Close() error {
 	m.once.Do(func() {
+		m.mu.Lock()
+		m.closed = true
 		close(m.done)
+		m.mu.Unlock()
 		m.wg.Wait()
 	})
 	return nil

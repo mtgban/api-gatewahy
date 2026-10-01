@@ -100,7 +100,7 @@ fails before the fix.
 - [x] Discord: #6 (split on line boundaries). Issue [#39](https://github.com/mtgban/api-gatewahy/issues/39)
 - [ ] Portal: #15, #16, #20, #24. Issue [#40](https://github.com/mtgban/api-gatewahy/issues/40)
 - [x] Mailer: #17. Issue [#41](https://github.com/mtgban/api-gatewahy/issues/41)
-- [ ] Meter and summary: #22, #26. Issue [#42](https://github.com/mtgban/api-gatewahy/issues/42)
+- [x] Meter and summary: #22, #26. Issue [#42](https://github.com/mtgban/api-gatewahy/issues/42)
 
 ## Phase 2: decision-dependent
 

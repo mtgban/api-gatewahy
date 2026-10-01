@@ -56,6 +56,35 @@ func (b *blockingSink) TouchKeys(_ context.Context, _ map[int64]time.Time) error
 	return nil
 }
 
+// expiringSink fails its first InsertUsage until the call's context ends,
+// then succeeds, failing fast if a later call is handed an expired context.
+type expiringSink struct {
+	mu      sync.Mutex
+	calls   int
+	batches [][]apiaccess.Usage
+}
+
+func (s *expiringSink) InsertUsage(ctx context.Context, rows []apiaccess.Usage) error {
+	s.mu.Lock()
+	s.calls++
+	call := s.calls
+	s.mu.Unlock()
+	if call == 1 {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	cp := append([]apiaccess.Usage(nil), rows...)
+	s.batches = append(s.batches, cp)
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *expiringSink) TouchKeys(_ context.Context, _ map[int64]time.Time) error { return nil }
+
 type fakeEvents struct {
 	mu  sync.Mutex
 	evs []observability.Event
@@ -159,6 +188,87 @@ func TestMeterCloseTwice(t *testing.T) {
 
 	if len(sink.batches) != 1 {
 		t.Errorf("expected exactly one flushed batch, got: %+v", sink.batches)
+	}
+}
+
+func TestFlushGivesEachAttemptItsOwnTimeout(t *testing.T) {
+	sink := &expiringSink{}
+	m := NewUsageMeter(sink, nil, "test", time.Hour, 1)
+	m.flushTimeout = 20 * time.Millisecond
+	m.retryPause = time.Millisecond
+	m.Record(apiaccess.Usage{KeyID: 1, Ts: now})
+
+	waitFor(t, func() bool { sink.mu.Lock(); defer sink.mu.Unlock(); return len(sink.batches) == 1 })
+	if m.Dropped() != 0 {
+		t.Errorf("dropped %d, want 0", m.Dropped())
+	}
+	_ = m.Close()
+}
+
+func TestRecordAfterCloseCountsDropped(t *testing.T) {
+	sink := &fakeSink{}
+	m := NewUsageMeter(sink, nil, "test", time.Hour, 100)
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before := m.Dropped()
+
+	done := make(chan struct{})
+	go func() {
+		m.Record(apiaccess.Usage{KeyID: 1, Ts: now})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Record after Close hung")
+	}
+	if got := m.Dropped(); got != before+1 {
+		t.Errorf("dropped %d, want %d", got, before+1)
+	}
+}
+
+func TestRecordDuringCloseCountsEveryCall(t *testing.T) {
+	sink := &fakeSink{}
+	m := NewUsageMeter(sink, nil, "test", time.Hour, 50)
+
+	const goroutines = 20
+	const perGoroutine = 50
+	total := goroutines * perGoroutine
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for g := 0; g < goroutines; g++ {
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < perGoroutine; i++ {
+				m.Record(apiaccess.Usage{KeyID: int64(id), Ts: now})
+			}
+		}(g)
+	}
+
+	closeDone := make(chan struct{})
+	go func() {
+		_ = m.Close()
+		close(closeDone)
+	}()
+
+	wg.Wait()
+	select {
+	case <-closeDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not finish")
+	}
+
+	sink.mu.Lock()
+	recorded := 0
+	for _, b := range sink.batches {
+		recorded += len(b)
+	}
+	sink.mu.Unlock()
+
+	if got := recorded + int(m.Dropped()); got != total {
+		t.Errorf("recorded %d + dropped %d = %d, want %d", recorded, m.Dropped(), got, total)
 	}
 }
 
