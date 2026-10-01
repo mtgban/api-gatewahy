@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -35,6 +36,8 @@ func fakeBackend(t *testing.T, secret string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		// Mimics a backend setting its own per-IP limit, which the gateway must drop.
+		w.Header().Set("RateLimit-Limit", "999")
 		if r.URL.Path == "/api/mtgban/retail/boom.json" {
 			w.WriteHeader(500)
 			return
@@ -603,4 +606,132 @@ func bodyString(body map[string]any, key string) string {
 		return ""
 	}
 	return s
+}
+
+// blockingBackend answers nothing and blocks until the request is cancelled,
+// as a real upstream does while a client's connection is still open.
+func blockingBackend(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+}
+
+// TestHandlerClientDisconnectWritesNothing proves the 499 path through a
+// real ReverseProxy and a real *http.Transport: the backend blocks until
+// the inbound request's context is cancelled, same as a genuine client
+// disconnect, rather than a transport faking the error.
+func TestHandlerClientDisconnectWritesNothing(t *testing.T) {
+	be := blockingBackend(t)
+	defer be.Close()
+	h, meter := testHandler(t, be, "s3cret")
+
+	prev := log.Writer()
+	var logs strings.Builder
+	log.SetOutput(&logs)
+	defer log.SetOutput(prev)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest("GET", "/v1/magic/mtgban/retail.json", nil).WithContext(ctx)
+	req.RemoteAddr = "198.51.100.9:1234"
+	req.Header.Set("Authorization", "Bearer "+goodKey)
+	time.AfterFunc(20*time.Millisecond, cancel)
+
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		h.ServeHTTP(rec, req)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler did not return after the client disconnected")
+	}
+
+	if rec.Body.Len() != 0 {
+		t.Errorf("body %q, want nothing written", rec.Body.String())
+	}
+	if strings.Contains(logs.String(), "upstream unavailable") {
+		t.Errorf("logged %q, want no upstream unavailable message", logs.String())
+	}
+	if len(meter.rows) != 1 || meter.rows[0].Status != 499 {
+		t.Errorf("meter %+v, want a single row with status 499", meter.rows)
+	}
+}
+
+func TestNewProxyClonesDefaultTransportTimeouts(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, _ := testHandler(t, be, "s3cret")
+	tr, ok := h.proxies["magic"].Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type %T, want *http.Transport", h.proxies["magic"].Transport)
+	}
+	def, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		t.Fatalf("http.DefaultTransport type %T, want *http.Transport", http.DefaultTransport)
+	}
+	if tr.DialContext == nil {
+		t.Error("DialContext is nil, want http.DefaultTransport's dial timeout")
+	}
+	if tr.TLSHandshakeTimeout != def.TLSHandshakeTimeout {
+		t.Errorf("TLSHandshakeTimeout %v, want %v", tr.TLSHandshakeTimeout, def.TLSHandshakeTimeout)
+	}
+	if tr.MaxIdleConnsPerHost != 16 {
+		t.Errorf("MaxIdleConnsPerHost %d, want 16", tr.MaxIdleConnsPerHost)
+	}
+	if tr.ResponseHeaderTimeout != 100*time.Millisecond {
+		t.Errorf("ResponseHeaderTimeout %v, want the configured upstream timeout", tr.ResponseHeaderTimeout)
+	}
+}
+
+func TestModifyResponseDropsUpstreamRateLimit(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, _ := testHandler(t, be, "s3cret")
+	rec, _ := do(h, "GET", "/v1/magic/mtgban/retail.json", goodKey)
+	if rec.Code != 200 {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	values := rec.Header().Values("RateLimit-Limit")
+	if len(values) != 1 || values[0] != "1000" {
+		t.Errorf("RateLimit-Limit values %v, want exactly the gateway's", values)
+	}
+}
+
+func TestClientIPReadsLastOfRepeatedHeaderLines(t *testing.T) {
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "198.51.100.9:1234"
+	req.Header.Add("X-Forwarded-For", "10.0.0.1")
+	req.Header.Add("X-Forwarded-For", "203.0.113.5")
+	if got := ClientIP(req, "X-Forwarded-For"); got != "203.0.113.5" {
+		t.Errorf("last header line: got %q", got)
+	}
+}
+
+func TestBearerKeyCaseInsensitiveScheme(t *testing.T) {
+	req := httptest.NewRequest("GET", "/?key=fallback", nil)
+	req.Header.Set("Authorization", "bearer abc123")
+	if got := bearerKey(req); got != "abc123" {
+		t.Errorf("lowercase bearer scheme: got %q", got)
+	}
+}
+
+func TestBearerKeyFallsBackToQueryForNonBearerAuth(t *testing.T) {
+	req := httptest.NewRequest("GET", "/?key=querykey", nil)
+	req.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
+	if got := bearerKey(req); got != "querykey" {
+		t.Errorf("non-bearer auth should fall back to query key: got %q", got)
+	}
+}
+
+func TestBearerKeyEmptyTokenIsAuthoritative(t *testing.T) {
+	for _, auth := range []string{"Bearer", "Bearer "} {
+		req := httptest.NewRequest("GET", "/?key=fallback", nil)
+		req.Header.Set("Authorization", auth)
+		if got := bearerKey(req); got != "" {
+			t.Errorf("Authorization %q: got %q, want empty with no fallback to ?key=", auth, got)
+		}
+	}
 }
