@@ -205,6 +205,7 @@ JSON, named by `-config` or `BAN_CONFIG_PATH` (a `b2://` path needs
 | `per_ip_requests_per_sec` | `50` |
 | `per_ip_burst` | `100` |
 | `upstream_timeout_seconds` | `300` |
+| `sig_ttl_seconds` | `300` |
 | `shutdown_grace_seconds` | `60` |
 | `usage_retention_days` | `395` |
 | `stripe.grace_days` | `10` |
@@ -453,8 +454,9 @@ rewritten, but an `a la carte` subscription created before this change carries
 the old catalog keys (`CK`, `SCG`) in its metadata; those no longer resolve, so
 its reconcile alerts until an operator sets the metadata `stores` to family keys.
 
-`known_stores` is gone from the config. The decoder ignores unknown fields, so
-an old config that still sets it loads, and the value is not read.
+`known_stores` is gone from the config. The decoder rejects any other unknown
+key, but still accepts and ignores `known_stores` specifically, so an old
+config that still sets it loads.
 
 This needs the website change that serves `/api-plans/stores.json` and drops
 the store list from `apiproductlist/products.json`. That website PR merges

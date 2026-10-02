@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
-	"github.com/mtgban/mtgban-website/apisig"
 	"github.com/mtgban/mtgban-website/ratelimit"
 	"golang.org/x/time/rate"
 )
@@ -73,19 +72,14 @@ func newLimiter(perSec float64, burst int) *accountLimiter {
 	return &accountLimiter{Limiter: ratelimit.NewLimiter(rate.Limit(perSec), burst), perSec: int(perSec)}
 }
 
-// New builds a handler with one reverse proxy per game.
-func New(opts Options, res *Resolver, meter Meter) *Handler {
+// New builds a handler with one reverse proxy per game. Config owns every
+// default except Now; a zero or negative rate, burst, timeout or SigTTL errors.
+func New(opts Options, res *Resolver, meter Meter) (*Handler, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	if opts.SigTTL == 0 {
-		opts.SigTTL = 5 * time.Minute
-	}
-	if opts.PerIPRate <= 0 {
-		opts.PerIPRate = 50
-	}
-	if opts.PerIPBurst <= 0 {
-		opts.PerIPBurst = 100
+	if err := opts.validate(); err != nil {
+		return nil, err
 	}
 	h := &Handler{
 		opts:      opts,
@@ -100,7 +94,26 @@ func New(opts Options, res *Resolver, meter Meter) *Handler {
 	for name, up := range opts.Games {
 		h.proxies[name] = h.newProxy(name, up)
 	}
-	return h
+	return h, nil
+}
+
+// validate rejects the option fields config must have defaulted already.
+func (o Options) validate() error {
+	switch {
+	case o.UpstreamTimeout <= 0:
+		return errors.New("UpstreamTimeout (upstream_timeout_seconds) must be positive")
+	case o.SigTTL <= 0:
+		return errors.New("SigTTL (sig_ttl_seconds) must be positive")
+	case o.PerKeyRate <= 0:
+		return errors.New("PerKeyRate (per_key_requests_per_sec) must be positive")
+	case o.PerKeyBurst <= 0:
+		return errors.New("PerKeyBurst (per_key_burst) must be positive")
+	case o.PerIPRate <= 0:
+		return errors.New("PerIPRate (per_ip_requests_per_sec) must be positive")
+	case o.PerIPBurst <= 0:
+		return errors.New("PerIPBurst (per_ip_burst) must be positive")
+	}
+	return nil
 }
 
 // GameNames lists configured games sorted.
@@ -375,15 +388,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sig := apisig.Mint(up.Secret, h.opts.Link, apisig.Claims{
-		API: access.StoreScope,
-		// The field names are apisig.APIFields.
-		Fields: url.Values{
-			"APImode":   {strings.Join(access.Modes, ",")},
-			"UserEmail": {h.opts.GatewayEmail},
-		},
-		Expires: now.Add(h.opts.SigTTL).Unix(),
-	})
+	sig := mintSig(up, h.opts.Link, h.opts.GatewayEmail, access.StoreScope, access.Modes, now.Add(h.opts.SigTTL))
 
 	params := proxyParams{sig: sig, path: route.BackendPath(), clientIP: ip, game: route.Game}
 	ctx, cancel := context.WithTimeout(context.WithValue(r.Context(), ctxKey{}, params), h.opts.UpstreamTimeout)

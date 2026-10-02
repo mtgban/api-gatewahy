@@ -93,6 +93,35 @@ const (
 	devKey     = "mtgban_live_devdevdevdevdevdevdevdevdevdev12"
 )
 
+// mustNew fills any zero of the six validated fields with config's defaults,
+// so existing tests keep their old shorthand, and fails on an unexpected error.
+func mustNew(t *testing.T, opts Options, res *Resolver, meter Meter) *Handler {
+	t.Helper()
+	if opts.PerKeyRate == 0 {
+		opts.PerKeyRate = 10
+	}
+	if opts.PerKeyBurst == 0 {
+		opts.PerKeyBurst = 5
+	}
+	if opts.PerIPRate == 0 {
+		opts.PerIPRate = 50
+	}
+	if opts.PerIPBurst == 0 {
+		opts.PerIPBurst = 100
+	}
+	if opts.UpstreamTimeout == 0 {
+		opts.UpstreamTimeout = 300 * time.Second
+	}
+	if opts.SigTTL == 0 {
+		opts.SigTTL = 5 * time.Minute
+	}
+	h, err := New(opts, res, meter)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return h
+}
+
 func testHandler(t *testing.T, backend *httptest.Server, secret string) (*Handler, *recordingMeter) {
 	t.Helper()
 	u, _ := url.Parse(backend.URL)
@@ -128,7 +157,7 @@ func testHandler(t *testing.T, backend *httptest.Server, secret string) (*Handle
 		},
 	}}
 	meter := &recordingMeter{}
-	h := New(Options{
+	h := mustNew(t, Options{
 		Games:           map[string]Upstream{"magic": {URL: u, Secret: []byte(secret)}, "pokemon": {URL: u, Secret: []byte(secret)}},
 		GatewayEmail:    "gateway@mtgban.com",
 		Link:            apisig.DefaultLink,
@@ -349,7 +378,7 @@ func TestHandlerUnavailable(t *testing.T) {
 	defer be.Close()
 	u, _ := url.Parse(be.URL)
 	src := &fakeSource{err: context.DeadlineExceeded}
-	h := New(Options{Games: map[string]Upstream{"magic": {URL: u, Secret: []byte("s")}}, GatewayEmail: "g@x", Link: apisig.DefaultLink,
+	h := mustNew(t, Options{Games: map[string]Upstream{"magic": {URL: u, Secret: []byte("s")}}, GatewayEmail: "g@x", Link: apisig.DefaultLink,
 		PerKeyRate: 10, PerKeyBurst: 5, UpstreamTimeout: time.Second, SigTTL: time.Minute}, NewResolver(src, time.Minute, nil), &recordingMeter{})
 	rec, body := do(h, "GET", "/v1/magic/mtgban/retail.json", goodKey)
 	if rec.Code != 503 || rec.Header().Get("Retry-After") != "30" || body["error"] == nil {
@@ -552,7 +581,7 @@ func TestPerIPLimitRunsBeforeAnyLookup(t *testing.T) {
 	defer backend.Close()
 	u, _ := url.Parse(backend.URL)
 	src := &fakeSource{res: map[string]apiaccess.Lookup{}}
-	h := New(Options{
+	h := mustNew(t, Options{
 		Games:          map[string]Upstream{"magic": {URL: u, Secret: []byte("secret")}},
 		GatewayEmail:   "gateway@mtgban.com",
 		Link:           apisig.DefaultLink,
@@ -733,5 +762,39 @@ func TestBearerKeyEmptyTokenIsAuthoritative(t *testing.T) {
 		if got := bearerKey(req); got != "" {
 			t.Errorf("Authorization %q: got %q, want empty with no fallback to ?key=", auth, got)
 		}
+	}
+}
+
+func TestNewRejectsZeroUpstreamTimeout(t *testing.T) {
+	up := Upstream{URL: &url.URL{Scheme: "https", Host: "example.invalid"}, Secret: []byte("s")}
+	opts := Options{
+		Games:        map[string]Upstream{"magic": up},
+		GatewayEmail: "g@x",
+		Link:         apisig.DefaultLink,
+		PerKeyRate:   10,
+		PerKeyBurst:  5,
+		PerIPRate:    50,
+		PerIPBurst:   100,
+		SigTTL:       time.Minute,
+	}
+	if h, err := New(opts, NewResolver(&fakeSource{}, time.Minute, nil), &recordingMeter{}); err == nil {
+		t.Fatalf("zero UpstreamTimeout accepted a handler that would 504 every request: %+v", h)
+	}
+}
+
+func TestNewRejectsZeroPerKeyBurst(t *testing.T) {
+	up := Upstream{URL: &url.URL{Scheme: "https", Host: "example.invalid"}, Secret: []byte("s")}
+	opts := Options{
+		Games:           map[string]Upstream{"magic": up},
+		GatewayEmail:    "g@x",
+		Link:            apisig.DefaultLink,
+		PerKeyRate:      10,
+		PerIPRate:       50,
+		PerIPBurst:      100,
+		UpstreamTimeout: time.Second,
+		SigTTL:          time.Minute,
+	}
+	if h, err := New(opts, NewResolver(&fakeSource{}, time.Minute, nil), &recordingMeter{}); err == nil {
+		t.Fatalf("zero PerKeyBurst accepted a handler that would 429 every request: %+v", h)
 	}
 }

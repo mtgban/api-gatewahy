@@ -29,7 +29,7 @@ func TestProberCheck(t *testing.T) {
 	p := NewProber(map[string]Upstream{
 		"magic":   {URL: gu, Secret: []byte("ok")},
 		"pokemon": {URL: gu, Secret: []byte("wrong")},
-	}, "gateway@mtgban.com", apisig.DefaultLink, good.Client(), nil, nil)
+	}, "gateway@mtgban.com", apisig.DefaultLink, 5*time.Minute, nil, good.Client(), nil, nil)
 	errs := p.Check(context.Background())
 	if errs["magic"] != nil {
 		t.Errorf("magic: %v", errs["magic"])
@@ -52,7 +52,7 @@ func TestProberAlertsOnTransition(t *testing.T) {
 	defer srv.Close()
 	u, _ := url.Parse(srv.URL)
 	var alerts []string
-	p := NewProber(map[string]Upstream{"magic": {URL: u, Secret: []byte("s")}}, "g@x", apisig.DefaultLink, srv.Client(), nil,
+	p := NewProber(map[string]Upstream{"magic": {URL: u, Secret: []byte("s")}}, "g@x", apisig.DefaultLink, 5*time.Minute, nil, srv.Client(), nil,
 		func(msg string) { alerts = append(alerts, msg) })
 
 	p.tick(context.Background())
@@ -77,7 +77,7 @@ func TestProberAlertsOnDBTransition(t *testing.T) {
 		return errors.New("connection refused")
 	}
 	var alerts []string
-	p := NewProber(nil, "g@x", apisig.DefaultLink, nil, pingDB, func(msg string) { alerts = append(alerts, msg) })
+	p := NewProber(nil, "g@x", apisig.DefaultLink, 5*time.Minute, nil, nil, pingDB, func(msg string) { alerts = append(alerts, msg) })
 
 	p.tick(context.Background())
 	p.tick(context.Background())
@@ -100,7 +100,7 @@ func TestProberAlertsOnDBTransition(t *testing.T) {
 func TestProberAlertsOnceWhenDBStartsDown(t *testing.T) {
 	pingDB := func(context.Context) error { return errors.New("connection refused") }
 	var alerts []string
-	p := NewProber(nil, "g@x", apisig.DefaultLink, nil, pingDB, func(msg string) { alerts = append(alerts, msg) })
+	p := NewProber(nil, "g@x", apisig.DefaultLink, 5*time.Minute, nil, nil, pingDB, func(msg string) { alerts = append(alerts, msg) })
 
 	p.tick(context.Background())
 	p.tick(context.Background())
@@ -120,7 +120,7 @@ func TestProberBoundsDBPing(t *testing.T) {
 		deadline, hadDeadline = ctx.Deadline()
 		return nil
 	}
-	p := NewProber(nil, "g@x", apisig.DefaultLink, nil, pingDB, nil)
+	p := NewProber(nil, "g@x", apisig.DefaultLink, 5*time.Minute, nil, nil, pingDB, nil)
 
 	start := time.Now()
 	p.tick(context.Background())
@@ -137,7 +137,7 @@ func TestProberErrorHidesSignature(t *testing.T) {
 	u, _ := url.Parse(srv.URL)
 	srv.Close()
 
-	p := NewProber(map[string]Upstream{"magic": {URL: u, Secret: []byte("s")}}, "g@x", apisig.DefaultLink, srv.Client(), nil, nil)
+	p := NewProber(map[string]Upstream{"magic": {URL: u, Secret: []byte("s")}}, "g@x", apisig.DefaultLink, 5*time.Minute, nil, srv.Client(), nil, nil)
 	errs := p.Check(context.Background())
 	err := errs["magic"]
 	if err == nil {

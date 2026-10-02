@@ -158,7 +158,7 @@ fails before the fix.
   that runs one table against it and against Postgres; delete the three
   memStores. Fold the two `fakeStores` and Stripe fakes into
   `billing/billingtest`. Issue [#52](https://github.com/mtgban/api-gatewahy/issues/52)
-- [ ] S1, S2 (one PR). Issue [#53](https://github.com/mtgban/api-gatewahy/issues/53)
+- [x] S1, S2 (one PR). Issue [#53](https://github.com/mtgban/api-gatewahy/issues/53)
 - [ ] S4, then S9 and S12 through it. Issue [#54](https://github.com/mtgban/api-gatewahy/issues/54)
 - [ ] S7, then S8. Issue [#55](https://github.com/mtgban/api-gatewahy/issues/55)
 - [x] S10. Issue [#56](https://github.com/mtgban/api-gatewahy/issues/56)

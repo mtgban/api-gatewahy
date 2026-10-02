@@ -201,7 +201,8 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 	resolver.SetStaleGrace(time.Duration(cfg.StaleGraceSeconds) * time.Second)
 	resolver.SetLookupTimeout(time.Duration(cfg.LookupTimeoutSeconds) * time.Second)
 	meter := gateway.NewUsageMeter(store, events, cfg.InstanceName, 5*time.Second, 200)
-	handler := gateway.New(gateway.Options{
+	sigTTL := time.Duration(cfg.SigTTLSeconds) * time.Second
+	handler, err := gateway.New(gateway.Options{
 		Games:           games,
 		GatewayEmail:    cfg.GatewayEmail,
 		Link:            cfg.Link,
@@ -211,8 +212,12 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 		PerIPRate:       cfg.PerIPRequestsPerSec,
 		PerIPBurst:      cfg.PerIPBurst,
 		UpstreamTimeout: time.Duration(cfg.UpstreamTimeoutSeconds) * time.Second,
-		SigTTL:          5 * time.Minute,
+		SigTTL:          sigTTL,
 	}, resolver, meter)
+	if err != nil {
+		_ = meter.Close()
+		return nil, nil, fmt.Errorf("gateway options: %w", err)
+	}
 
 	listener, err := apiaccess.Listen(cfg.APIAccess.DSN(),
 		func(hash string) { resolver.Invalidate(hash) },
@@ -229,7 +234,7 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 			log.Println("discord:", err)
 		}
 	}
-	prober := gateway.NewProber(games, cfg.GatewayEmail, cfg.Link, nil, store.PingContext, alert)
+	prober := gateway.NewProber(games, cfg.GatewayEmail, cfg.Link, sigTTL, nil, nil, store.PingContext, alert)
 	var jobs sync.WaitGroup
 	jobs.Add(2)
 	go func() {

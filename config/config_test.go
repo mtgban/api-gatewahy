@@ -22,9 +22,43 @@ func TestParseAppliesDefaults(t *testing.T) {
 	}
 	if c.Port != "8080" || c.InstanceName != "api-gatewahy" || c.Link != "http://www.mtgban.com" || c.CacheTTLSeconds != 60 ||
 		c.PerKeyRequestsPerSec != 10 || c.PerKeyBurst != 5 || c.UpstreamTimeoutSeconds != 300 ||
-		c.ShutdownGraceSeconds != 60 || c.StaleGraceSeconds != 600 || c.LookupTimeoutSeconds != 5 ||
+		c.SigTTLSeconds != 300 || c.ShutdownGraceSeconds != 60 || c.StaleGraceSeconds != 600 || c.LookupTimeoutSeconds != 5 ||
 		c.UsageRetentionDays != 395 || c.ClientIPHeader != DefaultClientIPHeader {
 		t.Errorf("defaults not applied: %+v", c)
+	}
+}
+
+func TestParseRejectsUnknownKeys(t *testing.T) {
+	cases := []struct {
+		name, extra, want string
+	}{
+		{"unknown top-level key", `"bogus_option": true,`, "bogus_option"},
+		{"unknown nested key", `"stripe": {"bogus_field": 1},`, "bogus_field"},
+	}
+	for _, c := range cases {
+		_, err := Parse(strings.NewReader(strings.Replace(goodJSON, `{`, `{`+c.extra, 1)))
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err %v, want containing %q", c.name, err, c.want)
+		}
+	}
+}
+
+func TestParseAcceptsRetiredKnownStores(t *testing.T) {
+	c, err := Parse(strings.NewReader(goodJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.RetiredKnownStores) != 2 || c.RetiredKnownStores[0] != "TCG" {
+		t.Errorf("known_stores %v, want it accepted and kept", c.RetiredKnownStores)
+	}
+}
+
+func TestParseRejectsTrailingData(t *testing.T) {
+	for _, suffix := range []string{" garbage", `{"gateway_email":"g@x"}`} {
+		_, err := Parse(strings.NewReader(goodJSON + suffix))
+		if err == nil {
+			t.Errorf("suffix %q: accepted trailing data", suffix)
+		}
 	}
 }
 
