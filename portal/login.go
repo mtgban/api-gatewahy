@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
-	"github.com/mtgban/api-gatewahy/session"
 )
 
 const (
@@ -32,14 +31,6 @@ type sentData struct {
 // loginConfirmData is login_confirm.html's payload.
 type loginConfirmData struct {
 	Token string
-}
-
-func (s *Server) registerLogin(mux *http.ServeMux) {
-	mux.HandleFunc("GET /login", s.loginForm)
-	mux.HandleFunc("POST /login", s.login)
-	mux.HandleFunc("GET /login/{token}", s.loginConfirm)
-	mux.HandleFunc("POST /login/{token}", s.loginToken)
-	mux.HandleFunc("POST /logout", s.logout)
 }
 
 func (s *Server) loginLinksPerHour() int {
@@ -127,12 +118,8 @@ func (s *Server) loginConfirm(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "login_confirm.html", p)
 }
 
-// loginToken consumes a magic link and starts the session.
+// loginToken consumes a magic link and starts the session. requireSameOrigin guards this route.
 func (s *Server) loginToken(w http.ResponseWriter, r *http.Request) {
-	if !s.sameOrigin(r) {
-		s.fail(w, r, http.StatusForbidden, "That request did not come from this site. Open the link again and use the button on the page.")
-		return
-	}
 	a, err := s.Store.ConsumeMagicLink(r.Context(), r.PathValue("token"), s.now())
 	if errors.Is(err, apiaccess.ErrNotFound) {
 		pv, _ := s.Sessions.Pending(r)
@@ -148,7 +135,7 @@ func (s *Server) loginToken(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusForbidden, suspendedMsg)
 		return
 	}
-	s.Sessions.Issue(w, session.Session{AccountID: a.ID, Email: a.Email, Epoch: a.SessionEpoch})
+	s.issueSession(w, a)
 	s.afterLogin(w, r)
 }
 
@@ -164,7 +151,8 @@ func (s *Server) afterLogin(w http.ResponseWriter, r *http.Request) {
 // logout clears cookies for any signed-in reader, even a suspended one, as long as the CSRF token checks out.
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if sess, err := s.Sessions.Read(r); err == nil {
-		if !s.Sessions.CheckCSRF(sess, r.FormValue("csrf")) {
+		_ = r.ParseForm()
+		if !s.Sessions.CheckCSRF(sess, r.PostForm.Get("csrf")) {
 			http.Error(w, csrfExpiredMsg, http.StatusForbidden)
 			return
 		}

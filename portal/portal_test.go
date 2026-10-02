@@ -297,7 +297,7 @@ func TestTokenPostsRequireSameOrigin(t *testing.T) {
 }
 
 func TestReservedPaths(t *testing.T) {
-	for _, p := range []string{"/login", "/account/keys", "/admin/accounts/1", "/static/portal.css", "/checkout", "/healthz", "/stripe/webhook", "/v1/games.json"} {
+	for _, p := range []string{"/login", "/account/keys", "/admin/accounts/1", "/static/portal.css", "/checkout", "/healthz", "/stripe/webhook", "/v1/games.json", "/account/thanks", "/admin/x"} {
 		if !Reserved(p) {
 			t.Errorf("%q: want reserved", p)
 		}

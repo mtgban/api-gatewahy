@@ -43,14 +43,6 @@ type keyView struct {
 	LastUsed string
 }
 
-func (s *Server) registerAccount(mux *http.ServeMux) {
-	mux.HandleFunc("GET /account", s.withSession(s.account))
-	mux.HandleFunc("POST /account/keys", s.withSession(s.createKey))
-	mux.HandleFunc("POST /account/keys/{id}/revoke", s.withSession(s.revokeKey))
-	mux.HandleFunc("POST /account/plan", s.withSession(s.changePlan))
-	mux.HandleFunc("GET /portal", s.withSession(s.portal))
-}
-
 func (s *Server) account(w http.ResponseWriter, r *http.Request, sess session.Session, a apiaccess.Account) {
 	s.renderAccount(w, r, http.StatusOK, sess, a, "", noticeFor(r), "")
 }
@@ -249,25 +241,14 @@ func (s *Server) changePlan(w http.ResponseWriter, r *http.Request, sess session
 		s.fail(w, r, http.StatusServiceUnavailable, billingOffMsg)
 		return
 	}
-	_ = r.ParseForm()
 	plan, err := planFromValues(r.PostForm).Validate(s.Catalog, s.Games, true)
 	if err != nil {
 		s.fail(w, r, http.StatusBadRequest, checkoutError(err))
 		return
 	}
-	ents, err := s.Store.ListEntitlements(r.Context(), a.ID)
-	if err != nil {
-		s.logf("plan change %s: entitlements: %v", a.Email, err)
-		s.fail(w, r, http.StatusInternalServerError, tryAgainMsg)
-		return
-	}
-	subID, err := billing.SubscriptionFor(ents)
-	if errors.Is(err, billing.ErrManySubscriptions) {
-		s.fail(w, r, http.StatusBadRequest, manySubscriptionsMsg)
-		return
-	}
-	if err != nil {
-		s.fail(w, r, http.StatusBadRequest, "You have no active subscription to change. Start a new plan from the pricing page instead.")
+	subID, status, msg := s.subscriptionFor(r.Context(), a.ID, a.Email)
+	if msg != "" {
+		s.fail(w, r, status, msg)
 		return
 	}
 	resolved, err := billing.ChangePlan(r.Context(), s.Stripe, s.Catalog, s.Stores, s.Games, a, subID, plan, s.Reconcile)
@@ -280,7 +261,7 @@ func (s *Server) changePlan(w http.ResponseWriter, r *http.Request, sess session
 		if resolved.Package == "" {
 			resolved = billing.ResolvedPlan{Plan: plan}
 		}
-		s.renderConfirm(w, r, http.StatusBadGateway, sess, resolved, "", s.PricingURL, true, checkoutError(err), false)
+		s.renderConfirm(w, r, sess, confirmOptions{Status: http.StatusBadGateway, Resolved: resolved, ReturnTo: s.PricingURL, Change: true, ErrMsg: checkoutError(err)})
 		return
 	}
 	http.Redirect(w, r, "/account?notice=plan", http.StatusFound)

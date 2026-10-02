@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -17,6 +18,7 @@ const billingOffMsg = "Billing is not available right now. Try again later or co
 const alreadyHasPlanMsg = "You already have a plan. Use Change plan on your account page to switch."
 const manySubscriptionsMsg = "Your account has more than one subscription. Contact administrator@mtgban.com and we will sort it out."
 const storesUnavailableMsg = "The store list could not be loaded. Try again in a minute."
+const noSubscriptionMsg = "You have no active subscription to change. Start a new plan from the pricing page instead."
 
 // confirmData is confirm.html's payload: the plan in words and the POST fields.
 type confirmData struct {
@@ -38,13 +40,6 @@ type successData struct {
 	Entitlements []entitlementView
 	HasKeys      bool
 	ReturnTo     string
-}
-
-func (s *Server) registerCheckout(mux *http.ServeMux) {
-	mux.HandleFunc("GET /checkout", s.checkoutGet)
-	mux.HandleFunc("POST /checkout", s.withSession(s.checkoutPost))
-	mux.HandleFunc("GET "+s.SuccessPath, s.withSession(s.success))
-	mux.HandleFunc("GET "+s.CancelPath, s.cancel)
 }
 
 // checkoutGet validates the plan from the query or the pending cookie, then
@@ -123,7 +118,7 @@ func (s *Server) checkoutGet(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.renderConfirm(w, r, http.StatusOK, sess, resolved, invite, returnTo, change, "", hasPlan)
+	s.renderConfirm(w, r, sess, confirmOptions{Status: http.StatusOK, Resolved: resolved, Invite: invite, ReturnTo: returnTo, Change: change, HasPlan: hasPlan})
 }
 
 // hasActiveStripePlan reports whether the account already has an active Stripe entitlement.
@@ -135,23 +130,33 @@ func (s *Server) hasActiveStripePlan(r *http.Request, accountID int64) (bool, er
 	return apiaccess.HasActiveStripePlan(ents, s.now()), nil
 }
 
+// subscriptionFor finds the account's one Stripe subscription, or the status
+// and message to show when there is none to change.
+func (s *Server) subscriptionFor(ctx context.Context, accountID int64, email string) (string, int, string) {
+	ents, err := s.Store.ListEntitlements(ctx, accountID)
+	if err != nil {
+		s.logf("plan change %s: entitlements: %v", email, err)
+		return "", http.StatusInternalServerError, tryAgainMsg
+	}
+	subID, err := billing.SubscriptionFor(ents)
+	if errors.Is(err, billing.ErrManySubscriptions) {
+		return "", http.StatusBadRequest, manySubscriptionsMsg
+	}
+	if err != nil {
+		return "", http.StatusBadRequest, noSubscriptionMsg
+	}
+	return subID, 0, ""
+}
+
 // currentIntervalFor pins a plan change to the subscription's own interval,
 // returning the status and message to show on failure.
 func (s *Server) currentIntervalFor(r *http.Request, sess session.Session, plan billing.Plan) (billing.Plan, int, string) {
 	if s.Stripe == nil {
 		return plan, http.StatusServiceUnavailable, billingOffMsg
 	}
-	ents, err := s.Store.ListEntitlements(r.Context(), sess.AccountID)
-	if err != nil {
-		s.logf("current interval %s: entitlements: %v", sess.Email, err)
-		return plan, http.StatusInternalServerError, tryAgainMsg
-	}
-	subID, err := billing.SubscriptionFor(ents)
-	if errors.Is(err, billing.ErrManySubscriptions) {
-		return plan, http.StatusBadRequest, manySubscriptionsMsg
-	}
-	if err != nil {
-		return plan, http.StatusBadRequest, "You have no active subscription to change. Start a new plan from the pricing page instead."
+	subID, status, msg := s.subscriptionFor(r.Context(), sess.AccountID, sess.Email)
+	if msg != "" {
+		return plan, status, msg
 	}
 	sub, err := s.Stripe.GetSubscription(r.Context(), subID)
 	if err != nil {
@@ -173,9 +178,20 @@ func (s *Server) currentIntervalFor(r *http.Request, sess session.Session, plan 
 	return plan, 0, ""
 }
 
+// confirmOptions is renderConfirm's payload, beside the request and session.
+type confirmOptions struct {
+	Status   int
+	Resolved billing.ResolvedPlan
+	Invite   string
+	ReturnTo string
+	Change   bool
+	ErrMsg   string
+	HasPlan  bool
+}
+
 // renderConfirm draws the plan in words with the POST button.
-func (s *Server) renderConfirm(w http.ResponseWriter, r *http.Request, status int, sess session.Session, resolved billing.ResolvedPlan, invite, returnTo string, change bool, errMsg string, hasPlan bool) {
-	plan := resolved.Plan
+func (s *Server) renderConfirm(w http.ResponseWriter, r *http.Request, sess session.Session, opt confirmOptions) {
+	plan := opt.Resolved.Plan
 	pkg, _ := s.Catalog.Package(plan.Package)
 	iv, _ := s.Catalog.Interval(plan.Interval)
 	total, err := plan.Total(s.Catalog)
@@ -184,11 +200,11 @@ func (s *Server) renderConfirm(w http.ResponseWriter, r *http.Request, status in
 		s.fail(w, r, http.StatusInternalServerError, tryAgainMsg)
 		return
 	}
-	d := confirmData{Package: pkg.Name, Games: strings.Join(plan.Games, ", "), Total: billing.Dollars(total), Change: change, Invite: invite, ReturnTo: returnTo, Action: "/checkout", BillingOff: s.Stripe == nil, HasPlan: hasPlan}
+	d := confirmData{Package: pkg.Name, Games: strings.Join(plan.Games, ", "), Total: billing.Dollars(total), Change: opt.Change, Invite: opt.Invite, ReturnTo: opt.ReturnTo, Action: "/checkout", BillingOff: s.Stripe == nil, HasPlan: opt.HasPlan}
 	if pkg.StoreScope == apiproductlist.StoreScopeExplicit {
 		d.Stores = strings.Join(plan.Stores, ", ")
-		if len(resolved.Names) > 0 {
-			d.Stores = strings.Join(resolved.StoreNames(), ", ")
+		if len(opt.Resolved.Names) > 0 {
+			d.Stores = strings.Join(opt.Resolved.StoreNames(), ", ")
 		}
 	}
 	if iv.Count == 1 {
@@ -196,24 +212,24 @@ func (s *Server) renderConfirm(w http.ResponseWriter, r *http.Request, status in
 	} else {
 		d.Interval = "every " + itoa(iv.Count) + " months"
 	}
-	if change {
+	if opt.Change {
 		d.Action = "/account/plan"
 	}
 	d.Fields = planValues(plan)
-	d.Fields.Set("return_to", returnTo)
-	if invite != "" {
-		d.Fields.Set("invite", invite)
+	d.Fields.Set("return_to", opt.ReturnTo)
+	if opt.Invite != "" {
+		d.Fields.Set("invite", opt.Invite)
 	}
 	p := s.pageFor(&sess, "Confirm your plan")
-	if change {
+	if opt.Change {
 		p.Title = "Confirm the change"
 	}
-	p.Error = errMsg
+	p.Error = opt.ErrMsg
 	p.Data = d
-	if s.Stripe == nil && errMsg == "" {
+	if s.Stripe == nil && opt.ErrMsg == "" {
 		p.Error = billingOffMsg
 	}
-	s.render(w, status, "confirm.html", p)
+	s.render(w, opt.Status, "confirm.html", p)
 }
 
 // checkoutPost creates the Checkout Session and sends the customer to Stripe.
@@ -234,7 +250,7 @@ func (s *Server) checkoutPost(w http.ResponseWriter, r *http.Request, sess sessi
 	}
 	invite := r.FormValue("invite")
 	returnTo := validReturnTo(r.FormValue("return_to"), s.PricingURL)
-	plan, err := planFromValues(r.Form).Validate(s.Catalog, s.Games, invite != "")
+	plan, err := planFromValues(r.PostForm).Validate(s.Catalog, s.Games, invite != "")
 	var resolved billing.ResolvedPlan
 	if err == nil {
 		resolved, err = plan.Resolve(r.Context(), s.Catalog, s.Stores)
@@ -247,7 +263,7 @@ func (s *Server) checkoutPost(w http.ResponseWriter, r *http.Request, sess sessi
 	cs, err := s.Checkout.Create(r.Context(), billing.Request{Account: a, Plan: plan, Invite: invite, Resolved: &resolved})
 	if err != nil {
 		s.logf("checkout for %s: %v", a.Email, err)
-		s.renderConfirm(w, r, http.StatusBadGateway, sess, resolved, invite, returnTo, false, checkoutError(err), false)
+		s.renderConfirm(w, r, sess, confirmOptions{Status: http.StatusBadGateway, Resolved: resolved, Invite: invite, ReturnTo: returnTo, ErrMsg: checkoutError(err)})
 		return
 	}
 	// Keep the invite and the session id, so a cancelled checkout can expire the session and resume with the invite.
