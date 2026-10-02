@@ -161,7 +161,7 @@ fails before the fix.
 - [ ] S1, S2 (one PR). Issue [#53](https://github.com/mtgban/api-gatewahy/issues/53)
 - [ ] S4, then S9 and S12 through it. Issue [#54](https://github.com/mtgban/api-gatewahy/issues/54)
 - [ ] S7, then S8. Issue [#55](https://github.com/mtgban/api-gatewahy/issues/55)
-- [ ] S10. Issue [#56](https://github.com/mtgban/api-gatewahy/issues/56)
+- [x] S10. Issue [#56](https://github.com/mtgban/api-gatewahy/issues/56)
 - [ ] S11. Issue [#57](https://github.com/mtgban/api-gatewahy/issues/57)
 - [ ] S13, S14 opportunistically, when touching those files. Issue [#58](https://github.com/mtgban/api-gatewahy/issues/58)
 
