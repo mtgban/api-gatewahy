@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"net/netip"
 	"time"
-
-	"github.com/lib/pq"
 )
 
 // Usage is one proxied request.
@@ -42,8 +40,8 @@ func (c *Client) InsertUsage(ctx context.Context, rows []Usage) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	stmt, err := tx.PrepareContext(ctx, pq.CopyIn("usage",
-		"ts", "key_id", "account_id", "game", "path", "status", "bytes", "duration_ms", "client_ip"))
+	stmt, err := tx.PrepareContext(ctx,
+		`COPY usage (ts, key_id, account_id, game, path, status, bytes, duration_ms, client_ip) FROM STDIN`)
 	if err != nil {
 		return err
 	}
