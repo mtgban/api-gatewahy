@@ -35,7 +35,8 @@ func NewClient(cfg timeseries.SQLConfig) (*Client, error) {
 	return wrap(db)
 }
 
-func newClientDSN(dsn string) (*Client, error) {
+// OpenDSN opens a pool from a Postgres URL, pings, and ensures the schema.
+func OpenDSN(dsn string) (*Client, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, err

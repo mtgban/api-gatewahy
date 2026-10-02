@@ -18,9 +18,9 @@ func TestSendTrialRemindersOnce(t *testing.T) {
 	b, _ := ts.store.GetOrCreateAccount(ctx, "bob@example.com", "")
 	c, _ := ts.store.GetOrCreateAccount(ctx, "carl@example.com", "")
 	_ = ts.store.SetAccountStatus(ctx, c.ID, "suspended")
-	_, _ = ts.store.CreateTrial(ctx, "ann@example.com", ts.now.Add(2*24*time.Hour), ts.now.Add(-trialCooldown), entitlementFor(a.ID, "trial", "ALL_ACCESS"))
-	_, _ = ts.store.CreateTrial(ctx, "bob@example.com", ts.now.Add(10*24*time.Hour), ts.now.Add(-trialCooldown), entitlementFor(b.ID, "trial", "ALL_ACCESS"))
-	_, _ = ts.store.CreateTrial(ctx, "carl@example.com", ts.now.Add(2*24*time.Hour), ts.now.Add(-trialCooldown), entitlementFor(c.ID, "trial", "ALL_ACCESS"))
+	_, _ = ts.store.CreateTrial(ctx, "ann@example.com", ts.now.Add(2*24*time.Hour), ts.now.Add(-trialCooldown), trialFor(a.ID, "ALL_ACCESS"))
+	_, _ = ts.store.CreateTrial(ctx, "bob@example.com", ts.now.Add(10*24*time.Hour), ts.now.Add(-trialCooldown), trialFor(b.ID, "ALL_ACCESS"))
+	_, _ = ts.store.CreateTrial(ctx, "carl@example.com", ts.now.Add(2*24*time.Hour), ts.now.Add(-trialCooldown), trialFor(c.ID, "ALL_ACCESS"))
 
 	ts.SendTrialReminders(ctx, ts.now)
 	if got := strings.Count(ts.mail.String(), "trial ends soon"); got != 1 || !strings.Contains(ts.mail.String(), "ann@example.com") {
@@ -47,8 +47,8 @@ func TestSendTrialRemindersSkipsActivePlanAndEndedTrial(t *testing.T) {
 	ctx := context.Background()
 	paid, _ := ts.store.GetOrCreateAccount(ctx, "paid@example.com", "")
 	ended, _ := ts.store.GetOrCreateAccount(ctx, "ended@example.com", "")
-	_, _ = ts.store.CreateTrial(ctx, "paid@example.com", ts.now.Add(2*24*time.Hour), ts.now.Add(-trialCooldown), entitlementFor(paid.ID, "trial", apiaccess.ScopeAll))
-	_, _ = ts.store.CreateTrial(ctx, "ended@example.com", ts.now.Add(2*24*time.Hour), ts.now.Add(-trialCooldown), entitlementFor(ended.ID, "trial", apiaccess.ScopeAll))
+	_, _ = ts.store.CreateTrial(ctx, "paid@example.com", ts.now.Add(2*24*time.Hour), ts.now.Add(-trialCooldown), trialFor(paid.ID, apiaccess.ScopeAll))
+	_, _ = ts.store.CreateTrial(ctx, "ended@example.com", ts.now.Add(2*24*time.Hour), ts.now.Add(-trialCooldown), trialFor(ended.ID, apiaccess.ScopeAll))
 	_, _ = ts.store.AddEntitlement(ctx, entitlementFor(paid.ID, "stripe", apiaccess.ScopeBase))
 	endedEnts, err := ts.store.ListEntitlements(ctx, ended.ID)
 	if err != nil || len(endedEnts) != 1 {
@@ -77,11 +77,11 @@ func TestSendTrialRemindersMarksBeforeSend(t *testing.T) {
 	ts := newTestServer(t)
 	ctx := context.Background()
 	a, _ := ts.store.GetOrCreateAccount(ctx, "dana@example.com", "")
-	trial, _ := ts.store.CreateTrial(ctx, "dana@example.com", ts.now.Add(2*24*time.Hour), ts.now.Add(-trialCooldown), entitlementFor(a.ID, "trial", apiaccess.ScopeAll))
+	trial, _ := ts.store.CreateTrial(ctx, "dana@example.com", ts.now.Add(2*24*time.Hour), ts.now.Add(-trialCooldown), trialFor(a.ID, apiaccess.ScopeAll))
 
 	ts.Mail = failMailer{}
 	ts.SendTrialReminders(ctx, ts.now)
-	if ts.store.trials[trial.ID].ReminderSentAt == nil {
+	if last, err := ts.store.LastTrial(ctx, "dana@example.com"); err != nil || last.ID != trial.ID || last.ReminderSentAt == nil {
 		t.Fatal("reminder not marked although marking happens before the send")
 	}
 

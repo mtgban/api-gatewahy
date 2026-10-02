@@ -12,6 +12,7 @@ import (
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
 	"github.com/mtgban/api-gatewahy/billing"
+	"github.com/mtgban/api-gatewahy/billing/billingtest"
 	"github.com/stripe/stripe-go/v84"
 )
 
@@ -22,10 +23,8 @@ func TestAccountPageAndKeys(t *testing.T) {
 	a, ck, csrf := ts.signIn(t, "ann@example.com")
 	ctx := context.Background()
 	_, _ = ts.store.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: "manual", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail", "buylist", "sealed"}})
-	ts.store.usage = []memUsage{
-		{Ts: ts.now, Row: apiaccess.UsageRow{AccountID: a.ID, Game: "magic", Requests: 42, Bytes: 4096}},
-		{Ts: ts.now.AddDate(0, -1, 0), Row: apiaccess.UsageRow{AccountID: a.ID, Game: "magic", Requests: 77, Bytes: 1234}},
-	}
+	ts.addUsage(42, apiaccess.Usage{Ts: ts.now, AccountID: a.ID, Game: "magic", Path: "/sets.json", Status: 200, Bytes: 100})
+	ts.addUsage(77, apiaccess.Usage{Ts: ts.now.AddDate(0, -1, 0), AccountID: a.ID, Game: "magic", Path: "/sets.json", Status: 200, Bytes: 10})
 
 	rec := ts.do("GET", "/account?notice=login", "", ck)
 	body := rec.Body.String()
@@ -63,7 +62,7 @@ func TestAccountPageAndKeys(t *testing.T) {
 	if keys, _ = ts.store.ListKeys(ctx, a.ID); keys[0].RevokedAt == nil {
 		t.Error("key not revoked")
 	}
-	if len(ts.store.notified) == 0 {
+	if len(ts.store.Notified) == 0 {
 		t.Error("no cache notify after revoke")
 	}
 
@@ -83,8 +82,7 @@ func TestPortalAndPlanChange(t *testing.T) {
 	_, _ = ts.store.SetStripeCustomerID(ctx, a.ID, "cus_test")
 	_, _ = ts.store.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "TCGLow,TCGMarket,TCGDirect,TCGDirectNet,TCGPlayer,CK", Modes: []string{"retail", "buylist"}, Status: "active", ExternalRef: "sub_1"})
 	current := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}}
-	f.sub = &stripe.Subscription{ID: "sub_1", Metadata: current.Metadata(a.ID), Customer: &stripe.Customer{ID: "cus_test"},
-		Items: &stripe.SubscriptionItemList{Data: []*stripe.SubscriptionItem{{ID: "si_1", Quantity: 1, Price: &stripe.Price{ID: "price_starter_monthly", LookupKey: "starter_monthly"}}}}}
+	f.AddSub(t, "sub_1", "cus_test", stripe.SubscriptionStatusActive, current.Metadata(a.ID), ts.now.AddDate(0, 1, 0), billingtest.Item{Key: "starter_monthly", Qty: 1})
 
 	rec := ts.do("GET", "/account", "", ck)
 	body := rec.Body.String()
@@ -113,7 +111,7 @@ func TestPortalAndPlanChange(t *testing.T) {
 	ts.PricingURL = "https://mtgban.com/api-plans"
 
 	rec = ts.do("GET", "/portal", "", ck)
-	if rec.Code != 303 || rec.Header().Get("Location") != "https://billing.stripe.com/p/session/test" {
+	if rec.Code != 303 || rec.Header().Get("Location") != "https://billing.stripe.test/cus_test" {
 		t.Errorf("portal: %d %q", rec.Code, rec.Header().Get("Location"))
 	}
 
@@ -124,8 +122,8 @@ func TestPortalAndPlanChange(t *testing.T) {
 	reconciled := ""
 	ts.Reconcile = func(_ context.Context, id string) error { reconciled = id; return nil }
 	rec = ts.do("POST", "/account/plan", "csrf="+csrf+"&package=starter&interval=monthly&games=magic&stores=cardkingdom,starcitygames", ck)
-	if rec.Code != 302 || rec.Header().Get("Location") != "/account?notice=plan" || reconciled != "sub_1" || f.updated == nil {
-		t.Errorf("change: %d %q reconciled %q updated %v", rec.Code, rec.Header().Get("Location"), reconciled, f.updated != nil)
+	if rec.Code != 302 || rec.Header().Get("Location") != "/account?notice=plan" || reconciled != "sub_1" || len(f.Updates["sub_1"]) != 1 {
+		t.Errorf("change: %d %q reconciled %q updates %d", rec.Code, rec.Header().Get("Location"), reconciled, len(f.Updates["sub_1"]))
 	}
 
 	rec = ts.do("POST", "/account/plan", "csrf="+csrf+"&package=starter&interval=monthly&games=chess&stores=cardkingdom", ck)
@@ -140,7 +138,7 @@ func TestChangePlanLogsEntitlementListFailure(t *testing.T) {
 	ts := newTestServer(t)
 	ts.withStripe()
 	_, ck, csrf := ts.signIn(t, "ann@example.com")
-	ts.store.listEntitlementsErr = errors.New("entitlements down")
+	ts.store.Fail["ListEntitlements"] = errors.New("entitlements down")
 	rec := ts.do("POST", "/account/plan", "csrf="+csrf+"&package=all_data&interval=monthly&games=magic", ck)
 	if rec.Code != 500 {
 		t.Fatalf("status: %d %s", rec.Code, rec.Body.String())
@@ -272,7 +270,7 @@ func TestAccountPageShowsTryAgainOnListFailure(t *testing.T) {
 	ts := newTestServer(t)
 	_, ck, _ := ts.signIn(t, "ann@example.com")
 
-	ts.store.listEntitlementsErr = errors.New("entitlements down")
+	ts.store.Fail["ListEntitlements"] = errors.New("entitlements down")
 	rec := ts.do("GET", "/account", "", ck)
 	body := rec.Body.String()
 	if rec.Code != 500 || !strings.Contains(body, tryAgainMsg) {
@@ -282,8 +280,8 @@ func TestAccountPageShowsTryAgainOnListFailure(t *testing.T) {
 		t.Error("entitlements failure still shows the empty-state plan pitch")
 	}
 
-	ts.store.listEntitlementsErr = nil
-	ts.store.listKeysErr = errors.New("keys down")
+	delete(ts.store.Fail, "ListEntitlements")
+	ts.store.Fail["ListKeys"] = errors.New("keys down")
 	rec = ts.do("GET", "/account", "", ck)
 	body = rec.Body.String()
 	if rec.Code != 500 || !strings.Contains(body, tryAgainMsg) {
@@ -300,7 +298,7 @@ func TestAccountPageShowsTryAgainOnListFailure(t *testing.T) {
 func TestAccountPageListFailureDoesNotClobberFormError(t *testing.T) {
 	ts := newTestServer(t)
 	_, ck, csrf := ts.signIn(t, "ann@example.com")
-	ts.store.listEntitlementsErr = errors.New("entitlements down")
+	ts.store.Fail["ListEntitlements"] = errors.New("entitlements down")
 	rec := ts.do("POST", "/account/keys", "csrf="+csrf, ck)
 	body := rec.Body.String()
 	if rec.Code != 400 || !strings.Contains(body, "Give the key a label") || strings.Contains(body, tryAgainMsg) {
@@ -316,8 +314,8 @@ func TestCreateKeyKeepsNewKeyVisibleWhenListsFail(t *testing.T) {
 	_, ck, csrf := ts.signIn(t, "ann@example.com")
 	// The plan-kind check also lists entitlements; let that one succeed and
 	// only fail the second call, the one inside the final re-render.
-	ts.store.listEntitlementsErr = errors.New("entitlements down")
-	ts.store.listEntitlementsFailAfter = 2
+	ts.store.Fail["ListEntitlements"] = errors.New("entitlements down")
+	ts.store.FailFrom["ListEntitlements"] = ts.store.Calls["ListEntitlements"] + 2
 	rec := ts.do("POST", "/account/keys", "csrf="+csrf+"&label=laptop", ck)
 	body := rec.Body.String()
 	plain := keyRe.FindString(body)
@@ -366,7 +364,7 @@ func TestPrefillMapsShorthandsBackToKeys(t *testing.T) {
 
 func TestPrefillKeepsTheStoresOutWhenASiteIsDown(t *testing.T) {
 	ts := newTestServer(t)
-	ts.Stores.(*fakeStores).down = map[string]bool{"pokemon": true}
+	ts.stores.Down = map[string]bool{"pokemon": true}
 	e := apiaccess.Entitlement{Source: "stripe", Games: []string{"magic", "pokemon"}, StoreScope: "CK,SCG,TCGLow,TNT"}
 	if q := ts.prefillQuery(ts.newSiteLookup(context.Background()), e); q.Has("stores") || q.Get("package") != "starter" {
 		t.Errorf("prefill with pokemon down %v", q)
@@ -384,7 +382,7 @@ func TestAccountPageReadsEachSiteOnce(t *testing.T) {
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "Card Kingdom") {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
-	if n := ts.Stores.(*fakeStores).calls["magic"]; n != 1 {
+	if n := ts.stores.Calls["magic"]; n != 1 {
 		t.Errorf("magic read %d times for one render", n)
 	}
 }
@@ -396,11 +394,11 @@ func TestPlanChangeRejectsAStoreTheSitesDoNotSell(t *testing.T) {
 	ctx := context.Background()
 	_, _ = ts.store.SetStripeCustomerID(ctx, a.ID, "cus_test")
 	_, _ = ts.store.AddEntitlement(ctx, entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
-	f.sub = &stripe.Subscription{ID: "sub_1", Customer: &stripe.Customer{ID: "cus_test"},
-		Metadata: billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID)}
+	f.AddSub(t, "sub_1", "cus_test", stripe.SubscriptionStatusActive,
+		billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID), ts.now.AddDate(0, 1, 0))
 	rec := ts.do("POST", "/account/plan", "csrf="+csrf+"&package=starter&interval=monthly&games=magic&stores=trollandtoad", ck)
-	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "Store trollandtoad is not available for the games you picked.") || f.updated != nil {
-		t.Errorf("%d %v %s", rec.Code, f.updated != nil, rec.Body.String())
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "Store trollandtoad is not available for the games you picked.") || len(f.Updates["sub_1"]) != 0 {
+		t.Errorf("%d %d %s", rec.Code, len(f.Updates["sub_1"]), rec.Body.String())
 	}
 }
 
@@ -411,9 +409,9 @@ func TestPlanChangeDeclinedCardKeepsThePlan(t *testing.T) {
 	ctx := context.Background()
 	_, _ = ts.store.SetStripeCustomerID(ctx, a.ID, "cus_test")
 	_, _ = ts.store.AddEntitlement(ctx, entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
-	f.sub = &stripe.Subscription{ID: "sub_1", Customer: &stripe.Customer{ID: "cus_test"},
-		Metadata: billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID)}
-	f.updateErr = &stripe.Error{HTTPStatusCode: 402, Code: stripe.ErrorCodeCardDeclined, Msg: "Your card was declined."}
+	f.AddSub(t, "sub_1", "cus_test", stripe.SubscriptionStatusActive,
+		billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID), ts.now.AddDate(0, 1, 0))
+	f.Fail["UpdateSubscription"] = &stripe.Error{HTTPStatusCode: 402, Code: stripe.ErrorCodeCardDeclined, Msg: "Your card was declined."}
 	reconciled := false
 	ts.Reconcile = func(context.Context, string) error { reconciled = true; return nil }
 
@@ -422,8 +420,8 @@ func TestPlanChangeDeclinedCardKeepsThePlan(t *testing.T) {
 	if rec.Code != 402 || !strings.Contains(body, "Your card was declined. Update it under Manage billing, then try again.") || strings.Contains(body, "Could not") {
 		t.Errorf("%d %s", rec.Code, body)
 	}
-	if reconciled || f.updated != nil {
-		t.Errorf("declined upgrade applied: reconciled %v updated %v", reconciled, f.updated != nil)
+	if reconciled || len(f.Updates["sub_1"]) != 0 {
+		t.Errorf("declined upgrade applied: reconciled %v updates %d", reconciled, len(f.Updates["sub_1"]))
 	}
 }
 
@@ -434,13 +432,13 @@ func TestPlanChangeThatStripeTookButReconcileMissed(t *testing.T) {
 	ctx := context.Background()
 	_, _ = ts.store.SetStripeCustomerID(ctx, a.ID, "cus_test")
 	_, _ = ts.store.AddEntitlement(ctx, entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
-	f.sub = &stripe.Subscription{ID: "sub_1", Customer: &stripe.Customer{ID: "cus_test"},
-		Metadata: billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID)}
+	f.AddSub(t, "sub_1", "cus_test", stripe.SubscriptionStatusActive,
+		billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID), ts.now.AddDate(0, 1, 0))
 	ts.Reconcile = func(context.Context, string) error { return errors.New("db down") }
 
 	rec := ts.do("POST", "/account/plan", "csrf="+csrf+"&package=all_stores&interval=monthly&games=magic", ck)
-	if rec.Code != 302 || rec.Header().Get("Location") != "/account?notice=plan_pending" || f.updated == nil {
-		t.Fatalf("%d %q updated %v: %s", rec.Code, rec.Header().Get("Location"), f.updated != nil, rec.Body.String())
+	if rec.Code != 302 || rec.Header().Get("Location") != "/account?notice=plan_pending" || len(f.Updates["sub_1"]) != 1 {
+		t.Fatalf("%d %q updates %d: %s", rec.Code, rec.Header().Get("Location"), len(f.Updates["sub_1"]), rec.Body.String())
 	}
 	rec = ts.do("GET", "/account?notice=plan_pending", "", ck)
 	if body := rec.Body.String(); !strings.Contains(body, "Plan changed; your access updates shortly.") || strings.Contains(body, "Could not start checkout") {

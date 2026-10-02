@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
+	"github.com/mtgban/api-gatewahy/apiaccess/apiaccesstest"
 	"github.com/mtgban/api-gatewahy/session"
 	"github.com/mtgban/mtgban-website/apihandoff"
 )
@@ -53,7 +54,7 @@ func TestTrialGrantsOnceAndSignsIn(t *testing.T) {
 	if got := ents[0].ValidUntil.Sub(ts.now); got != 15*24*time.Hour {
 		t.Errorf("trial length %v", got)
 	}
-	if !strings.Contains(ts.mail.String(), "trial has started") || len(ts.store.notified) == 0 {
+	if !strings.Contains(ts.mail.String(), "trial has started") || len(ts.store.Notified) == 0 {
 		t.Error("no trial mail or no notify")
 	}
 
@@ -125,7 +126,7 @@ func TestTrialRejectsBadTokens(t *testing.T) {
 
 func TestTrialRollsBackOnEntitlementFailure(t *testing.T) {
 	ts := newTestServer(t)
-	ts.store.entitlementErr = errors.New("boom")
+	ts.store.Fail[apiaccesstest.CreateTrialEntitlement] = errors.New("boom")
 	tok := ts.handoff(apihandoff.PurposeTrial, "dana@example.com")
 	rec := ts.do("POST", "/trial", "t="+tok)
 	if rec.Code != 500 {
@@ -142,7 +143,7 @@ func TestTrialRollsBackOnEntitlementFailure(t *testing.T) {
 		t.Errorf("trial row leaked: %v", err)
 	}
 
-	ts.store.entitlementErr = nil
+	delete(ts.store.Fail, apiaccesstest.CreateTrialEntitlement)
 	tok2 := ts.handoff(apihandoff.PurposeTrial, "dana@example.com")
 	rec = ts.do("POST", "/trial", "t="+tok2)
 	if rec.Code != 302 || rec.Header().Get("Location") != "/account?notice=trial" {

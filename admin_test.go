@@ -5,117 +5,74 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
+	"github.com/mtgban/api-gatewahy/apiaccess/apiaccesstest"
 )
 
-type memStore struct {
-	accounts     []apiaccess.Account
-	keys         []apiaccess.Key
-	ents         []apiaccess.Entitlement
-	notified     int
-	notifyErr    error
-	audit        []string
-	auditAccount []int64
-	usageCalls   int
+var (
+	_ adminStore   = (*apiaccesstest.MemStore)(nil)
+	_ billingStore = (*apiaccesstest.MemStore)(nil)
+)
+
+// stored reads an account back by email.
+func stored(t *testing.T, s *apiaccesstest.MemStore, email string) apiaccess.Account {
+	t.Helper()
+	a, err := s.GetAccountByEmail(context.Background(), email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
 }
 
-func (m *memStore) CreateAccount(_ context.Context, email, note string) (apiaccess.Account, error) {
-	a := apiaccess.Account{ID: int64(len(m.accounts) + 1), Email: apiaccess.NormalizeEmail(email), Status: "active", Note: note}
-	m.accounts = append(m.accounts, a)
-	return a, nil
-}
-func (m *memStore) GetAccountByEmail(_ context.Context, email string) (apiaccess.Account, error) {
-	for _, a := range m.accounts {
-		if a.Email == apiaccess.NormalizeEmail(email) {
-			return a, nil
-		}
+// keysOf lists the keys of the account with email.
+func keysOf(t *testing.T, s *apiaccesstest.MemStore, email string) []apiaccess.Key {
+	t.Helper()
+	keys, err := s.ListKeys(context.Background(), stored(t, s, email).ID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return apiaccess.Account{}, apiaccess.ErrNotFound
+	return keys
 }
-func (m *memStore) SetAccountStatus(_ context.Context, id int64, status string) error {
-	for i := range m.accounts {
-		if m.accounts[i].ID == id {
-			m.accounts[i].Status = status
-			return nil
-		}
-	}
-	return apiaccess.ErrNotFound
-}
-func (m *memStore) ListAccounts(context.Context) ([]apiaccess.Account, error) { return m.accounts, nil }
-func (m *memStore) CreateKey(_ context.Context, accountID int64, label string, kind apiaccess.KeyKind) (string, apiaccess.Key, error) {
-	plain, hash, prefix, _ := apiaccess.GenerateKey(kind)
-	k := apiaccess.Key{ID: int64(len(m.keys) + 1), AccountID: accountID, Hash: hash, Prefix: prefix, Label: label, Kind: kind}
-	m.keys = append(m.keys, k)
-	return plain, k, nil
-}
-func (m *memStore) RevokeKeyByPrefix(_ context.Context, prefix string) (apiaccess.Key, error) {
-	for i := range m.keys {
-		if m.keys[i].Prefix == prefix && m.keys[i].RevokedAt == nil {
-			t := time.Now()
-			m.keys[i].RevokedAt = &t
-			return m.keys[i], nil
-		}
-	}
-	return apiaccess.Key{}, apiaccess.ErrNotFound
-}
-func (m *memStore) ListKeys(_ context.Context, accountID int64) ([]apiaccess.Key, error) {
-	var out []apiaccess.Key
-	for _, k := range m.keys {
-		if k.AccountID == accountID {
-			out = append(out, k)
-		}
-	}
-	return out, nil
-}
-func (m *memStore) AddEntitlement(_ context.Context, e apiaccess.Entitlement) (apiaccess.Entitlement, error) {
-	e.ID = int64(len(m.ents) + 1)
-	e.Status = "active"
-	m.ents = append(m.ents, e)
-	return e, nil
-}
-func (m *memStore) EndEntitlement(_ context.Context, id, accountID int64, at time.Time) (apiaccess.Entitlement, error) {
-	for i := range m.ents {
-		if m.ents[i].ID != id || (accountID != 0 && m.ents[i].AccountID != accountID) {
-			continue
-		}
-		// Stripe first, as the real store refuses an ended stripe row the same way.
-		if m.ents[i].Source == "stripe" {
-			return apiaccess.Entitlement{}, apiaccess.ErrStripeEntitlement
-		}
-		if m.ents[i].Status != "ended" {
-			m.ents[i].Status = "ended"
-			m.ents[i].ValidUntil = &at
-			return m.ents[i], nil
-		}
-	}
-	return apiaccess.Entitlement{}, apiaccess.ErrNotFound
-}
-func (m *memStore) ListEntitlements(_ context.Context, accountID int64) ([]apiaccess.Entitlement, error) {
-	var out []apiaccess.Entitlement
-	for _, e := range m.ents {
-		if e.AccountID == accountID {
-			out = append(out, e)
-		}
-	}
-	return out, nil
-}
-func (m *memStore) SummarizeUsage(context.Context, time.Time, time.Time, int64) ([]apiaccess.UsageRow, error) {
-	m.usageCalls++
-	return []apiaccess.UsageRow{{Email: "ck@example.com", Game: "magic", Requests: 12, Bytes: 3456, Errors: 1}}, nil
-}
-func (m *memStore) Notify(context.Context, string) error { m.notified++; return m.notifyErr }
 
-func (m *memStore) RecordAdminAction(_ context.Context, actor, action string, accountID int64, target, detail string) error {
-	if !strings.HasPrefix(actor, "cli") {
-		return errors.New("actor must name the cli")
+// entsOf lists the entitlements of the account with email.
+func entsOf(t *testing.T, s *apiaccesstest.MemStore, email string) []apiaccess.Entitlement {
+	t.Helper()
+	ents, err := s.ListEntitlements(context.Background(), stored(t, s, email).ID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	m.audit = append(m.audit, action+" "+target)
-	m.auditAccount = append(m.auditAccount, accountID)
-	return nil
+	return ents
+}
+
+// auditRows lists the recorded actions oldest first; every actor must name the cli.
+func auditRows(t *testing.T, s *apiaccesstest.MemStore) []apiaccess.AdminAction {
+	t.Helper()
+	acts, err := s.ListAdminActions(context.Background(), 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Reverse(acts)
+	for _, a := range acts {
+		if !strings.HasPrefix(a.Actor, "cli") {
+			t.Errorf("actor %q does not name the cli", a.Actor)
+		}
+	}
+	return acts
+}
+
+// auditLog is auditRows as "action target" strings.
+func auditLog(t *testing.T, s *apiaccesstest.MemStore) []string {
+	t.Helper()
+	var out []string
+	for _, a := range auditRows(t, s) {
+		out = append(out, a.Action+" "+a.Target)
+	}
+	return out
 }
 
 func admin(t *testing.T, store adminStore, args ...string) (int, string, string) {
@@ -126,14 +83,14 @@ func admin(t *testing.T, store adminStore, args ...string) (int, string, string)
 }
 
 func TestAdminAccountLifecycle(t *testing.T) {
-	s := &memStore{}
+	s := apiaccesstest.New()
 	if code, out, errb := admin(t, s, "account", "add", "-email", "CK@Example.com", "-note", "zoho 12"); code != 0 || !strings.Contains(out, "ck@example.com") {
 		t.Fatalf("add: %d %q %q", code, out, errb)
 	}
-	if code, _, _ := admin(t, s, "account", "suspend", "-email", "ck@example.com"); code != 0 || s.accounts[0].Status != "suspended" {
-		t.Fatalf("suspend: %d %+v", code, s.accounts)
+	if code, _, _ := admin(t, s, "account", "suspend", "-email", "ck@example.com"); code != 0 || stored(t, s, "ck@example.com").Status != "suspended" {
+		t.Fatalf("suspend: %d %+v", code, stored(t, s, "ck@example.com"))
 	}
-	if code, _, _ := admin(t, s, "account", "reinstate", "-email", "ck@example.com"); code != 0 || s.accounts[0].Status != "active" {
+	if code, _, _ := admin(t, s, "account", "reinstate", "-email", "ck@example.com"); code != 0 || stored(t, s, "ck@example.com").Status != "active" {
 		t.Fatalf("reinstate: %d", code)
 	}
 	if code, out, _ := admin(t, s, "account", "list"); code != 0 || !strings.Contains(out, "ck@example.com") {
@@ -142,16 +99,17 @@ func TestAdminAccountLifecycle(t *testing.T) {
 	if code, _, errb := admin(t, s, "account", "suspend", "-email", "nobody@example.com"); code != 1 || !strings.Contains(errb, "not found") {
 		t.Fatalf("missing: %d %q", code, errb)
 	}
-	if s.notified != 2 {
-		t.Errorf("notified %d times, want 2 (suspend, reinstate)", s.notified)
+	if len(s.Notified) != 2 {
+		t.Errorf("notified %d times, want 2 (suspend, reinstate)", len(s.Notified))
 	}
-	if len(s.audit) != 3 || !strings.HasPrefix(s.audit[0], "account add") || s.audit[1] != "status " || s.audit[2] != "status " {
-		t.Errorf("audit %v, want the add, the suspend and the reinstate", s.audit)
+	if got := auditLog(t, s); len(got) != 3 || !strings.HasPrefix(got[0], "account add") || got[1] != "status " || got[2] != "status " {
+		t.Errorf("audit %v, want the add, the suspend and the reinstate", got)
 	}
 }
 
 func TestAdminWarnsOnNotifyFailure(t *testing.T) {
-	s := &memStore{notifyErr: errors.New("listener gone")}
+	s := apiaccesstest.New()
+	s.Fail["Notify"] = errors.New("listener gone")
 	admin(t, s, "account", "add", "-email", "ck@example.com")
 	code, out, errb := admin(t, s, "account", "suspend", "-email", "ck@example.com")
 	if code != 0 {
@@ -167,13 +125,13 @@ func TestAdminWarnsOnNotifyFailure(t *testing.T) {
 }
 
 func TestAdminKeys(t *testing.T) {
-	s := &memStore{}
+	s := apiaccesstest.New()
 	admin(t, s, "account", "add", "-email", "ck@example.com")
 	code, out, errb := admin(t, s, "key", "create", "-email", "ck@example.com", "-label", "prod")
 	if code != 0 || !strings.Contains(out, "ban_demo_") || !strings.Contains(out, "(ban_demo, prefix") {
 		t.Fatalf("create: %d %q %q", code, out, errb)
 	}
-	prefix := s.keys[0].Prefix
+	prefix := keysOf(t, s, "ck@example.com")[0].Prefix
 	// The kind column prints ban_demo; only a leaked plaintext carries the underscore.
 	code, out, _ = admin(t, s, "key", "list", "-email", "ck@example.com")
 	if code != 0 || !strings.Contains(out, prefix) || strings.Contains(out, "ban_demo_") {
@@ -182,40 +140,42 @@ func TestAdminKeys(t *testing.T) {
 	if !strings.Contains(out, "ban_demo") {
 		t.Errorf("list does not show the key kind: %q", out)
 	}
-	if code, _, _ := admin(t, s, "key", "revoke", "-prefix", prefix); code != 0 || s.keys[0].RevokedAt == nil {
+	if code, _, _ := admin(t, s, "key", "revoke", "-prefix", prefix); code != 0 || keysOf(t, s, "ck@example.com")[0].RevokedAt == nil {
 		t.Fatalf("revoke: %d", code)
 	}
-	if s.notified != 2 {
-		t.Errorf("notified %d, want 2 (create, revoke)", s.notified)
+	if len(s.Notified) != 2 {
+		t.Errorf("notified %d, want 2 (create, revoke)", len(s.Notified))
 	}
-	if len(s.audit) != 3 || !strings.HasPrefix(s.audit[0], "account add") || !strings.HasPrefix(s.audit[1], "key create ") || !strings.HasPrefix(s.audit[2], "key revoke ") {
-		t.Errorf("audit %v, want the add, the create and the revoke", s.audit)
+	if got := auditLog(t, s); len(got) != 3 || !strings.HasPrefix(got[0], "account add") || !strings.HasPrefix(got[1], "key create ") || !strings.HasPrefix(got[2], "key revoke ") {
+		t.Errorf("audit %v, want the add, the create and the revoke", got)
 	}
 }
 
 func TestAdminKeyCreateIsLiveOnAStripePlan(t *testing.T) {
-	s := &memStore{}
+	s := apiaccesstest.New()
 	admin(t, s, "account", "add", "-email", "ck@example.com")
-	s.ents = append(s.ents, apiaccess.Entitlement{ID: 1, AccountID: s.accounts[0].ID, Source: "stripe", Status: "active",
-		Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}, ValidFrom: time.Now().Add(-time.Hour)})
+	if _, err := s.AddEntitlement(context.Background(), apiaccess.Entitlement{AccountID: stored(t, s, "ck@example.com").ID, Source: "stripe",
+		Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}, ValidFrom: time.Now().Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
 	code, out, errb := admin(t, s, "key", "create", "-email", "ck@example.com", "-label", "prod")
 	if code != 0 || !strings.Contains(out, "ban_live_") || !strings.Contains(out, "(ban_live, prefix") {
 		t.Fatalf("create: %d %q %q", code, out, errb)
 	}
-	if len(s.keys) != 1 || s.keys[0].Kind != apiaccess.KeyLive {
-		t.Errorf("stored keys %+v, want one live key", s.keys)
+	if keys := keysOf(t, s, "ck@example.com"); len(keys) != 1 || keys[0].Kind != apiaccess.KeyLive {
+		t.Errorf("stored keys %+v, want one live key", keys)
 	}
 }
 
 func TestAdminGrants(t *testing.T) {
-	s := &memStore{}
+	s := apiaccesstest.New()
 	admin(t, s, "account", "add", "-email", "ck@example.com")
 	code, out, errb := admin(t, s, "grant", "add", "-email", "ck@example.com", "-games", "magic, pokemon",
 		"-stores", "CK,TCG", "-modes", "buylist,retail", "-until", "2027-01-01", "-note", "annual")
 	if code != 0 {
 		t.Fatalf("add: %d %q %q", code, out, errb)
 	}
-	e := s.ents[0]
+	e := entsOf(t, s, "ck@example.com")[0]
 	if e.StoreScope != "CK,TCG" || len(e.Games) != 2 || e.Games[1] != "pokemon" || e.Modes[0] != "retail" ||
 		e.ValidUntil == nil || e.ValidUntil.Year() != 2027 || e.Source != "manual" || e.Note != "annual" {
 		t.Errorf("grant %+v", e)
@@ -232,26 +192,27 @@ func TestAdminGrants(t *testing.T) {
 	if code, out, _ := admin(t, s, "grant", "list", "-email", "ck@example.com"); code != 0 || !strings.Contains(out, "CK,TCG") {
 		t.Errorf("list: %d %q", code, out)
 	}
-	if code, _, _ := admin(t, s, "grant", "end", "-id", "1"); code != 0 || s.ents[0].Status != "ended" {
-		t.Errorf("end: %d %+v", code, s.ents[0])
+	if code, _, _ := admin(t, s, "grant", "end", "-id", strconv.FormatInt(e.ID, 10)); code != 0 || entsOf(t, s, "ck@example.com")[0].Status != "ended" {
+		t.Errorf("end: %d %+v", code, entsOf(t, s, "ck@example.com"))
 	}
 }
 
 func TestAdminAccountAddIsAudited(t *testing.T) {
-	s := &memStore{}
+	s := apiaccesstest.New()
 	if code, _, errb := admin(t, s, "account", "add", "-email", "ck@example.com"); code != 0 {
 		t.Fatalf("add: %d %q", code, errb)
 	}
-	if len(s.audit) != 1 || !strings.HasPrefix(s.audit[0], "account add") {
-		t.Errorf("audit %v, want account add logged", s.audit)
+	acts := auditRows(t, s)
+	if len(acts) != 1 || acts[0].Action != "account add" {
+		t.Fatalf("audit %+v, want account add logged", acts)
 	}
-	if len(s.auditAccount) != 1 || s.auditAccount[0] != s.accounts[0].ID {
-		t.Errorf("audit account %v, want %d", s.auditAccount, s.accounts[0].ID)
+	if want := stored(t, s, "ck@example.com").ID; acts[0].AccountID != want {
+		t.Errorf("audit account %d, want %d", acts[0].AccountID, want)
 	}
 }
 
 func TestAdminGrantEndAuditsTheRealAccount(t *testing.T) {
-	s := &memStore{}
+	s := apiaccesstest.New()
 	// A throwaway account first keeps the granted account's id (2) different
 	// from the entitlement's id (1), so auditing the wrong one still fails.
 	admin(t, s, "account", "add", "-email", "other@example.com")
@@ -260,45 +221,57 @@ func TestAdminGrantEndAuditsTheRealAccount(t *testing.T) {
 	if code, _, errb := admin(t, s, "grant", "end", "-id", "1"); code != 0 {
 		t.Fatalf("end: %d %q", code, errb)
 	}
-	want := s.accounts[1].ID
-	if got := s.auditAccount[len(s.auditAccount)-1]; got != want {
+	acts := auditRows(t, s)
+	if got, want := acts[len(acts)-1].AccountID, stored(t, s, "ck@example.com").ID; got != want {
 		t.Errorf("grant end audited account %d, want %d", got, want)
 	}
 }
 
 func TestAdminGrantEndRefusesStripeRow(t *testing.T) {
-	s := &memStore{}
+	s := apiaccesstest.New()
 	admin(t, s, "account", "add", "-email", "ck@example.com")
-	s.ents = append(s.ents, apiaccess.Entitlement{ID: 1, AccountID: s.accounts[0].ID, Source: "stripe", Status: "active"})
-	auditsBefore, notifiedBefore := len(s.audit), s.notified
+	if _, err := s.UpsertStripeEntitlement(context.Background(), apiaccess.Entitlement{AccountID: stored(t, s, "ck@example.com").ID, Source: "stripe",
+		Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}, ExternalRef: "sub_1"}); err != nil {
+		t.Fatal(err)
+	}
+	auditsBefore, notifiedBefore := len(auditLog(t, s)), len(s.Notified)
 	code, _, errb := admin(t, s, "grant", "end", "-id", "1")
 	if code != 1 || !strings.Contains(strings.ToLower(errb), "cancel") || !strings.Contains(errb, "Stripe") || !strings.Contains(strings.ToLower(errb), "suspend") {
 		t.Errorf("end stripe row: %d %q", code, errb)
 	}
-	if s.ents[0].Status != "active" {
-		t.Errorf("stripe row ended: %+v", s.ents[0])
+	if ents := entsOf(t, s, "ck@example.com"); ents[0].Status != "active" {
+		t.Errorf("stripe row ended: %+v", ents[0])
 	}
-	if len(s.audit) != auditsBefore || s.notified != notifiedBefore {
-		t.Errorf("stripe refusal audited or notified: %v, notified %d", s.audit, s.notified)
+	if got := auditLog(t, s); len(got) != auditsBefore || len(s.Notified) != notifiedBefore {
+		t.Errorf("stripe refusal audited or notified: %v, notified %d", got, len(s.Notified))
 	}
 }
 
 func TestAdminGrantEndSecondCallIsNotAudited(t *testing.T) {
-	s := &memStore{}
+	s := apiaccesstest.New()
 	admin(t, s, "account", "add", "-email", "ck@example.com")
 	admin(t, s, "grant", "add", "-email", "ck@example.com", "-games", "magic", "-stores", "TCG", "-modes", "retail")
 	admin(t, s, "grant", "end", "-id", "1")
-	auditsBefore := len(s.audit)
+	auditsBefore := len(auditLog(t, s))
 	if code, _, errb := admin(t, s, "grant", "end", "-id", "1"); code != 1 || !strings.Contains(errb, "not found") {
 		t.Errorf("second end: %d %q", code, errb)
 	}
-	if len(s.audit) != auditsBefore {
-		t.Errorf("second end audited again: %v", s.audit)
+	if got := auditLog(t, s); len(got) != auditsBefore {
+		t.Errorf("second end audited again: %v", got)
 	}
 }
 
 func TestAdminUsage(t *testing.T) {
-	s := &memStore{}
+	s := apiaccesstest.New()
+	a, _ := s.CreateAccount(context.Background(), "ck@example.com", "")
+	rows := make([]apiaccess.Usage, 12)
+	for i := range rows {
+		rows[i] = apiaccess.Usage{Ts: time.Now().Add(-time.Hour), AccountID: a.ID, Game: "magic", Path: "/sets.json", Status: 200, Bytes: 288}
+	}
+	rows[0].Status = 500
+	if err := s.InsertUsage(context.Background(), rows); err != nil {
+		t.Fatal(err)
+	}
 	code, out, _ := admin(t, s, "usage", "-since", "2026-09-01")
 	if code != 0 || !strings.Contains(out, "ck@example.com") || !strings.Contains(out, "12") {
 		t.Errorf("usage: %d %q", code, out)
@@ -306,7 +279,7 @@ func TestAdminUsage(t *testing.T) {
 }
 
 func TestAdminUsageErrors(t *testing.T) {
-	s := &memStore{}
+	s := apiaccesstest.New()
 	if code, _, _ := admin(t, s, "account", "add"); code != 2 {
 		t.Errorf("missing -email should be usage error, got %d", code)
 	}
@@ -316,15 +289,15 @@ func TestAdminUsageErrors(t *testing.T) {
 }
 
 func TestAdminGrantRejectsUnknownGame(t *testing.T) {
-	s := &memStore{}
+	s := apiaccesstest.New()
 	admin(t, s, "account", "add", "-email", "ck@example.com")
 	code, _, errb := admin(t, s, "grant", "add", "-email", "ck@example.com", "-games", "magick",
 		"-stores", "TCG", "-modes", "retail")
 	if code != 1 || !strings.Contains(errb, "magick") {
 		t.Errorf("unknown game: %d %q", code, errb)
 	}
-	if len(s.ents) != 0 {
-		t.Errorf("entitlement stored anyway: %+v", s.ents)
+	if ents := entsOf(t, s, "ck@example.com"); len(ents) != 0 {
+		t.Errorf("entitlement stored anyway: %+v", ents)
 	}
 }
 
@@ -351,7 +324,7 @@ func TestAdminConfigFlagAnywhere(t *testing.T) {
 }
 
 func TestAdminGrantRejectsPastUntil(t *testing.T) {
-	s := &memStore{}
+	s := apiaccesstest.New()
 	admin(t, s, "account", "add", "-email", "ck@example.com")
 	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
 	code, _, errb := admin(t, s, "grant", "add", "-email", "ck@example.com", "-games", "magic",
@@ -359,18 +332,18 @@ func TestAdminGrantRejectsPastUntil(t *testing.T) {
 	if code != 1 || !strings.Contains(errb, "until must be in the future") {
 		t.Errorf("past until: %d %q", code, errb)
 	}
-	if len(s.ents) != 0 {
-		t.Errorf("entitlement stored anyway: %+v", s.ents)
+	if ents := entsOf(t, s, "ck@example.com"); len(ents) != 0 {
+		t.Errorf("entitlement stored anyway: %+v", ents)
 	}
 }
 
 func TestAdminUsageRejectsSinceAfterUntil(t *testing.T) {
-	s := &memStore{}
+	s := apiaccesstest.New()
 	code, _, errb := admin(t, s, "usage", "-since", "2026-02-01", "-until", "2026-01-01")
 	if code != 2 || !strings.Contains(errb, "since must not be after until") {
 		t.Errorf("since after until: %d %q", code, errb)
 	}
-	if s.usageCalls != 0 {
-		t.Errorf("store was called despite the bad range: %d calls", s.usageCalls)
+	if n := s.Calls["SummarizeUsage"]; n != 0 {
+		t.Errorf("store was called despite the bad range: %d calls", n)
 	}
 }

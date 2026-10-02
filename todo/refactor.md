@@ -154,7 +154,7 @@ fails before the fix.
   root. Issue [#50](https://github.com/mtgban/api-gatewahy/issues/50)
 - [x] S6 in the same series: `apiaccess.ManualGrant`, `KeyKindFor`, and a
   shared usage window, used by both admins. Issue [#51](https://github.com/mtgban/api-gatewahy/issues/51)
-- [ ] S3: an `apiaccess/apiaccesstest` in-memory store plus a contract test
+- [x] S3: an `apiaccess/apiaccesstest` in-memory store plus a contract test
   that runs one table against it and against Postgres; delete the three
   memStores. Fold the two `fakeStores` and Stripe fakes into
   `billing/billingtest`. Issue [#52](https://github.com/mtgban/api-gatewahy/issues/52)

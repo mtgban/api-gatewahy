@@ -1,4 +1,4 @@
-package billing
+package billing_test
 
 import (
 	"context"
@@ -13,12 +13,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mtgban/api-gatewahy/billing"
+	"github.com/mtgban/api-gatewahy/billing/billingtest"
 	"github.com/mtgban/api-gatewahy/config"
 )
 
 func TestResolveUnionsImpliedAndSelected(t *testing.T) {
-	lister := newFakeStores()
-	p, err := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"starcitygames", "cardkingdom"}}.Normalize(testCatalog)
+	lister := billingtest.NewFakeStores()
+	p, err := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"starcitygames", "cardkingdom"}}.Normalize(testCatalog)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +40,7 @@ func TestResolveUnionsImpliedAndSelected(t *testing.T) {
 }
 
 func TestResolveRejectsKeysNoSiteSells(t *testing.T) {
-	lister := newFakeStores()
+	lister := billingtest.NewFakeStores()
 	cases := []struct {
 		games []string
 		key   string
@@ -48,39 +50,39 @@ func TestResolveRejectsKeysNoSiteSells(t *testing.T) {
 		{[]string{"magic", "pokemon"}, "tcgplayer"},
 	}
 	for _, c := range cases {
-		p, err := Plan{Package: "starter", Interval: "monthly", Games: c.games, Stores: []string{c.key}}.Normalize(testCatalog)
+		p, err := billing.Plan{Package: "starter", Interval: "monthly", Games: c.games, Stores: []string{c.key}}.Normalize(testCatalog)
 		if err != nil {
 			t.Fatal(err)
 		}
 		_, err = p.Resolve(context.Background(), testCatalog, lister)
-		var ve *ValidationError
+		var ve *billing.ValidationError
 		if !errors.As(err, &ve) || ve.Msg != "Store "+c.key+" is not available for the games you picked." {
 			t.Errorf("%v %s: %v", c.games, c.key, err)
 		}
 	}
-	p, _ := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"trollandtoad"}}.Normalize(testCatalog)
+	p, _ := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"trollandtoad"}}.Normalize(testCatalog)
 	if r, err := p.Resolve(context.Background(), testCatalog, lister); err != nil || r.Scope != "TCGDirect,TCGDirectNet,TCGLow,TCGMarket,TCGPlayer,TNT" {
 		t.Errorf("key on one of two sites: %+v %v", r, err)
 	}
 }
 
 func TestResolveSiteDownIsNotValidation(t *testing.T) {
-	lister := newFakeStores()
-	lister.fail = errors.New("connection refused")
-	p, _ := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}}.Normalize(testCatalog)
+	lister := billingtest.NewFakeStores()
+	lister.Fail = errors.New("connection refused")
+	p, _ := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}}.Normalize(testCatalog)
 	_, err := p.Resolve(context.Background(), testCatalog, lister)
-	if !errors.Is(err, ErrStoresUnavailable) || IsValidation(err) {
+	if !errors.Is(err, billing.ErrStoresUnavailable) || billing.IsValidation(err) {
 		t.Errorf("site down: %v", err)
 	}
 }
 
 func TestResolvePresetSkipsTheSites(t *testing.T) {
-	lister := newFakeStores()
-	lister.fail = errors.New("not called")
-	p, _ := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
+	lister := billingtest.NewFakeStores()
+	lister.Fail = errors.New("not called")
+	p, _ := billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
 	r, err := p.Resolve(context.Background(), testCatalog, lister)
-	if err != nil || r.Scope != "ALL_ACCESS" || len(r.Modes) != 3 || lister.calls != 0 || len(r.StoreNames()) != 0 {
-		t.Errorf("preset %+v %v calls %d", r, err, lister.calls)
+	if err != nil || r.Scope != "ALL_ACCESS" || len(r.Modes) != 3 || lister.TotalCalls() != 0 || len(r.StoreNames()) != 0 {
+		t.Errorf("preset %+v %v calls %d", r, err, lister.TotalCalls())
 	}
 }
 
@@ -102,13 +104,13 @@ func storesServer(t *testing.T, status *atomic.Int32, body string) (*httptest.Se
 }
 
 func TestSiteStoreClientFetchesAndCaches(t *testing.T) {
-	want := newFakeStores().sites["magic"]
+	want := billingtest.NewFakeStores().Sites["magic"]
 	body, _ := json.Marshal(want)
 	var status atomic.Int32
 	status.Store(http.StatusOK)
 	srv, hits := storesServer(t, &status, string(body))
 	now := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
-	c := &SiteStoreClient{Origins: map[string]string{"magic": srv.URL}, TTL: 5 * time.Minute, Now: func() time.Time { return now }}
+	c := &billing.SiteStoreClient{Origins: map[string]string{"magic": srv.URL}, TTL: 5 * time.Minute, Now: func() time.Time { return now }}
 	ctx := context.Background()
 
 	got, err := c.SiteStores(ctx, "magic")
@@ -133,26 +135,26 @@ func TestSiteStoreClientErrorsWithoutCache(t *testing.T) {
 	var status atomic.Int32
 	status.Store(http.StatusBadGateway)
 	srv, _ := storesServer(t, &status, "")
-	c := &SiteStoreClient{Origins: map[string]string{"magic": srv.URL}}
+	c := &billing.SiteStoreClient{Origins: map[string]string{"magic": srv.URL}}
 	if _, err := c.SiteStores(context.Background(), "magic"); err == nil {
 		t.Error("a failed fetch with nothing cached succeeded")
 	}
 	status.Store(http.StatusOK)
 	srv2, _ := storesServer(t, &status, "not json")
-	c = &SiteStoreClient{Origins: map[string]string{"magic": srv2.URL}}
+	c = &billing.SiteStoreClient{Origins: map[string]string{"magic": srv2.URL}}
 	if _, err := c.SiteStores(context.Background(), "magic"); err == nil {
 		t.Error("a bad body decoded")
 	}
 }
 
 func TestSiteStoreClientIsSafeForConcurrentUse(t *testing.T) {
-	site := newFakeStores().sites["magic"]
+	site := billingtest.NewFakeStores().Sites["magic"]
 	site.Game = ""
 	body, _ := json.Marshal(site)
 	var status atomic.Int32
 	status.Store(http.StatusOK)
 	srv, _ := storesServer(t, &status, string(body))
-	c := &SiteStoreClient{Origins: map[string]string{"magic": srv.URL, "pokemon": srv.URL}, TTL: time.Nanosecond}
+	c := &billing.SiteStoreClient{Origins: map[string]string{"magic": srv.URL, "pokemon": srv.URL}, TTL: time.Nanosecond}
 	var wg sync.WaitGroup
 	for i := range 16 {
 		wg.Go(func() {
@@ -166,7 +168,7 @@ func TestSiteStoreClientIsSafeForConcurrentUse(t *testing.T) {
 }
 
 func TestNewSiteStoreClientUsesTheUpstreamOrigins(t *testing.T) {
-	c := NewSiteStoreClient(&config.Config{Games: map[string]config.Game{
+	c := billing.NewSiteStoreClient(&config.Config{Games: map[string]config.Game{
 		"magic":   {Upstream: "https://www.mtgban.com/", Secret: "s"},
 		"pokemon": {Upstream: "http://localhost:8081/some/path?x=1", Secret: "s"},
 	}}, nil)
@@ -181,7 +183,7 @@ func TestSiteStoreClientBacksOffAfterAFailure(t *testing.T) {
 	status.Store(http.StatusBadGateway)
 	srv, hits := storesServer(t, &status, "")
 	now := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
-	c := &SiteStoreClient{Origins: map[string]string{"magic": srv.URL}, Now: func() time.Time { return now }}
+	c := &billing.SiteStoreClient{Origins: map[string]string{"magic": srv.URL}, Now: func() time.Time { return now }}
 	ctx := context.Background()
 	if _, err := c.SiteStores(ctx, "magic"); err == nil {
 		t.Fatal("first failure succeeded")
@@ -198,7 +200,7 @@ func TestSiteStoreClientBacksOffAfterAFailure(t *testing.T) {
 }
 
 func TestSiteStoreClientFetchesOnceForABurst(t *testing.T) {
-	body, _ := json.Marshal(newFakeStores().sites["magic"])
+	body, _ := json.Marshal(billingtest.NewFakeStores().Sites["magic"])
 	release := make(chan struct{})
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -207,7 +209,7 @@ func TestSiteStoreClientFetchesOnceForABurst(t *testing.T) {
 		_, _ = w.Write(body)
 	}))
 	t.Cleanup(srv.Close)
-	c := &SiteStoreClient{Origins: map[string]string{"magic": srv.URL}}
+	c := &billing.SiteStoreClient{Origins: map[string]string{"magic": srv.URL}}
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
@@ -228,13 +230,13 @@ func TestSiteStoreClientFetchesOnceForABurst(t *testing.T) {
 }
 
 func TestSiteStoreClientAlertsOnceWhenStaleForAnHour(t *testing.T) {
-	body, _ := json.Marshal(newFakeStores().sites["magic"])
+	body, _ := json.Marshal(billingtest.NewFakeStores().Sites["magic"])
 	var status atomic.Int32
 	status.Store(http.StatusOK)
 	srv, _ := storesServer(t, &status, string(body))
 	now := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
 	var alerts []string
-	c := &SiteStoreClient{Origins: map[string]string{"magic": srv.URL}, Now: func() time.Time { return now },
+	c := &billing.SiteStoreClient{Origins: map[string]string{"magic": srv.URL}, Now: func() time.Time { return now },
 		Alert: func(msg string) { alerts = append(alerts, msg) }}
 	ctx := context.Background()
 	_, _ = c.SiteStores(ctx, "magic")
@@ -274,23 +276,23 @@ func TestSiteStoreClientRejectsBadLists(t *testing.T) {
 		"empty":      `{"game":"magic","implied":[],"stores":[]}`,
 	} {
 		srv, _ := storesServer(t, &status, body)
-		c := &SiteStoreClient{Origins: map[string]string{"magic": srv.URL}}
+		c := &billing.SiteStoreClient{Origins: map[string]string{"magic": srv.URL}}
 		if _, err := c.SiteStores(context.Background(), "magic"); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
 	srv, _ := storesServer(t, &status, `{"game":"","implied":[],"stores":[{"key":"CardKingdom","name":"Card Kingdom","shorthands":["CK"]}]}`)
-	c := &SiteStoreClient{Origins: map[string]string{"magic": srv.URL}}
+	c := &billing.SiteStoreClient{Origins: map[string]string{"magic": srv.URL}}
 	if site, err := c.SiteStores(context.Background(), "magic"); err != nil || site.Stores[0].Key != "cardkingdom" {
 		t.Errorf("keys not lowercased: %+v %v", site, err)
 	}
 }
 
-func storeFamilyEqual(a, b StoreFamily) bool {
+func storeFamilyEqual(a, b billing.StoreFamily) bool {
 	return a.Key == b.Key && a.Name == b.Name && slices.Equal(a.Shorthands, b.Shorthands)
 }
 
-func siteStoresEqual(a, b SiteStores) bool {
+func siteStoresEqual(a, b billing.SiteStores) bool {
 	return a.Game == b.Game &&
 		slices.EqualFunc(a.Implied, b.Implied, storeFamilyEqual) &&
 		slices.EqualFunc(a.Stores, b.Stores, storeFamilyEqual)

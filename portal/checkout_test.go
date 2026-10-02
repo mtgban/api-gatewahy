@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
+	"github.com/mtgban/api-gatewahy/apiaccess/apiaccesstest"
 	"github.com/mtgban/api-gatewahy/billing"
+	"github.com/mtgban/api-gatewahy/billing/billingtest"
 	"github.com/mtgban/api-gatewahy/session"
 	"github.com/stripe/stripe-go/v84"
 )
@@ -58,8 +60,8 @@ func TestCheckoutConfirmAndPost(t *testing.T) {
 	}
 	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"monthly"}, "games": {"magic,pokemon"}, "stores": {"cardkingdom,starcitygames"}, "return_to": {"https://pokemon.mtgban.com/api-plans"}}
 	rec = ts.do("POST", "/checkout", form.Encode(), ck)
-	if rec.Code != 303 || rec.Header().Get("Location") != "https://checkout.stripe.com/c/pay/cs_test_1" || f.checkouts != 1 {
-		t.Fatalf("post: %d %q %d", rec.Code, rec.Header().Get("Location"), f.checkouts)
+	if rec.Code != 303 || len(f.Sessions) != 1 || rec.Header().Get("Location") != billingtest.CheckoutURL(f.SessionIDs[0]) {
+		t.Fatalf("post: %d %q %d", rec.Code, rec.Header().Get("Location"), len(f.Sessions))
 	}
 	pending := cookieNamed(rec, session.PendingName)
 	pv, _ := ts.Sessions.Open(pending.Value, session.PurposePending)
@@ -67,13 +69,13 @@ func TestCheckoutConfirmAndPost(t *testing.T) {
 		t.Errorf("pending after post %v", pv)
 	}
 	a, _ := ts.store.GetAccountByEmail(context.Background(), "ann@example.com")
-	if a.StripeCustomerID != "cus_test" {
+	if a.StripeCustomerID == "" || f.Customers[a.StripeCustomerID] == nil {
 		t.Error("customer not stored")
 	}
 	if rec := ts.do("POST", "/checkout", strings.Replace(form.Encode(), csrf, "bad", 1), ck); rec.Code != 403 {
 		t.Errorf("csrf: %d", rec.Code)
 	}
-	f.fail = errors.New("stripe down")
+	f.Fail["CreateCheckoutSession"] = errors.New("stripe down")
 	rec = ts.do("POST", "/checkout", form.Encode(), ck)
 	if rec.Code != 502 || !strings.Contains(rec.Body.String(), "Could not start checkout") || !strings.Contains(rec.Body.String(), "$500") {
 		t.Errorf("failure: %d %s", rec.Code, rec.Body.String())
@@ -101,7 +103,7 @@ func TestCheckoutBlocksSecondSubscription(t *testing.T) {
 
 // planLandsStore reports a Stripe plan to Checkout that the portal's own pre-check did not see.
 type planLandsStore struct {
-	*memStore
+	*apiaccesstest.MemStore
 	ent apiaccess.Entitlement
 }
 
@@ -113,12 +115,12 @@ func TestCheckoutPlanLandingAfterThePreCheck(t *testing.T) {
 	ts := newTestServer(t)
 	f := ts.withStripe()
 	a, ck, csrf := ts.signIn(t, "ann@example.com")
-	ts.Checkout.Store = planLandsStore{memStore: ts.store, ent: entitlementFor(a.ID, "stripe", "BASE_ACCESS")}
+	ts.Checkout.Store = planLandsStore{MemStore: ts.store, ent: entitlementFor(a.ID, "stripe", "BASE_ACCESS")}
 
 	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"monthly"}, "games": {"magic,pokemon"}, "stores": {"cardkingdom,starcitygames"}}
 	rec := ts.do("POST", "/checkout", form.Encode(), ck)
-	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "You already have a plan") || f.checkouts != 0 {
-		t.Errorf("post: %d %d %s", rec.Code, f.checkouts, rec.Body.String())
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "You already have a plan") || len(f.Sessions) != 0 {
+		t.Errorf("post: %d %d %s", rec.Code, len(f.Sessions), rec.Body.String())
 	}
 }
 
@@ -166,12 +168,12 @@ func TestCancelReleasesInvite(t *testing.T) {
 	if rec := ts.do("GET", "/checkout/cancel", "", ck, pending); rec.Code != 200 {
 		t.Fatalf("cancel: %d", rec.Code)
 	}
-	inv, ok := ts.store.invites[apiaccess.HashKey(token)]
+	inv, ok := ts.store.InviteByToken(token)
 	if !ok || inv.UsedAt != nil {
 		t.Errorf("invite not released: %+v", inv)
 	}
-	if f.sessions["cs_test_1"] != stripe.CheckoutSessionStatusExpired {
-		t.Errorf("session not expired at Stripe: %v", f.sessions)
+	if f.SessionStatus[f.SessionIDs[0]] != stripe.CheckoutSessionStatusExpired {
+		t.Errorf("session not expired at Stripe: %v", f.SessionStatus)
 	}
 	if rec := ts.do("GET", query, "", ck); rec.Code != 200 {
 		t.Errorf("resume checkout: %d %s", rec.Code, rec.Body.String())
@@ -182,7 +184,7 @@ func TestCheckoutGetFailsClosedOnEntitlementListError(t *testing.T) {
 	ts := newTestServer(t)
 	ts.withStripe()
 	_, ck, _ := ts.signIn(t, "ann@example.com")
-	ts.store.listEntitlementsErr = errors.New("db down")
+	ts.store.Fail["ListEntitlements"] = errors.New("db down")
 	rec := ts.do("GET", starterQuery, "", ck)
 	if rec.Code != 500 || !strings.Contains(rec.Body.String(), tryAgainMsg) {
 		t.Errorf("%d %s", rec.Code, rec.Body.String())
@@ -195,7 +197,7 @@ func TestCheckoutPostLogsActivePlanCheckFailure(t *testing.T) {
 	ts := newTestServer(t)
 	ts.withStripe()
 	_, ck, csrf := ts.signIn(t, "ann@example.com")
-	ts.store.listEntitlementsErr = errors.New("db down")
+	ts.store.Fail["ListEntitlements"] = errors.New("db down")
 	rec := ts.do("POST", "/checkout", "csrf="+csrf+"&package=all_data&interval=monthly&games=magic", ck)
 	if rec.Code != 500 {
 		t.Fatalf("status: %d %s", rec.Code, rec.Body.String())
@@ -215,14 +217,14 @@ func TestCurrentIntervalForMapsStoreAndStripeFailures(t *testing.T) {
 	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
 	const changeQuery = "/checkout?change=1&package=all_data&games=magic&return_to=https%3A%2F%2Fmtgban.com%2Fapi-plans"
 
-	ts.store.listEntitlementsErr = errors.New("db down")
+	ts.store.Fail["ListEntitlements"] = errors.New("db down")
 	rec := ts.do("GET", changeQuery, "", ck)
 	if rec.Code != 500 || !strings.Contains(rec.Body.String(), tryAgainMsg) {
 		t.Errorf("store failure should be 500: %d %s", rec.Code, rec.Body.String())
 	}
-	ts.store.listEntitlementsErr = nil
+	delete(ts.store.Fail, "ListEntitlements")
 
-	// f.sub is still nil, so GetSubscription fails like a Stripe outage.
+	// Stripe holds no sub_1, so GetSubscription fails like a Stripe outage.
 	rec = ts.do("GET", changeQuery, "", ck)
 	if rec.Code != 502 || !strings.Contains(rec.Body.String(), tryAgainMsg) {
 		t.Errorf("stripe failure should be 502: %d %s", rec.Code, rec.Body.String())
@@ -237,7 +239,7 @@ func TestCurrentIntervalForBadMetadataIs500(t *testing.T) {
 	_, ck, _ := ts.signIn(t, "ann@example.com")
 	a, _ := ts.store.GetAccountByEmail(context.Background(), "ann@example.com")
 	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
-	f.sub = &stripe.Subscription{ID: "sub_1", Customer: &stripe.Customer{ID: "cus_test"}}
+	f.AddSub(t, "sub_1", "cus_test", stripe.SubscriptionStatusActive, nil, ts.now.AddDate(0, 1, 0))
 
 	const changeQuery = "/checkout?change=1&package=all_data&games=magic&return_to=https%3A%2F%2Fmtgban.com%2Fapi-plans"
 	rec := ts.do("GET", changeQuery, "", ck)
@@ -336,8 +338,8 @@ func TestCheckoutChangeConfirm(t *testing.T) {
 	}
 	a, _ := ts.store.GetAccountByEmail(context.Background(), "ann@example.com")
 	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
-	f.sub = &stripe.Subscription{ID: "sub_1", Customer: &stripe.Customer{ID: "cus_test"},
-		Metadata: billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID)}
+	f.AddSub(t, "sub_1", "cus_test", stripe.SubscriptionStatusActive,
+		billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID), ts.now.AddDate(0, 1, 0))
 	rec := ts.do("GET", changeQuery, "", ck)
 	body := rec.Body.String()
 	if rec.Code != 200 || !strings.Contains(body, `action="/account/plan"`) || !strings.Contains(body, "(unchanged)") || !strings.Contains(body, "$800") {
@@ -366,11 +368,11 @@ func TestCancelKeepsInviteWhenSessionCompleted(t *testing.T) {
 	f := ts.withStripe()
 	token, ck, pending := startInviteCheckout(t, ts)
 	// The customer paid in the Stripe tab, then hit the cancel URL anyway.
-	f.sessions["cs_test_1"] = stripe.CheckoutSessionStatusComplete
+	f.SessionStatus[f.SessionIDs[0]] = stripe.CheckoutSessionStatusComplete
 	if rec := ts.do("GET", "/checkout/cancel", "", ck, pending); rec.Code != 200 {
 		t.Fatalf("cancel: %d", rec.Code)
 	}
-	if inv := ts.store.invites[apiaccess.HashKey(token)]; inv.UsedAt == nil {
+	if inv, _ := ts.store.InviteByToken(token); inv.UsedAt == nil {
 		t.Error("invite released although the session completed")
 	}
 }
@@ -384,7 +386,7 @@ func TestCancelWithoutSessionIDKeepsInvite(t *testing.T) {
 	if rec := ts.do("GET", "/checkout/cancel", "", ck, stale); rec.Code != 200 {
 		t.Fatalf("cancel: %d", rec.Code)
 	}
-	if inv := ts.store.invites[apiaccess.HashKey(token)]; inv.UsedAt == nil {
+	if inv, _ := ts.store.InviteByToken(token); inv.UsedAt == nil {
 		t.Error("invite released without expiring its session")
 	}
 }
@@ -410,8 +412,8 @@ func TestCheckoutRejectsAStoreTheSitesDoNotSell(t *testing.T) {
 	}
 	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"monthly"}, "games": {"magic"}, "stores": {"trollandtoad"}}
 	rec = ts.do("POST", "/checkout", form.Encode(), ck)
-	if rec.Code != 400 || !strings.Contains(rec.Body.String(), want) || f.checkouts != 0 {
-		t.Errorf("post: %d %d %s", rec.Code, f.checkouts, rec.Body.String())
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), want) || len(f.Sessions) != 0 {
+		t.Errorf("post: %d %d %s", rec.Code, len(f.Sessions), rec.Body.String())
 	}
 }
 
@@ -419,7 +421,7 @@ func TestCheckoutWithTheSiteDownAsksToTryAgain(t *testing.T) {
 	ts := newTestServer(t)
 	f := ts.withStripe()
 	a, ck, csrf := ts.signIn(t, "ann@example.com")
-	ts.Stores.(*fakeStores).fail = errors.New("connection refused")
+	ts.stores.Fail = errors.New("connection refused")
 	rec := ts.do("GET", starterQuery, "", ck)
 	if rec.Code != 503 || !strings.Contains(rec.Body.String(), storesUnavailableMsg) {
 		t.Errorf("get: %d %s", rec.Code, rec.Body.String())
@@ -431,7 +433,7 @@ func TestCheckoutWithTheSiteDownAsksToTryAgain(t *testing.T) {
 	}
 	ents, _ := ts.store.ListEntitlements(context.Background(), a.ID)
 	got, _ := ts.store.GetAccountByEmail(context.Background(), "ann@example.com")
-	if f.checkouts != 0 || len(ents) != 0 || got.StripeCustomerID != "" {
-		t.Errorf("checkouts %d entitlements %d customer %q", f.checkouts, len(ents), got.StripeCustomerID)
+	if len(f.Sessions) != 0 || len(ents) != 0 || got.StripeCustomerID != "" {
+		t.Errorf("checkouts %d entitlements %d customer %q", len(f.Sessions), len(ents), got.StripeCustomerID)
 	}
 }

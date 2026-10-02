@@ -1,50 +1,33 @@
-package billing
+package billing_test
 
 import (
 	"context"
 	"errors"
 	"testing"
 
+	"github.com/mtgban/api-gatewahy/billing"
+	"github.com/mtgban/api-gatewahy/billing/billingtest"
 	"github.com/stripe/stripe-go/v84"
 )
 
 func TestIsMissing(t *testing.T) {
-	if !IsMissing(missing("thing")) {
+	if !billing.IsMissing(&stripe.Error{Code: stripe.ErrorCodeResourceMissing, Msg: "no such thing", HTTPStatusCode: 404}) {
 		t.Error("resource_missing not recognized")
 	}
-	if IsMissing(&stripe.Error{Code: stripe.ErrorCodeIdempotencyKeyInUse}) || IsMissing(errors.New("x")) || IsMissing(nil) {
+	if billing.IsMissing(&stripe.Error{Code: stripe.ErrorCodeIdempotencyKeyInUse}) || billing.IsMissing(errors.New("x")) || billing.IsMissing(nil) {
 		t.Error("other errors reported as missing")
 	}
 }
 
-func TestFakeTransfersLookupKey(t *testing.T) {
-	f := newFakeAPI()
-	ctx := context.Background()
-	old, err := f.CreatePrice(ctx, &stripe.PriceCreateParams{LookupKey: stripe.String("k"), UnitAmount: stripe.Int64(100)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.CreatePrice(ctx, &stripe.PriceCreateParams{LookupKey: stripe.String("k"), UnitAmount: stripe.Int64(200)}); err == nil {
-		t.Error("duplicate lookup key accepted without transfer")
-	}
-	replacement, err := f.CreatePrice(ctx, &stripe.PriceCreateParams{LookupKey: stripe.String("k"), UnitAmount: stripe.Int64(200), TransferLookupKey: stripe.Bool(true)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if old.LookupKey != "" || replacement.LookupKey != "k" || f.priceByKey("k").ID != replacement.ID {
-		t.Errorf("transfer: old %q new %q", old.LookupKey, replacement.LookupKey)
-	}
-}
-
 func TestPriceIDsSkipsArchived(t *testing.T) {
-	f := newFakeAPI()
+	f := billingtest.NewFakeAPI()
 	ctx := context.Background()
 	live, _ := f.CreatePrice(ctx, &stripe.PriceCreateParams{LookupKey: stripe.String("live"), UnitAmount: stripe.Int64(100)})
 	dead, _ := f.CreatePrice(ctx, &stripe.PriceCreateParams{LookupKey: stripe.String("dead"), UnitAmount: stripe.Int64(100)})
 	if _, err := f.UpdatePrice(ctx, dead.ID, &stripe.PriceUpdateParams{Active: stripe.Bool(false)}); err != nil {
 		t.Fatal(err)
 	}
-	ids, err := priceIDs(ctx, f)
+	ids, err := billing.PriceIDs(ctx, f)
 	if err != nil || len(ids) != 1 || ids["live"] != live.ID {
 		t.Errorf("ids %v %v", ids, err)
 	}
@@ -67,7 +50,7 @@ func TestListPricesQueriesActiveThenArchived(t *testing.T) {
 		}
 		return seq2(&stripe.Price{ID: id}, nil)
 	}
-	prices, err := listPrices(context.Background(), list)
+	prices, err := billing.ListPricesFrom(context.Background(), list)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +70,7 @@ func TestListPricesReturnsSecondPassError(t *testing.T) {
 		}
 		return seq2(nil, wantErr)
 	}
-	if _, err := listPrices(context.Background(), list); !errors.Is(err, wantErr) {
+	if _, err := billing.ListPricesFrom(context.Background(), list); !errors.Is(err, wantErr) {
 		t.Errorf("err %v, want %v", err, wantErr)
 	}
 }

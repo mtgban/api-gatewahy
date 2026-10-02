@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
-	"github.com/mtgban/api-gatewahy/apiaccess"
+	"github.com/mtgban/api-gatewahy/apiaccess/apiaccesstest"
+	"github.com/mtgban/api-gatewahy/billing/billingtest"
 	"github.com/mtgban/mtgban-website/apiproductlist"
+	"github.com/stripe/stripe-go/v84"
 )
 
 func TestRunUnknownCommand(t *testing.T) {
@@ -69,7 +72,7 @@ func TestUsageNamesEveryVerb(t *testing.T) {
 	}
 	for _, args := range [][]string{{"account"}, {"account", "frobnicate"}} {
 		var out, errb bytes.Buffer
-		code := runAdmin(context.Background(), &memStore{}, nil, args[0], args[1:], &out, &errb)
+		code := runAdmin(context.Background(), apiaccesstest.New(), nil, args[0], args[1:], &out, &errb)
 		if code != 2 || errb.String() != "usage: api-gatewahy account <"+want["account"]+">\n" {
 			t.Errorf("%v: exit %d, stderr %q", args, code, errb.String())
 		}
@@ -86,9 +89,9 @@ func TestUsageNamesEveryVerb(t *testing.T) {
 // TestVerbRejectsAnotherVerbsFlag pins one FlagSet per verb: a flag only
 // another verb takes exits 2 before the verb touches the store or Stripe.
 func TestVerbRejectsAnotherVerbsFlag(t *testing.T) {
-	s := &memStore{}
+	s := apiaccesstest.New()
 	admin(t, s, "account", "add", "-email", "ck@example.com")
-	s.audit = nil
+	before := maps.Clone(s.Calls)
 	for _, args := range [][]string{
 		{"account", "list", "-email", "ck@example.com"},
 		{"account", "add", "-email", "x@example.com", "-label", "prod"},
@@ -100,12 +103,12 @@ func TestVerbRejectsAnotherVerbsFlag(t *testing.T) {
 			t.Errorf("%v: exit %d, stdout %q, stderr %q", args, code, out, errb)
 		}
 	}
-	if len(s.accounts) != 1 || s.notified != 0 || len(s.audit) != 0 {
-		t.Errorf("a rejected verb still ran: %d accounts, notified %d, audit %v", len(s.accounts), s.notified, s.audit)
+	if !maps.Equal(s.Calls, before) {
+		t.Errorf("a rejected verb still reached the store: calls %v, before %v", s.Calls, before)
 	}
 
-	api, store := newFakeBillingAPI(), newFakeBillingStore()
-	store.addAccount(apiaccess.Account{ID: 1, Email: "x@example.com", Status: "active", StripeCustomerID: "cus_1"})
+	api, store, _ := billingFixture(t, "cus_1")
+	storeBefore, apiBefore := maps.Clone(store.Calls), maps.Clone(api.Calls)
 	d := billingTestDeps(api, store)
 	for _, args := range [][]string{
 		{"plan", "change", "-email", "x@example.com", "-package", "all_data", "-interval", "quarterly"},
@@ -117,8 +120,8 @@ func TestVerbRejectsAnotherVerbsFlag(t *testing.T) {
 			t.Errorf("%v: exit %d, stdout %q, stderr %q", args, code, out, errb)
 		}
 	}
-	if len(api.updates)+len(api.sessions)+len(api.portals) != 0 {
-		t.Errorf("a rejected verb still reached Stripe: %d updates, %d sessions, %d portals", len(api.updates), len(api.sessions), len(api.portals))
+	if !maps.Equal(api.Calls, apiBefore) || !maps.Equal(store.Calls, storeBefore) {
+		t.Errorf("a rejected verb still reached Stripe or the store: %v, %v", api.Calls, store.Calls)
 	}
 }
 
@@ -139,13 +142,13 @@ func TestEveryVerbRejectsAnUnknownFlag(t *testing.T) {
 	}
 	for _, args := range adminRuns {
 		t.Run(strings.Join(args[:len(args)-1], " "), func(t *testing.T) {
-			s := &memStore{}
+			s := apiaccesstest.New()
 			admin(t, s, "account", "add", "-email", "ck@example.com")
-			s.audit = nil
+			before := maps.Clone(s.Calls)
 			code, out, errb := admin(t, s, args...)
 			rejected(t, code, out, errb)
-			if len(s.accounts) != 1 || s.accounts[0].Status != "active" || len(s.keys)+len(s.ents)+len(s.audit)+s.notified != 0 {
-				t.Errorf("side effect: accounts %+v, %d keys, %d grants, audit %v, notified %d", s.accounts, len(s.keys), len(s.ents), s.audit, s.notified)
+			if !maps.Equal(s.Calls, before) {
+				t.Errorf("side effect: store calls %v, before %v", s.Calls, before)
 			}
 		})
 	}
@@ -154,21 +157,18 @@ func TestEveryVerbRejectsAnUnknownFlag(t *testing.T) {
 		for _, v := range verbs {
 			t.Run(cmd+" "+v.name, func(t *testing.T) {
 				// A subscription to reconcile and an account to bill, so a verb that ran would leave a trace.
-				api, store := newFakeBillingAPI(), newFakeBillingStore()
-				pkgKey := apiproductlist.LookupKey("all_data", "monthly")
-				api.addPrice(pkgKey)
-				api.addSub(t, "sub_1", map[string]string{
+				api, store, _ := billingFixture(t, "cus_1")
+				api.AddSub(t, "sub_1", "cus_1", stripe.SubscriptionStatusActive, map[string]string{
 					"package": "all_data", "interval": "monthly", "games": "magic", "stores": "", "account_id": "1",
-				}, map[string]int64{pkgKey: 1})
-				store.addAccount(apiaccess.Account{ID: 1, Email: "x@example.com", Status: "active", StripeCustomerID: "cus_1"})
+				}, monthAhead(), billingtest.Item{Key: apiproductlist.LookupKey("all_data", "monthly"), Qty: 1})
+				storeBefore, apiBefore := maps.Clone(store.Calls), maps.Clone(api.Calls)
 				code, out, errb := billingCmd(t, billingTestDeps(api, store), cmd, v.name, "-nosuchflag")
 				rejected(t, code, out, errb)
-				if len(api.prices) != 1 || len(api.products)+len(api.updates)+len(api.sessions)+len(api.portals) != 0 {
-					t.Errorf("reached Stripe: %d prices, %d products, %d updates, %d sessions, %d portals",
-						len(api.prices), len(api.products), len(api.updates), len(api.sessions), len(api.portals))
+				if !maps.Equal(api.Calls, apiBefore) {
+					t.Errorf("reached Stripe: calls %v, before %v", api.Calls, apiBefore)
 				}
-				if len(store.upserts)+len(store.invites)+store.notified != 0 {
-					t.Errorf("reached the store: %d upserts, %d invites, notified %d", len(store.upserts), len(store.invites), store.notified)
+				if !maps.Equal(store.Calls, storeBefore) {
+					t.Errorf("reached the store: calls %v, before %v", store.Calls, storeBefore)
 				}
 			})
 		}
