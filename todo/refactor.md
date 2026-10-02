@@ -167,7 +167,7 @@ fails before the fix.
 
 ## Phase 4: docs
 
-- [ ] README drift (issue [#59](https://github.com/mtgban/api-gatewahy/issues/59)):
+- [x] README drift (issue [#59](https://github.com/mtgban/api-gatewahy/issues/59)):
   - error table: 401 also covers a suspended account; 403 covers no store
     scope; 429 has three sources; 502 also passes 429 through; an upstream
     429's body is not JSON

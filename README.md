@@ -44,12 +44,12 @@ A request with neither returns 401. Errors are JSON:
 
 | Status | Meaning |
 | --- | --- |
-| 401 | Missing, malformed, revoked, or unknown key. |
-| 403 | Key valid, but the plan lacks the game or the mode. Body names which. |
+| 401 | Missing, malformed, revoked, or unknown key, or the account is suspended. |
+| 403 | Key valid, but the plan lacks the game, has no store scope, or lacks the mode. Body names which. |
 | 404 | Unknown game or path. |
 | 405 | A method other than `GET` under `/v1/`. |
-| 429 | Per-account limit exceeded. Carries `RateLimit-Limit` like the backend does. |
-| 502 | Upstream unreachable, returned any status outside 2xx except 304 (redirects included), or is misconfigured. |
+| 429 | Three sources: per-IP before the key is read (`Retry-After: 1`), per-account once it resolves (carries `RateLimit-Limit`), or an upstream 429 passed straight through, which, like 304, is not JSON. |
+| 502 | Upstream unreachable or misconfigured, rejected the gateway's signature, or returned any status outside 2xx except 304 and 429 (redirects included). |
 | 503 | Database unavailable or the lookup timed out, and the key was not in cache. |
 | 504 | Upstream exceeded the timeout. |
 
@@ -80,8 +80,13 @@ only static asset.
 | `GET /trial`, `POST /trial`, `GET /session`, `POST /session` | signed handoff token | `GET /trial` and `GET /session` show a confirm page; `POST /trial` grants the Patreon trial and `POST /session` signs in. Each handoff token is single-use (its nonce is burned on accept). |
 | `GET /admin/...` | session, email in `admin_emails` | Accounts, entitlements, invites, usage, reconcile. The usage page also shows usage per key by day, and the paths a key requests. Each account page shows an activity log of admin actions taken on it, from the web admin and from the CLI alike. |
 
+The admin section's seven `POST` routes (status, note, key revoke,
+entitlement add, entitlement end, invite, and reconcile) all go through
+`withAdmin`, which checks the session and the CSRF token the same way
+`withSession` does for everyone else.
+
 The account page asks for a label on every key and holds an account to at most
-five unrevoked keys; `admin key create` is the operator escape hatch and skips
+five unrevoked keys; `key create` is the operator escape hatch and skips
 both rules. The request limit applies to the account, so extra keys do not add
 throughput.
 
@@ -96,13 +101,14 @@ A Patreon handoff token names the game site that minted
 it and is verified with that game's `secret` from `games`, the same value
 the site keeps under `api_user_secrets["gateway@mtgban.com"]`, so the
 handoff needs no secret of its own. Token-consuming posts (`/login/{token}`, `/trial`,
-`/session`) are accepted only from the gateway's own origin
-(`Sec-Fetch-Site` or `Origin`), so a foreign page cannot sign a visitor
-into someone else's account; the sign-in email form (`POST /login`) has
-the same requirement. An account can create at most 10 keys per hour.
-That limit and `login_links_per_hour` are counted in the gateway's
-process, and the app runs one instance, so they hold across the whole
-service (see Configuration).
+`/session`) are accepted only from the gateway's own origin, checked in
+order from `Sec-Fetch-Site`, then `Origin`, then `Referer`, so a foreign
+page cannot sign a visitor into someone else's account; the sign-in email
+form (`POST /login`) has the same requirement. An account can create at
+most 10 keys per hour, and the sign-in link form at most
+`login_links_per_hour` (5 by default) per IP and per email; both caps are
+counted in the gateway's own memory, so they are exact only because it
+runs as a single instance (see Configuration).
 
 ## Admin subcommands
 
@@ -157,8 +163,10 @@ the catalog changed; a changed amount creates a replacement Price and archives
 the old one. Run it in test mode and again in live mode.
 
 `checkout link -email -package [-games] [-stores] [-interval] [-invite]`:
-prints a hosted Checkout URL for the account. `-games` defaults to `magic`,
-which is always included. `-stores` applies to `starter` only and lists store
+prints a hosted Checkout URL for the account. `-games` defaults to `magic`
+but is not forced into the list; pass a different value, for example
+`-games pokemon`, and magic is left out of the plan. `-stores` applies to
+`starter` only and lists store
 family keys (`cardkingdom,starcitygames`), resolved as described under
 [Store families](#store-families); the implied family is added on its own.
 `-interval` defaults to `monthly`; `quarterly` needs `-invite` with a token
@@ -298,9 +306,13 @@ tuning (`readonly`, `max_open_conns`, `max_idle_conns`,
 `conn_max_lifetime_seconds`). `games` maps a game name to
 `{"upstream": "https://...", "secret": "..."}`; the secret must match the
 value under that game's `api_user_secrets["gateway@mtgban.com"]`. The
-gateway creates `magic_links`, `trials`, `handoff_nonces`, and
-`admin_actions` at startup through `ensureSchema`, so the database role
-needs `CREATE` on the schema on the first boot after this deploy (the
+gateway runs `ensureSchema` on every boot, not only the first one after a
+deploy; its statements are `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF
+NOT EXISTS`, and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so repeating
+them is a no-op. It creates and maintains all ten tables: `accounts`,
+`api_keys`, `entitlements`, `usage`, `invites`, `stripe_events`,
+`magic_links`, `trials`, `handoff_nonces`, and `admin_actions`. The
+database role therefore needs `CREATE` on the schema on every boot (the
 `apiaccess_app` role already has it).
 
 `public_url` is where customers land after Stripe Checkout:
