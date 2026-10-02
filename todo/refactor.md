@@ -152,7 +152,7 @@ fails before the fix.
 - [x] S5 first: a verb table, one `FlagSet` per verb, and narrow store
   interfaces so the happy paths get tests. This also fixes #1 and #9 at the
   root. Issue [#50](https://github.com/mtgban/api-gatewahy/issues/50)
-- [ ] S6 in the same series: `apiaccess.ManualGrant`, `KeyKindFor`, and a
+- [x] S6 in the same series: `apiaccess.ManualGrant`, `KeyKindFor`, and a
   shared usage window, used by both admins. Issue [#51](https://github.com/mtgban/api-gatewahy/issues/51)
 - [ ] S3: an `apiaccess/apiaccesstest` in-memory store plus a contract test
   that runs one table against it and against Postgres; delete the three

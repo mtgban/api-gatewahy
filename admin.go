@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os/user"
-	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -301,35 +299,17 @@ func grantAdd(ctx context.Context, d adminDeps, args []string, stdout, stderr io
 	if !need(stderr, "games", *games) || !need(stderr, "stores", *stores) || !need(stderr, "modes", *modes) {
 		return 2
 	}
-	scope, err := apiaccess.ValidateStoreScope(*stores)
+	in := apiaccess.ManualGrantInput{AccountID: a.ID, Games: apiaccess.SplitList(*games), Stores: *stores,
+		Modes: strings.Split(*modes, ","), Until: *until, Note: *note}
+	e, err := apiaccess.ManualGrant(in, d.games, time.Now())
 	if err != nil {
 		return fail(stderr, err)
-	}
-	modeList, err := apiaccess.ValidateModes(strings.Split(*modes, ","))
-	if err != nil {
-		return fail(stderr, err)
-	}
-	e := apiaccess.Entitlement{AccountID: a.ID, Source: "manual", Games: splitList(*games), StoreScope: scope, Modes: modeList, Note: *note}
-	if len(e.Games) == 0 {
-		return fail(stderr, errors.New("no games given"))
-	}
-	for _, g := range e.Games {
-		if !slices.Contains(d.games, g) {
-			return fail(stderr, fmt.Errorf("unknown game %q, configured games are %s", g, strings.Join(d.games, ",")))
-		}
-	}
-	if *until != "" {
-		t, err := time.Parse("2006-01-02", *until)
-		if err != nil {
-			return fail(stderr, fmt.Errorf("-until: %w", err))
-		}
-		e.ValidUntil = &t
 	}
 	e, err = d.store.AddEntitlement(ctx, e)
 	if err != nil {
 		return fail(stderr, err)
 	}
-	recordChange(ctx, d.store, stderr, "grant", a.ID, "entitlement "+strconv.FormatInt(e.ID, 10), strings.Join(e.Games, ",")+" "+e.StoreScope+" "+strings.Join(e.Modes, ","))
+	recordChange(ctx, d.store, stderr, "grant", a.ID, "entitlement "+strconv.FormatInt(e.ID, 10), apiaccess.GrantDetail(e))
 	fmt.Fprintf(stdout, "entitlement %d added for %s: games %s, stores %s, modes %s\n", e.ID, a.Email,
 		strings.Join(e.Games, ","), e.StoreScope, strings.Join(e.Modes, ","))
 	return 0
@@ -385,20 +365,10 @@ func adminUsageCmd(ctx context.Context, store usageStore, args []string, stdout,
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	from := time.Now().AddDate(0, 0, -30)
-	to := time.Now().AddDate(0, 0, 1)
-	var err error
-	if *since != "" {
-		if from, err = time.Parse("2006-01-02", *since); err != nil {
-			fmt.Fprintln(stderr, "api-gatewahy: -since:", err)
-			return 2
-		}
-	}
-	if *until != "" {
-		if to, err = time.Parse("2006-01-02", *until); err != nil {
-			fmt.Fprintln(stderr, "api-gatewahy: -until:", err)
-			return 2
-		}
+	from, to, err := apiaccess.UsageWindow(*since, *until, time.Now())
+	if err != nil {
+		fmt.Fprintln(stderr, "api-gatewahy:", err)
+		return 2
 	}
 	var accountID int64
 	if *email != "" {
@@ -471,10 +441,7 @@ func keyKindFor(ctx context.Context, store entitlementLister, accountID int64) (
 	if err != nil {
 		return "", err
 	}
-	if apiaccess.HasActiveStripePlan(ents) {
-		return apiaccess.KeyLive, nil
-	}
-	return apiaccess.KeyDemo, nil
+	return apiaccess.KeyKindFor(ents), nil
 }
 
 func exitFor(email string) int {
@@ -496,16 +463,6 @@ func fmtTime(t *time.Time) string {
 		return "-"
 	}
 	return t.Format("2006-01-02")
-}
-
-func splitList(s string) []string {
-	var out []string
-	for _, part := range strings.Split(s, ",") {
-		if p := strings.TrimSpace(part); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 // cliActor names who ran the command in the audit log.

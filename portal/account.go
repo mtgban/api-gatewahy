@@ -166,16 +166,13 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request, sess session.
 		s.renderAccount(w, r, http.StatusBadRequest, sess, a, "", "", "This account already has "+itoa(int64(maxActiveKeys))+" keys. Revoke one you no longer use before creating another.")
 		return
 	}
-	hasPlan, err := s.hasActiveStripePlan(r, a.ID)
+	ents, err := s.Store.ListEntitlements(r.Context(), a.ID)
 	if err != nil {
 		s.logf("key kind %s: %v", a.Email, err)
 		s.renderAccount(w, r, http.StatusInternalServerError, sess, a, "", "", tryAgainMsg)
 		return
 	}
-	kind := apiaccess.KeyDemo
-	if hasPlan {
-		kind = apiaccess.KeyLive
-	}
+	kind := apiaccess.KeyKindFor(ents)
 	if !s.limit.allow("keys:"+itoa(a.ID), keysPerHour, s.now()) {
 		s.renderAccount(w, r, http.StatusTooManyRequests, sess, a, "", "", "Too many keys created in the last hour. Try again later.")
 		return

@@ -139,7 +139,7 @@ func checkoutLink(ctx context.Context, d billingDeps, args []string, stdout, std
 	if !ok {
 		return 1
 	}
-	plan := billing.Plan{Package: *pkg, Interval: *interval, Games: splitList(*games), Stores: splitList(*stores)}
+	plan := billing.Plan{Package: *pkg, Interval: *interval, Games: apiaccess.SplitList(*games), Stores: apiaccess.SplitList(*stores)}
 	sess, err := newCheckout(d.store, d.api, d.cfg, d.cat, d.stores).Create(ctx, billing.Request{Account: a, Plan: plan, Invite: *invite})
 	if err != nil {
 		return fail(stderr, err)
@@ -268,10 +268,10 @@ func planChange(ctx context.Context, d billingDeps, args []string, stdout, stder
 	}
 	want.Package = *pkg
 	if given["games"] {
-		want.Games = splitList(*games)
+		want.Games = apiaccess.SplitList(*games)
 	}
 	if given["stores"] {
-		want.Stores = splitList(*stores)
+		want.Stores = apiaccess.SplitList(*stores)
 	} else if catPkg, ok := d.cat.Package(*pkg); !ok || catPkg.StoreScope != apiproductlist.StoreScopeExplicit {
 		// The old plan's stores only carry over onto a package that still picks stores.
 		want.Stores = nil
