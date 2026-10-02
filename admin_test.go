@@ -20,6 +20,7 @@ type memStore struct {
 	notifyErr    error
 	audit        []string
 	auditAccount []int64
+	usageCalls   int
 }
 
 func (m *memStore) CreateAccount(_ context.Context, email, note string) (apiaccess.Account, error) {
@@ -103,6 +104,7 @@ func (m *memStore) ListEntitlements(_ context.Context, accountID int64) ([]apiac
 	return out, nil
 }
 func (m *memStore) SummarizeUsage(context.Context, time.Time, time.Time, int64) ([]apiaccess.UsageRow, error) {
+	m.usageCalls++
 	return []apiaccess.UsageRow{{Email: "ck@example.com", Game: "magic", Requests: 12, Bytes: 3456, Errors: 1}}, nil
 }
 func (m *memStore) Notify(context.Context, string) error { m.notified++; return m.notifyErr }
@@ -345,5 +347,30 @@ func TestAdminConfigFlagAnywhere(t *testing.T) {
 	}
 	if path, rest := extractConfigFlag([]string{"add", "-email", "y"}); path != "" || len(rest) != 3 {
 		t.Errorf("absent: path %q rest %v", path, rest)
+	}
+}
+
+func TestAdminGrantRejectsPastUntil(t *testing.T) {
+	s := &memStore{}
+	admin(t, s, "account", "add", "-email", "ck@example.com")
+	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	code, _, errb := admin(t, s, "grant", "add", "-email", "ck@example.com", "-games", "magic",
+		"-stores", "TCG", "-modes", "retail", "-until", yesterday)
+	if code != 1 || !strings.Contains(errb, "until must be in the future") {
+		t.Errorf("past until: %d %q", code, errb)
+	}
+	if len(s.ents) != 0 {
+		t.Errorf("entitlement stored anyway: %+v", s.ents)
+	}
+}
+
+func TestAdminUsageRejectsSinceAfterUntil(t *testing.T) {
+	s := &memStore{}
+	code, _, errb := admin(t, s, "usage", "-since", "2026-02-01", "-until", "2026-01-01")
+	if code != 2 || !strings.Contains(errb, "since must not be after until") {
+		t.Errorf("since after until: %d %q", code, errb)
+	}
+	if s.usageCalls != 0 {
+		t.Errorf("store was called despite the bad range: %d calls", s.usageCalls)
 	}
 }

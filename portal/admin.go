@@ -256,40 +256,36 @@ func (s *Server) adminAddEntitlement(w http.ResponseWriter, r *http.Request, ses
 		return
 	}
 	bad := func(msg string) { s.renderAdminAccount(w, r, sess, a, http.StatusBadRequest, "", msg, "") }
-	e := apiaccess.Entitlement{AccountID: a.ID, Source: "manual", Games: listValues(r.PostForm, "games"), Note: strings.TrimSpace(r.FormValue("note"))}
-	if len(e.Games) == 0 {
-		bad("Pick at least one game.")
-		return
-	}
-	for _, g := range e.Games {
-		if !slices.Contains(s.Games, g) {
-			bad("Unknown game " + g + ".")
+	in := apiaccess.ManualGrantInput{AccountID: a.ID, Games: listValues(r.PostForm, "games"), Stores: r.FormValue("stores"),
+		Modes: listValues(r.PostForm, "modes"), Until: r.FormValue("until"), Note: strings.TrimSpace(r.FormValue("note"))}
+	e, err := apiaccess.ManualGrant(in, s.Games, s.now())
+	if err != nil {
+		var ge *apiaccess.GrantError
+		if !errors.As(err, &ge) {
+			bad(err.Error())
 			return
 		}
-	}
-	scope, err := apiaccess.ValidateStoreScope(r.FormValue("stores"))
-	if err != nil {
-		bad("Stores: " + err.Error())
-		return
-	}
-	e.StoreScope = scope
-	modes, err := apiaccess.ValidateModes(listValues(r.PostForm, "modes"))
-	if err != nil {
-		bad("Modes: " + err.Error())
-		return
-	}
-	e.Modes = modes
-	if until := r.FormValue("until"); until != "" {
-		t, err := time.Parse("2006-01-02", until)
-		if err != nil {
+		switch ge.Field {
+		case "games":
+			if ge.Msg == "no games given" {
+				bad("Pick at least one game.")
+				return
+			}
+			bad("Unknown game " + ge.Value + ".")
+		case "stores":
+			bad("Stores: " + ge.Msg)
+		case "modes":
+			bad("Modes: " + ge.Msg)
+		case "until":
+			if ge.Msg == "until must be in the future" {
+				bad("Until must be in the future.")
+				return
+			}
 			bad("Until must be YYYY-MM-DD.")
-			return
+		default:
+			bad(ge.Msg)
 		}
-		if t.Before(s.now()) {
-			bad("Until must be in the future.")
-			return
-		}
-		e.ValidUntil = &t
+		return
 	}
 	added, err := s.Store.AddEntitlement(r.Context(), e)
 	if err != nil {
@@ -297,8 +293,7 @@ func (s *Server) adminAddEntitlement(w http.ResponseWriter, r *http.Request, ses
 		s.renderAdminAccount(w, r, sess, a, http.StatusInternalServerError, "", tryAgainMsg, "")
 		return
 	}
-	detail := strings.Join(added.Games, ",") + " " + added.StoreScope + " " + strings.Join(added.Modes, ",")
-	s.audit(r, sess, "grant", a.ID, "entitlement "+itoa(added.ID), detail)
+	s.audit(r, sess, "grant", a.ID, "entitlement "+itoa(added.ID), apiaccess.GrantDetail(added))
 	s.notify(r)
 	s.adminRedirect(w, r, a, "granted")
 }
@@ -382,22 +377,14 @@ func (s *Server) adminUsage(w http.ResponseWriter, r *http.Request, sess session
 	now := s.now()
 	d := adminUsageData{Since: r.FormValue("since"), Until: r.FormValue("until"), Email: strings.TrimSpace(r.FormValue("email")),
 		Game: r.FormValue("game"), KeyPrefix: strings.TrimSpace(r.FormValue("key"))}
-	from, to := now.AddDate(0, 0, -30), now.AddDate(0, 0, 1)
-	var err error
-	if d.Since != "" {
-		if from, err = time.Parse("2006-01-02", d.Since); err != nil {
-			s.fail(w, r, http.StatusBadRequest, "Dates must be YYYY-MM-DD.")
-			return
+	from, to, err := apiaccess.UsageWindow(d.Since, d.Until, now)
+	if err != nil {
+		var we *apiaccess.WindowError
+		msg := "Dates must be YYYY-MM-DD."
+		if errors.As(err, &we) && we.Field == "order" {
+			msg = "Since must not be after until."
 		}
-	}
-	if d.Until != "" {
-		if to, err = time.Parse("2006-01-02", d.Until); err != nil {
-			s.fail(w, r, http.StatusBadRequest, "Dates must be YYYY-MM-DD.")
-			return
-		}
-	}
-	if from.After(to) {
-		s.fail(w, r, http.StatusBadRequest, "Since must not be after until.")
+		s.fail(w, r, http.StatusBadRequest, msg)
 		return
 	}
 	if d.Since == "" {

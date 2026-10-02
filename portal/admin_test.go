@@ -236,6 +236,23 @@ func TestAdminGrantRejectsPastUntil(t *testing.T) {
 	}
 }
 
+func TestAdminGrantRejectsUnknownGame(t *testing.T) {
+	ts := newTestServer(t)
+	ctx := context.Background()
+	_, ck, csrf := ts.signIn(t, "admin@example.com")
+	cust, _ := ts.store.GetOrCreateAccount(ctx, "cust7@example.com", "")
+	id := itoa(cust.ID)
+
+	form := "csrf=" + csrf + "&games=magick&stores=ALL_ACCESS&modes=retail"
+	rec := ts.do("POST", "/admin/accounts/"+id+"/entitlements", form, ck)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "Unknown game magick.") {
+		t.Errorf("unknown game: %d %s", rec.Code, rec.Body.String())
+	}
+	if ents, _ := ts.store.ListEntitlements(ctx, cust.ID); len(ents) != 0 {
+		t.Error("entitlement with an unknown game was still added")
+	}
+}
+
 func TestAdminInviteRejectsLongDays(t *testing.T) {
 	ts := newTestServer(t)
 	ctx := context.Background()

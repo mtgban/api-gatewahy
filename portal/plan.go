@@ -15,11 +15,7 @@ import (
 func listValues(v url.Values, key string) []string {
 	var out []string
 	for _, raw := range v[key] {
-		for _, part := range strings.Split(raw, ",") {
-			if p := strings.TrimSpace(part); p != "" {
-				out = append(out, p)
-			}
-		}
+		out = append(out, apiaccess.SplitList(raw)...)
 	}
 	return out
 }

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mtgban/api-gatewahy/apiaccess"
 	"github.com/mtgban/mtgban-website/apiproductlist"
 )
 
@@ -168,8 +169,8 @@ func PlanFromMetadata(m map[string]string) (Plan, int64, error) {
 	return Plan{
 		Package:  m["package"],
 		Interval: m["interval"],
-		Games:    splitList(m["games"]),
-		Stores:   splitList(m["stores"]),
+		Games:    apiaccess.SplitList(m["games"]),
+		Stores:   apiaccess.SplitList(m["stores"]),
 	}, accountID, nil
 }
 
@@ -215,16 +216,6 @@ func Dollars(cents int64) string {
 		return "$" + dollars
 	}
 	return "$" + dollars + "." + strconv.FormatInt(100+cents%100, 10)[1:]
-}
-
-func splitList(s string) []string {
-	var out []string
-	for _, part := range strings.Split(s, ",") {
-		if p := strings.TrimSpace(part); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 func dedupe(in []string, canon func(string) string) []string {

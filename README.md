@@ -130,18 +130,21 @@ may appear anywhere in the command line, before or after the verb:
   comma-separated game list, each name one of the games in the config,
   `-stores` is `ALL_ACCESS`, `BASE_ACCESS`, or a comma-separated list of
   backend store shorthands, `-modes` is a comma-separated subset of
-  `retail,buylist,sealed`, `-until` is `YYYY-MM-DD` (open-ended if omitted).
-  Operators type shorthands exactly as the backend spells them, for example
-  `TCGLow` or `CK`; they are case-sensitive and only their syntax is checked
-  (no spaces inside a shorthand), so a typo grants nothing rather than
-  failing. The admin page's manual entitlement form works the same way.
+  `retail,buylist,sealed`, `-until` is `YYYY-MM-DD` (open-ended if omitted)
+  and must be in the future. Operators type shorthands exactly as the
+  backend spells them, for example `TCGLow` or `CK`; they are case-sensitive
+  and only their syntax is checked (no spaces inside a shorthand), so a typo
+  grants nothing rather than failing. The admin page's manual entitlement
+  form works the same way.
 - `end -id`: ends a manual or trial entitlement by id as of now. A Stripe row is
   refused: cancel it in Stripe, or `account suspend` for an immediate cut-off.
 - `list -email`: table of an account's entitlements.
 
-`usage`: `-since -until -email`, dates as `YYYY-MM-DD`. Defaults to the
-last 30 days, all accounts. Prints requests, bytes, and errors by account
-and game.
+`usage`: `-since -until -email`, dates as `YYYY-MM-DD`; since must not be
+after until. Defaults to the last 30 days, all accounts; an `-until` more
+than 30 days back needs an explicit `-since` too, or since defaults past it
+and the command fails. Prints requests, bytes, and errors by account and
+game.
 
 ### Billing subcommands
 
