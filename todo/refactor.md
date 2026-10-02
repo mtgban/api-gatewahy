@@ -149,7 +149,7 @@ fails before the fix.
 
 ### Phase 3 checklist
 
-- [ ] S5 first: a verb table, one `FlagSet` per verb, and narrow store
+- [x] S5 first: a verb table, one `FlagSet` per verb, and narrow store
   interfaces so the happy paths get tests. This also fixes #1 and #9 at the
   root. Issue [#50](https://github.com/mtgban/api-gatewahy/issues/50)
 - [ ] S6 in the same series: `apiaccess.ManualGrant`, `KeyKindFor`, and a

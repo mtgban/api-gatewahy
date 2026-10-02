@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -86,20 +88,22 @@ func TestBillingCommandsRegistered(t *testing.T) {
 }
 
 // fakeBillingAPI is an in-memory billing.API with just enough behavior for
-// the CLI tests: it fetches and updates subscriptions and creates checkout
-// sessions, applying item adds/removes/quantity changes like Stripe would.
+// the CLI tests: subscriptions, checkout and portal sessions, and the products
+// and prices catalog seed creates, applying item changes like Stripe would.
 type fakeBillingAPI struct {
 	seq      int
 	subs     map[string]*stripe.Subscription
 	prices   map[string]*stripe.Price
 	updates  []*stripe.SubscriptionUpdateParams
 	sessions []*stripe.CheckoutSession
+	products map[string]*stripe.Product
+	portals  []*stripe.BillingPortalSessionCreateParams
 }
 
 var _ billing.API = (*fakeBillingAPI)(nil)
 
 func newFakeBillingAPI() *fakeBillingAPI {
-	return &fakeBillingAPI{subs: map[string]*stripe.Subscription{}, prices: map[string]*stripe.Price{}}
+	return &fakeBillingAPI{subs: map[string]*stripe.Subscription{}, prices: map[string]*stripe.Price{}, products: map[string]*stripe.Product{}}
 }
 
 func (f *fakeBillingAPI) next(prefix string) string {
@@ -212,25 +216,54 @@ func (f *fakeBillingAPI) ListOpenCheckoutSessions(context.Context, string) ([]*s
 	return nil, nil
 }
 func (f *fakeBillingAPI) ListSubscriptions(context.Context) ([]*stripe.Subscription, error) {
-	return nil, f.notImplemented("ListSubscriptions")
+	var out []*stripe.Subscription
+	for _, id := range slices.Sorted(maps.Keys(f.subs)) {
+		out = append(out, f.subs[id])
+	}
+	return out, nil
 }
-func (f *fakeBillingAPI) GetProduct(context.Context, string) (*stripe.Product, error) {
-	return nil, f.notImplemented("GetProduct")
+
+func (f *fakeBillingAPI) GetProduct(_ context.Context, id string) (*stripe.Product, error) {
+	p, ok := f.products[id]
+	if !ok {
+		return nil, &stripe.Error{Code: stripe.ErrorCodeResourceMissing}
+	}
+	return p, nil
 }
-func (f *fakeBillingAPI) CreateProduct(context.Context, *stripe.ProductCreateParams) (*stripe.Product, error) {
-	return nil, f.notImplemented("CreateProduct")
+
+func (f *fakeBillingAPI) CreateProduct(_ context.Context, p *stripe.ProductCreateParams) (*stripe.Product, error) {
+	prod := &stripe.Product{ID: stripe.StringValue(p.ID), Name: stripe.StringValue(p.Name), Active: true, Metadata: p.Metadata}
+	f.products[prod.ID] = prod
+	return prod, nil
 }
+
+// CreatePrice stores every field Seed compares, so a second seed finds nothing to change.
+func (f *fakeBillingAPI) CreatePrice(_ context.Context, p *stripe.PriceCreateParams) (*stripe.Price, error) {
+	if p.Recurring == nil {
+		return nil, fmt.Errorf("fake stripe: price %s is not recurring", stripe.StringValue(p.LookupKey))
+	}
+	price := &stripe.Price{
+		ID: f.next("price"), Active: true, LookupKey: stripe.StringValue(p.LookupKey), UnitAmount: stripe.Int64Value(p.UnitAmount),
+		Currency: stripe.Currency(stripe.StringValue(p.Currency)), Product: &stripe.Product{ID: stripe.StringValue(p.Product)}, Metadata: p.Metadata,
+		Recurring: &stripe.PriceRecurring{
+			Interval:      stripe.PriceRecurringInterval(stripe.StringValue(p.Recurring.Interval)),
+			IntervalCount: stripe.Int64Value(p.Recurring.IntervalCount),
+		},
+	}
+	f.prices[price.ID] = price
+	return price, nil
+}
+
+func (f *fakeBillingAPI) CreatePortalSession(_ context.Context, p *stripe.BillingPortalSessionCreateParams) (*stripe.BillingPortalSession, error) {
+	f.portals = append(f.portals, p)
+	return &stripe.BillingPortalSession{URL: "https://billing.stripe.test/" + stripe.StringValue(p.Customer)}, nil
+}
+
 func (f *fakeBillingAPI) UpdateProduct(context.Context, string, *stripe.ProductUpdateParams) (*stripe.Product, error) {
 	return nil, f.notImplemented("UpdateProduct")
 }
-func (f *fakeBillingAPI) CreatePrice(context.Context, *stripe.PriceCreateParams) (*stripe.Price, error) {
-	return nil, f.notImplemented("CreatePrice")
-}
 func (f *fakeBillingAPI) UpdatePrice(context.Context, string, *stripe.PriceUpdateParams) (*stripe.Price, error) {
 	return nil, f.notImplemented("UpdatePrice")
-}
-func (f *fakeBillingAPI) CreatePortalSession(context.Context, *stripe.BillingPortalSessionCreateParams) (*stripe.BillingPortalSession, error) {
-	return nil, f.notImplemented("CreatePortalSession")
 }
 
 // fakeBillingStore is billingStore over plain maps, keyed by account id and email.
@@ -239,6 +272,8 @@ type fakeBillingStore struct {
 	byEmail      map[string]apiaccess.Account
 	entitlements map[int64][]apiaccess.Entitlement
 	upserts      []apiaccess.Entitlement
+	invites      []apiaccess.Invite
+	notified     int
 }
 
 var _ billingStore = (*fakeBillingStore)(nil)
@@ -291,14 +326,16 @@ func (f *fakeBillingStore) ListActiveStripeRefs(context.Context) ([]apiaccess.St
 	return nil, nil
 }
 
-func (f *fakeBillingStore) Notify(context.Context, string) error { return nil }
+func (f *fakeBillingStore) Notify(context.Context, string) error { f.notified++; return nil }
 
 func (f *fakeBillingStore) ListEntitlements(_ context.Context, accountID int64) ([]apiaccess.Entitlement, error) {
 	return f.entitlements[accountID], nil
 }
 
-func (f *fakeBillingStore) CreateInvite(context.Context, string, string, time.Duration, string) (string, apiaccess.Invite, error) {
-	return "", apiaccess.Invite{}, errors.New("fake store: CreateInvite not implemented")
+func (f *fakeBillingStore) CreateInvite(_ context.Context, intervalKey, email string, ttl time.Duration, note string) (string, apiaccess.Invite, error) {
+	inv := apiaccess.Invite{IntervalKey: intervalKey, Email: email, ExpiresAt: time.Now().Add(ttl), Note: note}
+	f.invites = append(f.invites, inv)
+	return fmt.Sprintf("inv_%d", len(f.invites)), inv, nil
 }
 
 // billingTestDeps builds billingDeps with a magic+pokemon catalog and both fakes wired in.
@@ -412,5 +449,105 @@ func TestCheckoutLinkPrintsURLOnly(t *testing.T) {
 	want := fmt.Sprintf("checkout link for x@example.com, valid 24 hours:\n\n    %s\n\n", api.sessions[0].URL)
 	if out.String() != want {
 		t.Errorf("stdout = %q, want %q", out.String(), want)
+	}
+}
+
+// billingCmd runs one billing command against d and returns its exit code and output.
+func billingCmd(t *testing.T, d billingDeps, args ...string) (int, string, string) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	code := runBilling(context.Background(), d, args[0], args[1:], &out, &errb)
+	return code, out.String(), errb.String()
+}
+
+func TestCatalogSeedCreatesThenMatches(t *testing.T) {
+	api := newFakeBillingAPI()
+	d := billingTestDeps(api, newFakeBillingStore())
+	code, out, errb := billingCmd(t, d, "catalog", "seed")
+	if code != 0 {
+		t.Fatalf("first seed: exit %d, stderr %q", code, errb)
+	}
+	for _, want := range []string{"created " + billing.ProductID("all_data") + "\n", "created " + apiproductlist.LookupKey("all_data", "monthly") + "\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("first seed stdout %q lacks %q", out, want)
+		}
+	}
+	if len(api.products) != len(d.cat.Packages)+len(d.cat.Addons) {
+		t.Errorf("%d products, want one per package and add-on", len(api.products))
+	}
+	code, out, errb = billingCmd(t, d, "catalog", "seed")
+	if code != 0 || out != "Stripe already matches the catalog\n" {
+		t.Errorf("second seed: exit %d, stdout %q, stderr %q", code, out, errb)
+	}
+}
+
+func TestInviteCreate(t *testing.T) {
+	store := newFakeBillingStore()
+	d := billingTestDeps(newFakeBillingAPI(), store)
+	code, out, errb := billingCmd(t, d, "invite", "create", "-interval", "quarterly", "-email", "x@example.com", "-days", "7", "-note", "trial")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errb)
+	}
+	if len(store.invites) != 1 {
+		t.Fatalf("%d invites stored, want 1", len(store.invites))
+	}
+	inv := store.invites[0]
+	if inv.IntervalKey != "quarterly" || inv.Email != "x@example.com" || inv.Note != "trial" {
+		t.Errorf("invite %+v", inv)
+	}
+	if left := time.Until(inv.ExpiresAt); left < 6*24*time.Hour || left > 7*24*time.Hour {
+		t.Errorf("invite expires in %v, want 7 days", left)
+	}
+	want := fmt.Sprintf("invite for quarterly (x@example.com), expires %s. Shown once, copy it now:\n\n    inv_1\n\n", inv.ExpiresAt.Format("2006-01-02"))
+	if out != want {
+		t.Errorf("stdout = %q, want %q", out, want)
+	}
+}
+
+func TestStripeReconcile(t *testing.T) {
+	api := newFakeBillingAPI()
+	pkgKey := apiproductlist.LookupKey("all_data", "monthly")
+	api.addPrice(pkgKey)
+	api.addSub(t, "sub_1", map[string]string{
+		"package": "all_data", "interval": "monthly", "games": "magic", "stores": "", "account_id": "1",
+	}, map[string]int64{pkgKey: 1})
+	store := newFakeBillingStore()
+	store.addAccount(apiaccess.Account{ID: 1, Email: "x@example.com", Status: "active"})
+	d := billingTestDeps(api, store)
+
+	code, out, errb := billingCmd(t, d, "stripe", "reconcile", "-sub", "sub_1")
+	if code != 0 || out != "subscription sub_1 reconciled\n" {
+		t.Fatalf("one: exit %d, stdout %q, stderr %q", code, out, errb)
+	}
+	if len(store.upserts) != 1 || store.upserts[0].ExternalRef != "sub_1" || store.upserts[0].Status != "active" || store.notified != 1 {
+		t.Errorf("one: upserts %+v, notified %d", store.upserts, store.notified)
+	}
+
+	code, out, errb = billingCmd(t, d, "stripe", "reconcile")
+	if code != 0 || out != "stripe reconcile: 1 subscriptions in sync\n" {
+		t.Fatalf("all: exit %d, stdout %q, stderr %q", code, out, errb)
+	}
+	if len(store.upserts) != 2 || store.notified != 2 {
+		t.Errorf("all: %d upserts, notified %d, want 2 and 2", len(store.upserts), store.notified)
+	}
+}
+
+func TestPortalLink(t *testing.T) {
+	api := newFakeBillingAPI()
+	store := newFakeBillingStore()
+	store.addAccount(apiaccess.Account{ID: 1, Email: "x@example.com", Status: "active", StripeCustomerID: "cus_1"})
+	d := billingTestDeps(api, store)
+	d.cfg.PublicURL = "https://api.example.com"
+
+	code, out, errb := billingCmd(t, d, "portal", "link", "-email", "x@example.com")
+	if code != 0 || out != "portal link for x@example.com:\n\n    https://billing.stripe.test/cus_1\n\n" {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errb)
+	}
+	if code, _, errb := billingCmd(t, d, "portal", "link", "-email", "x@example.com", "-return", "https://example.com/back"); code != 0 {
+		t.Fatalf("with -return: exit %d, stderr %q", code, errb)
+	}
+	if len(api.portals) != 2 || stripe.StringValue(api.portals[0].ReturnURL) != "https://api.example.com" ||
+		stripe.StringValue(api.portals[1].ReturnURL) != "https://example.com/back" {
+		t.Errorf("portal sessions %+v, want public_url then -return", api.portals)
 	}
 }
