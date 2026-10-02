@@ -166,7 +166,7 @@ func TestPatreonSessionHandoff(t *testing.T) {
 		t.Errorf("pending: %q", rec.Header().Get("Location"))
 	}
 	merged := cookieNamed(rec, session.PendingName)
-	pv, _ := ts.Sessions.Open(merged.Value)
+	pv, _ := ts.Sessions.Open(merged.Value, session.PurposePending)
 	if pv.Get("package") != "all_data" || pv.Get("return_to") != "https://pokemon.mtgban.com/api-plans" {
 		t.Errorf("pending after session merge: %v", pv)
 	}

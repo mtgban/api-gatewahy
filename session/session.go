@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -26,6 +27,19 @@ const DefaultTTL = 30 * 24 * time.Hour
 
 // ErrInvalid covers a missing, forged, malformed, or expired token alike.
 var ErrInvalid = errors.New("session: invalid or expired")
+
+// minSecretLen is the shortest secret NewCodec accepts.
+const minSecretLen = 32
+
+// Purpose binds a sealed token to the cookie it came from, so a pending
+// value cannot be replayed as a session or the reverse.
+type Purpose string
+
+// The two purposes a token can carry.
+const (
+	PurposeSession Purpose = "session"
+	PurposePending Purpose = "pending"
+)
 
 // Session is who is signed in.
 type Session struct {
@@ -60,19 +74,29 @@ func (c *Codec) ttl() time.Duration {
 	return DefaultTTL
 }
 
-// Seal signs v with an expiry of ttl from now under the reserved key _exp.
-func (c *Codec) Seal(v url.Values, ttl time.Duration) string {
+// NewCodec builds a Codec, rejecting a secret shorter than minSecretLen.
+func NewCodec(secret []byte, ttl time.Duration, secure bool, now func() time.Time) (*Codec, error) {
+	if len(secret) < minSecretLen {
+		return nil, fmt.Errorf("session: secret must be at least %d bytes", minSecretLen)
+	}
+	return &Codec{Secret: secret, TTL: ttl, Secure: secure, Now: now}, nil
+}
+
+// Seal signs v with an expiry of ttl under _exp and purpose under _p,
+// overwriting either key already in v.
+func (c *Codec) Seal(v url.Values, ttl time.Duration, purpose Purpose) string {
 	out := url.Values{}
 	for k, vals := range v {
 		out[k] = vals
 	}
 	out.Set("_exp", strconv.FormatInt(c.now().Add(ttl).Unix(), 10))
+	out.Set("_p", string(purpose))
 	body := base64.RawURLEncoding.EncodeToString([]byte(out.Encode()))
 	return body + "." + c.sign(body)
 }
 
-// Open verifies a sealed token and returns its values, _exp included.
-func (c *Codec) Open(token string) (url.Values, error) {
+// Open verifies a sealed token for purpose and returns its values, _exp included.
+func (c *Codec) Open(token string, purpose Purpose) (url.Values, error) {
 	body, sig, ok := strings.Cut(token, ".")
 	if !ok || !hmac.Equal([]byte(sig), []byte(c.sign(body))) {
 		return nil, ErrInvalid
@@ -83,6 +107,9 @@ func (c *Codec) Open(token string) (url.Values, error) {
 	}
 	v, err := url.ParseQuery(string(raw))
 	if err != nil {
+		return nil, ErrInvalid
+	}
+	if purpose == "" || Purpose(v.Get("_p")) != purpose {
 		return nil, ErrInvalid
 	}
 	exp, err := strconv.ParseInt(v.Get("_exp"), 10, 64)
@@ -108,12 +135,12 @@ func (c *Codec) Encode(s Session) (string, Session) {
 	v.Set("e", s.Email)
 	v.Set("iat", strconv.FormatInt(s.IssuedAt.Unix(), 10))
 	v.Set("ep", strconv.FormatInt(s.Epoch, 10))
-	return c.Seal(v, c.ttl()), s
+	return c.Seal(v, c.ttl(), PurposeSession), s
 }
 
 // Decode reads a token Encode produced.
 func (c *Codec) Decode(token string) (Session, error) {
-	v, err := c.Open(token)
+	v, err := c.Open(token, PurposeSession)
 	if err != nil {
 		return Session{}, err
 	}
@@ -150,7 +177,7 @@ func (c *Codec) Clear(w http.ResponseWriter) {
 
 // SetPending seals v into the pending cookie for ttl.
 func (c *Codec) SetPending(w http.ResponseWriter, v url.Values, ttl time.Duration) {
-	http.SetCookie(w, c.cookie(PendingName, c.Seal(v, ttl), int(ttl.Seconds())))
+	http.SetCookie(w, c.cookie(PendingName, c.Seal(v, ttl, PurposePending), int(ttl.Seconds())))
 }
 
 // Pending reads the pending cookie.
@@ -159,7 +186,7 @@ func (c *Codec) Pending(r *http.Request) (url.Values, error) {
 	if err != nil {
 		return nil, ErrInvalid
 	}
-	return c.Open(ck.Value)
+	return c.Open(ck.Value, PurposePending)
 }
 
 // ClearPending expires the pending cookie.

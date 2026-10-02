@@ -67,9 +67,6 @@ func portalDepsFromEnv(cfg *config.Config, stderr io.Writer) (*portalDeps, error
 	if secret == "" {
 		return nil, nil
 	}
-	if len(secret) < 32 {
-		return nil, errors.New("GATEWAY_SESSION_SECRET must be at least 32 characters")
-	}
 	d := &portalDeps{sessionSecret: []byte(secret)}
 	smtp, err := mailer.FromEnv(cfg.Mail.From)
 	if err != nil {
@@ -82,6 +79,15 @@ func portalDepsFromEnv(cfg *config.Config, stderr io.Writer) (*portalDeps, error
 		d.mail = smtp
 	}
 	return d, nil
+}
+
+// portalCodec builds the portal's session codec, rejecting a short secret.
+func portalCodec(pd *portalDeps, cfg *config.Config) (*session.Codec, error) {
+	codec, err := session.NewCodec(pd.sessionSecret, 0, strings.HasPrefix(cfg.PublicURL, "https://"), nil)
+	if err != nil {
+		return nil, fmt.Errorf("GATEWAY_SESSION_SECRET: %w", err)
+	}
+	return codec, nil
 }
 
 func serve(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -290,9 +296,14 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 			abort()
 			return nil, nil, err
 		}
+		codec, err := portalCodec(pd, cfg)
+		if err != nil {
+			abort()
+			return nil, nil, err
+		}
 		web = &portal.Server{
 			Store: store, Catalog: cat, Games: cfg.GameNames(), Stores: stores,
-			Sessions:          &session.Codec{Secret: pd.sessionSecret, Secure: strings.HasPrefix(cfg.PublicURL, "https://")},
+			Sessions:          codec,
 			Mail:              pd.mail,
 			PublicURL:         strings.TrimRight(cfg.PublicURL, "/"),
 			PricingURL:        cfg.PricingURL,

@@ -328,10 +328,6 @@ func TestPortalDepsFromEnv(t *testing.T) {
 	if d, err := portalDepsFromEnv(cfg, io.Discard); d != nil || err != nil {
 		t.Errorf("off: %v %v", d, err)
 	}
-	t.Setenv("GATEWAY_SESSION_SECRET", "short")
-	if _, err := portalDepsFromEnv(cfg, io.Discard); err == nil {
-		t.Error("short secret accepted")
-	}
 	t.Setenv("GATEWAY_SESSION_SECRET", "0123456789abcdef0123456789abcdef")
 	t.Setenv("MAIL_SMTP_HOST", "")
 	d, err := portalDepsFromEnv(cfg, io.Discard)
@@ -340,6 +336,18 @@ func TestPortalDepsFromEnv(t *testing.T) {
 	}
 	if _, ok := d.mail.(*mailer.Log); !ok {
 		t.Errorf("mail %T, want the logging mailer", d.mail)
+	}
+}
+
+func TestPortalCodecRejectsAShortSecret(t *testing.T) {
+	cfg := &config.Config{}
+	short := &portalDeps{sessionSecret: []byte("0123456789abcdef0123456789abcde")}
+	if _, err := portalCodec(short, cfg); err == nil || !strings.Contains(err.Error(), "32") || !strings.Contains(err.Error(), "GATEWAY_SESSION_SECRET") {
+		t.Errorf("short secret: %v", err)
+	}
+	ok := &portalDeps{sessionSecret: []byte("0123456789abcdef0123456789abcdef")}
+	if _, err := portalCodec(ok, cfg); err != nil {
+		t.Errorf("32-byte secret: %v", err)
 	}
 }
 
