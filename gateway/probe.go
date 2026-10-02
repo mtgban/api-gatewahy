@@ -11,8 +11,6 @@ import (
 	"sort"
 	"sync"
 	"time"
-
-	"github.com/mtgban/mtgban-website/apisig"
 )
 
 // dbProbeName keys the database's entry alongside the game names in failing.
@@ -28,6 +26,8 @@ type Prober struct {
 	games  map[string]Upstream
 	email  string
 	link   string
+	ttl    time.Duration
+	now    func() time.Time
 	client *http.Client
 	pingDB func(context.Context) error
 	alert  func(string)
@@ -36,8 +36,12 @@ type Prober struct {
 	failing map[string]bool
 }
 
-// NewProber builds a prober. pingDB and alert may both be nil.
-func NewProber(games map[string]Upstream, email, link string, client *http.Client, pingDB func(context.Context) error, alert func(string)) *Prober {
+// NewProber builds a prober. now, pingDB and alert may be nil; ttl must be positive,
+// which serve.go gets from gateway.New's already-validated SigTTL.
+func NewProber(games map[string]Upstream, email, link string, ttl time.Duration, now func() time.Time, client *http.Client, pingDB func(context.Context) error, alert func(string)) *Prober {
+	if now == nil {
+		now = time.Now
+	}
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
@@ -47,26 +51,32 @@ func NewProber(games map[string]Upstream, email, link string, client *http.Clien
 	if alert == nil {
 		alert = func(string) {}
 	}
-	return &Prober{games: games, email: email, link: link, client: client, pingDB: pingDB, alert: alert, failing: map[string]bool{}}
+	return &Prober{games: games, email: email, link: link, ttl: ttl, now: now, client: client, pingDB: pingDB, alert: alert, failing: map[string]bool{}}
 }
 
 // Check probes every game once and returns the failures by name.
 func (p *Prober) Check(ctx context.Context) map[string]error {
 	out := map[string]error{}
 	for name, up := range p.games {
-		out[name] = p.probe(ctx, up)
+		out[name] = p.probe(ctx, name, up)
 	}
 	return out
 }
 
-func (p *Prober) probe(ctx context.Context, up Upstream) error {
-	sig := apisig.Mint(up.Secret, p.link, apisig.Claims{
-		API:     "BASE_ACCESS",
-		Fields:  url.Values{"APImode": {"retail"}, "UserEmail": {p.email}},
-		Expires: time.Now().Add(5 * time.Minute).Unix(),
-	})
+// probeRoute is the canonical stores-list route every game serves, the same
+// one live traffic uses, so its BackendPath can't drift from the probe's.
+func probeRoute(game string) (Route, error) {
+	return ParseRoute("/v1/" + game + "/mtgban/stores.json")
+}
+
+func (p *Prober) probe(ctx context.Context, game string, up Upstream) error {
+	route, err := probeRoute(game)
+	if err != nil {
+		return err
+	}
+	sig := mintSig(up, p.link, p.email, "BASE_ACCESS", []string{"retail"}, p.now().Add(p.ttl))
 	target := *up.URL
-	target.Path = "/api/mtgban/stores.json"
+	target.Path = route.BackendPath()
 	target.RawQuery = url.Values{"sig": {sig}}.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 	if err != nil {

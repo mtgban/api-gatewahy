@@ -2,6 +2,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -41,32 +42,36 @@ type MailConfig struct {
 
 // Config is the whole configuration file.
 type Config struct {
-	Port                   string                `json:"port"`
-	InstanceName           string                `json:"instance_name"`
-	Link                   string                `json:"link"`
-	ClientIPHeader         string                `json:"client_ip_header"`
-	PublicURL              string                `json:"public_url"`
-	GatewayEmail           string                `json:"gateway_email"`
-	APIAccess              *timeseries.SQLConfig `json:"apiaccess_config"`
-	Observability          *timeseries.SQLConfig `json:"observability_config"`
-	DiscordHook            string                `json:"discord_api_notif_hook"`
-	Games                  map[string]Game       `json:"games"`
-	CacheTTLSeconds        int                   `json:"cache_ttl_seconds"`
-	StaleGraceSeconds      int                   `json:"stale_grace_seconds"`
-	LookupTimeoutSeconds   int                   `json:"lookup_timeout_seconds"`
-	PerKeyRequestsPerSec   float64               `json:"per_key_requests_per_sec"`
-	PerKeyBurst            int                   `json:"per_key_burst"`
-	PerIPRequestsPerSec    float64               `json:"per_ip_requests_per_sec"`
-	PerIPBurst             int                   `json:"per_ip_burst"`
-	UpstreamTimeoutSeconds int                   `json:"upstream_timeout_seconds"`
-	ShutdownGraceSeconds   int                   `json:"shutdown_grace_seconds"`
-	UsageRetentionDays     int                   `json:"usage_retention_days"`
-	Stripe                 StripeConfig          `json:"stripe"`
-	PricingURL             string                `json:"pricing_url"`
-	AdminEmails            []string              `json:"admin_emails"`
-	Mail                   MailConfig            `json:"mail"`
-	TrialDays              int                   `json:"trial_days"`
-	LoginLinksPerHour      int                   `json:"login_links_per_hour"`
+	Port           string                `json:"port"`
+	InstanceName   string                `json:"instance_name"`
+	Link           string                `json:"link"`
+	ClientIPHeader string                `json:"client_ip_header"`
+	PublicURL      string                `json:"public_url"`
+	GatewayEmail   string                `json:"gateway_email"`
+	APIAccess      *timeseries.SQLConfig `json:"apiaccess_config"`
+	Observability  *timeseries.SQLConfig `json:"observability_config"`
+	DiscordHook    string                `json:"discord_api_notif_hook"`
+	Games          map[string]Game       `json:"games"`
+	// RetiredKnownStores accepts and ignores an old config's known_stores,
+	// so the strict decoder below doesn't break one still carrying it.
+	RetiredKnownStores     []string     `json:"known_stores"`
+	CacheTTLSeconds        int          `json:"cache_ttl_seconds"`
+	StaleGraceSeconds      int          `json:"stale_grace_seconds"`
+	LookupTimeoutSeconds   int          `json:"lookup_timeout_seconds"`
+	PerKeyRequestsPerSec   float64      `json:"per_key_requests_per_sec"`
+	PerKeyBurst            int          `json:"per_key_burst"`
+	PerIPRequestsPerSec    float64      `json:"per_ip_requests_per_sec"`
+	PerIPBurst             int          `json:"per_ip_burst"`
+	UpstreamTimeoutSeconds int          `json:"upstream_timeout_seconds"`
+	SigTTLSeconds          int          `json:"sig_ttl_seconds"`
+	ShutdownGraceSeconds   int          `json:"shutdown_grace_seconds"`
+	UsageRetentionDays     int          `json:"usage_retention_days"`
+	Stripe                 StripeConfig `json:"stripe"`
+	PricingURL             string       `json:"pricing_url"`
+	AdminEmails            []string     `json:"admin_emails"`
+	Mail                   MailConfig   `json:"mail"`
+	TrialDays              int          `json:"trial_days"`
+	LoginLinksPerHour      int          `json:"login_links_per_hour"`
 }
 
 // DefaultClientIPHeader is the header DigitalOcean App Platform's ingress
@@ -104,7 +109,9 @@ func Parse(r io.Reader) (*Config, error) {
 		return nil, err
 	}
 	var c Config
-	if err := json.Unmarshal(data, &c); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&c); err != nil {
 		return nil, err
 	}
 	// An explicit empty client_ip_header means trust only the peer address.
@@ -114,7 +121,9 @@ func Parse(r io.Reader) (*Config, error) {
 			GraceDays *int `json:"grace_days"`
 		} `json:"stripe"`
 	}
-	_ = json.Unmarshal(data, &given)
+	if err := json.Unmarshal(data, &given); err != nil {
+		return nil, err
+	}
 	c.applyDefaults(given.ClientIPHeader == nil, given.Stripe == nil || given.Stripe.GraceDays == nil)
 	if err := c.Validate(); err != nil {
 		return nil, err
@@ -158,6 +167,9 @@ func (c *Config) applyDefaults(defaultClientIPHeader, defaultGraceDays bool) {
 	}
 	if c.UpstreamTimeoutSeconds <= 0 {
 		c.UpstreamTimeoutSeconds = 300
+	}
+	if c.SigTTLSeconds <= 0 {
+		c.SigTTLSeconds = 300
 	}
 	if c.ShutdownGraceSeconds <= 0 {
 		c.ShutdownGraceSeconds = 60
@@ -217,6 +229,9 @@ func (c *Config) Validate() error {
 	}
 	if c.LoginLinksPerHour < 0 {
 		return errors.New("login_links_per_hour must not be negative")
+	}
+	if c.SigTTLSeconds <= 0 {
+		return errors.New("sig_ttl_seconds must be positive")
 	}
 	if _, err := mail.ParseAddress(c.Mail.From); err != nil {
 		return fmt.Errorf("mail.from: %w", err)
