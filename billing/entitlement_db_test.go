@@ -48,7 +48,7 @@ func TestCatalogEntitlementRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := apiaccess.NewClient(cfg)
+	client, err := apiaccess.NewClient(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestCatalogEntitlementRoundtrip(t *testing.T) {
 		scope, modes := resolved.Scope, resolved.Modes
 		e := apiaccess.Entitlement{
 			AccountID:   acct.ID,
-			Source:      "stripe",
+			Source:      apiaccess.SourceStripe,
 			Games:       plan.Games,
 			StoreScope:  scope,
 			Modes:       modes,

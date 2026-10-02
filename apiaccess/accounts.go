@@ -8,11 +8,25 @@ import (
 	"time"
 )
 
+// AccountStatus says whether an account's keys and portal sessions work.
+type AccountStatus string
+
+// The account statuses; migration 2 checks the column against them.
+const (
+	AccountActive    AccountStatus = "active"
+	AccountSuspended AccountStatus = "suspended"
+)
+
+// Valid reports whether s is one of the account statuses.
+func (s AccountStatus) Valid() bool {
+	return s == AccountActive || s == AccountSuspended
+}
+
 // Account is one customer.
 type Account struct {
 	ID               int64
 	Email            string
-	Status           string
+	Status           AccountStatus
 	CreatedAt        time.Time
 	Note             string
 	StripeCustomerID string
@@ -57,9 +71,9 @@ func (c *Client) GetAccount(ctx context.Context, id int64) (Account, error) {
 		`SELECT `+accountCols+` FROM accounts WHERE id = $1`, id))
 }
 
-// SetAccountStatus sets "active" or "suspended".
-func (c *Client) SetAccountStatus(ctx context.Context, id int64, status string) error {
-	if status != "active" && status != "suspended" {
+// SetAccountStatus sets AccountActive or AccountSuspended.
+func (c *Client) SetAccountStatus(ctx context.Context, id int64, status AccountStatus) error {
+	if !status.Valid() {
 		return errors.New("apiaccess: status must be active or suspended")
 	}
 	res, err := c.db.ExecContext(ctx, `UPDATE accounts SET status = $2 WHERE id = $1`, id, status)

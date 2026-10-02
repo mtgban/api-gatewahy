@@ -45,7 +45,7 @@ func ManualGrant(in ManualGrantInput, games []string, now time.Time) (Entitlemen
 	if err != nil {
 		return Entitlement{}, &GrantError{Field: "modes", Msg: err.Error()}
 	}
-	e := Entitlement{AccountID: in.AccountID, Source: "manual", Games: in.Games, StoreScope: scope, Modes: modes, Note: in.Note}
+	e := Entitlement{AccountID: in.AccountID, Source: SourceManual, Games: in.Games, StoreScope: scope, Modes: modes, Note: in.Note}
 	if in.Until != "" {
 		t, err := time.Parse("2006-01-02", in.Until)
 		if err != nil {

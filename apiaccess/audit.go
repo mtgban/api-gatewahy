@@ -52,3 +52,8 @@ func (c *Client) ListAdminActions(ctx context.Context, accountID int64, limit in
 	}
 	return out, rows.Err()
 }
+
+// PruneAdminActions deletes actions taken before the cutoff and returns how many.
+func (c *Client) PruneAdminActions(ctx context.Context, before time.Time) (int64, error) {
+	return c.deleteCount(ctx, `DELETE FROM admin_actions WHERE at < $1`, before)
+}

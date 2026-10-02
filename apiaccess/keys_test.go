@@ -45,7 +45,7 @@ func TestKeysRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	a, _ := c.CreateAccount(ctx, "k@example.com", "")
 	if _, err := c.AddEntitlement(ctx, Entitlement{
-		AccountID: a.ID, Source: "manual", Games: []string{"magic"},
+		AccountID: a.ID, Source: SourceManual, Games: []string{"magic"},
 		StoreScope: "ALL_ACCESS", Modes: []string{"retail"},
 	}); err != nil {
 		t.Fatal(err)

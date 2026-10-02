@@ -233,6 +233,7 @@ JSON, named by `-config` or `BAN_CONFIG_PATH` (a `b2://` path needs
 | `sig_ttl_seconds` | `300` |
 | `shutdown_grace_seconds` | `60` |
 | `usage_retention_days` | `395` |
+| `admin_actions_retention_days` | `90` |
 | `stripe.grace_days` | `10` |
 | `stripe.success_path` | `/checkout/success` |
 | `stripe.cancel_path` | `/checkout/cancel` |
@@ -305,15 +306,25 @@ and accept the loss during one.
 tuning (`readonly`, `max_open_conns`, `max_idle_conns`,
 `conn_max_lifetime_seconds`). `games` maps a game name to
 `{"upstream": "https://...", "secret": "..."}`; the secret must match the
-value under that game's `api_user_secrets["gateway@mtgban.com"]`. The
-gateway runs `ensureSchema` on every boot, not only the first one after a
-deploy; its statements are `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF
-NOT EXISTS`, and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so repeating
-them is a no-op. It creates and maintains all ten tables: `accounts`,
-`api_keys`, `entitlements`, `usage`, `invites`, `stripe_events`,
-`magic_links`, `trials`, `handoff_nonces`, and `admin_actions`. The
-database role therefore needs `CREATE` on the schema on every boot (the
-`apiaccess_app` role already has it).
+value under that game's `api_user_secrets["gateway@mtgban.com"]`.
+
+The gateway owns its schema in `apiaccess_config`'s database, eleven
+tables: `accounts`, `api_keys`, `entitlements`, `usage`, `invites`,
+`stripe_events`, `magic_links`, `trials`, `handoff_nonces`,
+`admin_actions`, and `schema_migrations`, which records the numbered
+migrations in `apiaccess/migrations.go` that have run. Each migration runs
+once. At startup every pending one runs inside a single transaction under
+an advisory lock with a 5 s `lock_timeout`, so a boot that cannot get its
+locks fails rather than queueing behind live traffic, and a failed boot
+applies nothing. `schema_migrations` is created only when it is missing,
+so the database role needs `CREATE` on the schema on the first boot after
+the deploy that introduced it and on any boot that carries a new
+migration, and on no other (the `apiaccess_app` role already has it).
+After posting the daily summary at 00:05 UTC the gateway prunes `usage`
+past `usage_retention_days`, `stripe_events` 30 days after they arrived,
+`invites` 30 days after they expired, used or not, and `admin_actions`
+past `admin_actions_retention_days`; `magic_links` and `handoff_nonces`
+clear their own expired rows as they are written.
 
 `public_url` is where customers land after Stripe Checkout:
 `stripe.success_path` and `stripe.cancel_path` are joined onto it.

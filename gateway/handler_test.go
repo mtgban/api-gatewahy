@@ -129,7 +129,7 @@ func testHandler(t *testing.T, backend *httptest.Server, secret string) (*Handle
 	src := &fakeSource{res: map[string]apiaccess.Lookup{
 		apiaccess.HashKey(goodKey): {
 			Key:     apiaccess.Key{ID: 7},
-			Account: apiaccess.Account{ID: 3, Status: "active"},
+			Account: apiaccess.Account{ID: 3, Status: apiaccess.AccountActive},
 			Entitlements: []apiaccess.Entitlement{
 				ent([]string{"magic"}, "BASE_ACCESS", "retail", "buylist"),
 				ent([]string{"pokemon"}, "CK,TCG", "retail"),
@@ -137,22 +137,22 @@ func testHandler(t *testing.T, backend *httptest.Server, secret string) (*Handle
 		},
 		apiaccess.HashKey(goodKey2): {
 			Key:     apiaccess.Key{ID: 11},
-			Account: apiaccess.Account{ID: 3, Status: "active"},
+			Account: apiaccess.Account{ID: 3, Status: apiaccess.AccountActive},
 			Entitlements: []apiaccess.Entitlement{
 				ent([]string{"magic"}, "BASE_ACCESS", "retail", "buylist"),
 			},
 		},
 		apiaccess.HashKey(revokedKey): {
 			Key:     apiaccess.Key{ID: 8, RevokedAt: &revokedAt},
-			Account: apiaccess.Account{ID: 3, Status: "active"},
+			Account: apiaccess.Account{ID: 3, Status: apiaccess.AccountActive},
 		},
 		apiaccess.HashKey(suspKey): {
 			Key:     apiaccess.Key{ID: 9},
-			Account: apiaccess.Account{ID: 4, Status: "suspended"},
+			Account: apiaccess.Account{ID: 4, Status: apiaccess.AccountSuspended},
 		},
 		apiaccess.HashKey(devKey): {
 			Key:          apiaccess.Key{ID: 10},
-			Account:      apiaccess.Account{ID: 5, Status: "active"},
+			Account:      apiaccess.Account{ID: 5, Status: apiaccess.AccountActive},
 			Entitlements: []apiaccess.Entitlement{ent([]string{"magic"}, "DEV_ACCESS", "retail")},
 		},
 	}}

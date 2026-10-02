@@ -50,9 +50,9 @@ type entitlementView struct {
 func (s *Server) describeEntitlement(sites *siteLookup, e apiaccess.Entitlement) entitlementView {
 	v := entitlementView{Games: strings.Join(e.Games, ", "), Modes: strings.Join(e.Modes, ", ")}
 	switch e.Source {
-	case "stripe":
+	case apiaccess.SourceStripe:
 		v.Source = "Stripe subscription"
-	case "trial":
+	case apiaccess.SourceTrial:
 		v.Source = "Trial"
 		v.Trial = true
 	default:

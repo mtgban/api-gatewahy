@@ -14,7 +14,7 @@ func testClient(t *testing.T) *Client {
 	if dsn == "" {
 		t.Skip("APIACCESS_TEST_DSN not set")
 	}
-	c, err := OpenDSN(dsn)
+	c, err := OpenDSN(context.Background(), dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

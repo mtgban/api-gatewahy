@@ -22,7 +22,7 @@ func TestAccountPageAndKeys(t *testing.T) {
 	ts := newTestServer(t)
 	a, ck, csrf := ts.signIn(t, "ann@example.com")
 	ctx := context.Background()
-	_, _ = ts.store.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: "manual", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail", "buylist", "sealed"}})
+	_, _ = ts.store.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: apiaccess.SourceManual, Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail", "buylist", "sealed"}})
 	ts.addUsage(42, apiaccess.Usage{Ts: ts.now, AccountID: a.ID, Game: "magic", Path: "/sets.json", Status: 200, Bytes: 100})
 	ts.addUsage(77, apiaccess.Usage{Ts: ts.now.AddDate(0, -1, 0), AccountID: a.ID, Game: "magic", Path: "/sets.json", Status: 200, Bytes: 10})
 
@@ -80,7 +80,7 @@ func TestPortalAndPlanChange(t *testing.T) {
 	a, ck, csrf := ts.signIn(t, "ann@example.com")
 	ctx := context.Background()
 	_, _ = ts.store.SetStripeCustomerID(ctx, a.ID, "cus_test")
-	_, _ = ts.store.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "TCGLow,TCGMarket,TCGDirect,TCGDirectNet,TCGPlayer,CK", Modes: []string{"retail", "buylist"}, Status: "active", ExternalRef: "sub_1"})
+	_, _ = ts.store.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: apiaccess.SourceStripe, Games: []string{"magic"}, StoreScope: "TCGLow,TCGMarket,TCGDirect,TCGDirectNet,TCGPlayer,CK", Modes: []string{"retail", "buylist"}, Status: apiaccess.EntitlementActive, ExternalRef: "sub_1"})
 	current := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}}
 	f.AddSub(t, "sub_1", "cus_test", stripe.SubscriptionStatusActive, current.Metadata(a.ID), ts.now.AddDate(0, 1, 0), billingtest.Item{Key: "starter_monthly", Qty: 1})
 
@@ -227,7 +227,7 @@ func TestKeyKindFollowsTheAccountsAccess(t *testing.T) {
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "ban_demo_") {
 		t.Fatalf("no plan: %d, body lacks a demo key", rec.Code)
 	}
-	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
+	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, apiaccess.SourceStripe, "BASE_ACCESS"))
 	rec = ts.do("POST", "/account/keys", "csrf="+csrf+"&label=paid", ck)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "ban_live_") {
 		t.Fatalf("paid plan: %d, body lacks a live key", rec.Code)
@@ -352,7 +352,7 @@ func TestPrefillMapsShorthandsBackToKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := apiaccess.Entitlement{Source: "stripe", Games: plan.Games, StoreScope: resolved.Scope + ",GoneStore"}
+	e := apiaccess.Entitlement{Source: apiaccess.SourceStripe, Games: plan.Games, StoreScope: resolved.Scope + ",GoneStore"}
 	q := ts.prefillQuery(ts.newSiteLookup(ctx), e)
 	if q.Get("package") != "starter" || q.Get("stores") != "cardkingdom,starcitygames" || q.Get("games") != "magic,pokemon" || q.Get("change") != "1" {
 		t.Errorf("prefill %v", q)
@@ -365,7 +365,7 @@ func TestPrefillMapsShorthandsBackToKeys(t *testing.T) {
 func TestPrefillKeepsTheStoresOutWhenASiteIsDown(t *testing.T) {
 	ts := newTestServer(t)
 	ts.stores.Down = map[string]bool{"pokemon": true}
-	e := apiaccess.Entitlement{Source: "stripe", Games: []string{"magic", "pokemon"}, StoreScope: "CK,SCG,TCGLow,TNT"}
+	e := apiaccess.Entitlement{Source: apiaccess.SourceStripe, Games: []string{"magic", "pokemon"}, StoreScope: "CK,SCG,TCGLow,TNT"}
 	if q := ts.prefillQuery(ts.newSiteLookup(context.Background()), e); q.Has("stores") || q.Get("package") != "starter" {
 		t.Errorf("prefill with pokemon down %v", q)
 	}
@@ -376,7 +376,7 @@ func TestAccountPageReadsEachSiteOnce(t *testing.T) {
 	a, ck, _ := ts.signIn(t, "ann@example.com")
 	ctx := context.Background()
 	for _, ref := range []string{"sub_1", "sub_2"} {
-		_, _ = ts.store.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "CK,TCGLow", Modes: []string{"retail"}, Status: "active", ExternalRef: ref})
+		_, _ = ts.store.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: apiaccess.SourceStripe, Games: []string{"magic"}, StoreScope: "CK,TCGLow", Modes: []string{"retail"}, Status: apiaccess.EntitlementActive, ExternalRef: ref})
 	}
 	rec := ts.do("GET", "/account", "", ck)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "Card Kingdom") {
@@ -393,7 +393,7 @@ func TestPlanChangeRejectsAStoreTheSitesDoNotSell(t *testing.T) {
 	a, ck, csrf := ts.signIn(t, "ann@example.com")
 	ctx := context.Background()
 	_, _ = ts.store.SetStripeCustomerID(ctx, a.ID, "cus_test")
-	_, _ = ts.store.AddEntitlement(ctx, entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
+	_, _ = ts.store.AddEntitlement(ctx, entitlementFor(a.ID, apiaccess.SourceStripe, "BASE_ACCESS"))
 	f.AddSub(t, "sub_1", "cus_test", stripe.SubscriptionStatusActive,
 		billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID), ts.now.AddDate(0, 1, 0))
 	rec := ts.do("POST", "/account/plan", "csrf="+csrf+"&package=starter&interval=monthly&games=magic&stores=trollandtoad", ck)

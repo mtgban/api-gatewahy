@@ -86,7 +86,7 @@ func TestCheckoutBlocksSecondSubscription(t *testing.T) {
 	ts := newTestServer(t)
 	ts.withStripe()
 	a, ck, csrf := ts.signIn(t, "ann@example.com")
-	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
+	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, apiaccess.SourceStripe, "BASE_ACCESS"))
 
 	rec := ts.do("GET", starterQuery, "", ck)
 	body := rec.Body.String()
@@ -129,8 +129,8 @@ func TestManySubscriptionsShowsContactMessage(t *testing.T) {
 	ts.withStripe()
 	a, ck, csrf := ts.signIn(t, "ann@example.com")
 	ctx := context.Background()
-	_, _ = ts.store.AddEntitlement(ctx, entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
-	e2 := entitlementFor(a.ID, "stripe", "BASE_ACCESS")
+	_, _ = ts.store.AddEntitlement(ctx, entitlementFor(a.ID, apiaccess.SourceStripe, "BASE_ACCESS"))
+	e2 := entitlementFor(a.ID, apiaccess.SourceStripe, "BASE_ACCESS")
 	e2.ExternalRef = "sub_2"
 	_, _ = ts.store.AddEntitlement(ctx, e2)
 
@@ -293,7 +293,7 @@ func TestSuccessAndCancelPages(t *testing.T) {
 	if c := cookieNamed(rec, session.PendingName); c == nil || c.MaxAge >= 0 {
 		t.Error("pending cookie not cleared")
 	}
-	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
+	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, apiaccess.SourceStripe, "BASE_ACCESS"))
 	rec = ts.do("GET", "/checkout/success", "", ck)
 	if !strings.Contains(rec.Body.String(), "Base Access") || !strings.Contains(rec.Body.String(), `action="/account/keys"`) {
 		t.Errorf("success with entitlement: %s", rec.Body.String())
@@ -337,7 +337,7 @@ func TestCheckoutChangeConfirm(t *testing.T) {
 		t.Errorf("no entitlement: %d %s", rec.Code, rec.Body.String())
 	}
 	a, _ := ts.store.GetAccountByEmail(context.Background(), "ann@example.com")
-	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "stripe", "BASE_ACCESS"))
+	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, apiaccess.SourceStripe, "BASE_ACCESS"))
 	f.AddSub(t, "sub_1", "cus_test", stripe.SubscriptionStatusActive,
 		billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID), ts.now.AddDate(0, 1, 0))
 	rec := ts.do("GET", changeQuery, "", ck)

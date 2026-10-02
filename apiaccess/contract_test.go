@@ -19,7 +19,7 @@ type store interface {
 	GetAccount(ctx context.Context, id int64) (apiaccess.Account, error)
 	GetAccountByEmail(ctx context.Context, email string) (apiaccess.Account, error)
 	GetOrCreateAccount(ctx context.Context, email, note string) (apiaccess.Account, error)
-	SetAccountStatus(ctx context.Context, id int64, status string) error
+	SetAccountStatus(ctx context.Context, id int64, status apiaccess.AccountStatus) error
 	SetAccountNote(ctx context.Context, id int64, note string) error
 	SetStripeCustomerID(ctx context.Context, accountID int64, customerID string) (string, error)
 	GetAccountByStripeCustomer(ctx context.Context, customerID string) (apiaccess.Account, error)
@@ -103,7 +103,7 @@ func postgresStore(t *testing.T) *apiaccess.Client {
 	if dsn == "" {
 		t.Skip("APIACCESS_TEST_DSN not set")
 	}
-	c, err := apiaccess.OpenDSN(dsn)
+	c, err := apiaccess.OpenDSN(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func sameMicro(stored, t time.Time) bool {
 	return stored.Sub(t).Abs() <= time.Microsecond
 }
 
-func grant(accountID int64, source, scope string, modes ...string) apiaccess.Entitlement {
+func grant(accountID int64, source apiaccess.Source, scope string, modes ...string) apiaccess.Entitlement {
 	return apiaccess.Entitlement{AccountID: accountID, Source: source, Games: []string{"magic"}, StoreScope: scope, Modes: modes}
 }
 
@@ -151,15 +151,15 @@ func trialGrant(accountID int64) apiaccess.Entitlement {
 func contractCanonicalEntitlement(t *testing.T, s store) {
 	a := mustAccount(t, s, "canon@example.com")
 	before := time.Now()
-	e, err := s.AddEntitlement(ctx, grant(a.ID, "manual", "base_access", "Retail", "retail", " SEALED"))
+	e, err := s.AddEntitlement(ctx, grant(a.ID, apiaccess.SourceManual, "base_access", "Retail", "retail", " SEALED"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e.StoreScope != "BASE_ACCESS" || !slices.Equal(e.Modes, []string{"retail", "sealed"}) || e.Status != "active" ||
+	if e.StoreScope != "BASE_ACCESS" || !slices.Equal(e.Modes, []string{"retail", "sealed"}) || e.Status != apiaccess.EntitlementActive ||
 		e.Addons == nil || len(e.Addons) != 0 || !near(e.ValidFrom, before, time.Now()) {
 		t.Errorf("preset row %+v", e)
 	}
-	if _, err := s.AddEntitlement(ctx, grant(a.ID, "manual", " TCG, CK,TCG ", "buylist")); err != nil {
+	if _, err := s.AddEntitlement(ctx, grant(a.ID, apiaccess.SourceManual, " TCG, CK,TCG ", "buylist")); err != nil {
 		t.Fatal(err)
 	}
 	ents, err := s.ListEntitlements(ctx, a.ID)
@@ -171,10 +171,10 @@ func contractCanonicalEntitlement(t *testing.T, s store) {
 		t.Errorf("listed %+v", ents)
 	}
 	for name, bad := range map[string]apiaccess.Entitlement{
-		"dev access": grant(a.ID, "manual", "DEV_ACCESS", "retail"),
-		"mode all":   grant(a.ID, "manual", "ALL_ACCESS", "all"),
-		"no games":   {AccountID: a.ID, Source: "manual", StoreScope: "ALL_ACCESS", Modes: []string{"retail"}},
-		"no account": grant(missing, "manual", "ALL_ACCESS", "retail"),
+		"dev access": grant(a.ID, apiaccess.SourceManual, "DEV_ACCESS", "retail"),
+		"mode all":   grant(a.ID, apiaccess.SourceManual, "ALL_ACCESS", "all"),
+		"no games":   {AccountID: a.ID, Source: apiaccess.SourceManual, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}},
+		"no account": grant(missing, apiaccess.SourceManual, "ALL_ACCESS", "retail"),
 	} {
 		if _, err := s.AddEntitlement(ctx, bad); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -185,19 +185,19 @@ func contractCanonicalEntitlement(t *testing.T, s store) {
 func contractUpsertKeepsValidFrom(t *testing.T, s store) {
 	a := mustAccount(t, s, "upsert@example.com")
 	first := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	e := grant(a.ID, "stripe", "all_access", "retail")
+	e := grant(a.ID, apiaccess.SourceStripe, "all_access", "retail")
 	e.ExternalRef, e.ValidFrom = "sub_contract", first
 	e1, err := s.UpsertStripeEntitlement(ctx, e)
 	if err != nil {
 		t.Fatal(err)
 	}
 	until := first.AddDate(0, 2, 0)
-	e.ValidFrom, e.Status, e.ValidUntil, e.Modes, e.Note = first.AddDate(0, 1, 0), "ended", &until, []string{"buylist"}, "changed"
+	e.ValidFrom, e.Status, e.ValidUntil, e.Modes, e.Note = first.AddDate(0, 1, 0), apiaccess.EntitlementEnded, &until, []string{"buylist"}, "changed"
 	e2, err := s.UpsertStripeEntitlement(ctx, e)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e2.ID != e1.ID || !e2.ValidFrom.Equal(first) || e2.Status != "ended" || e2.ValidUntil == nil || !e2.ValidUntil.Equal(until) ||
+	if e2.ID != e1.ID || !e2.ValidFrom.Equal(first) || e2.Status != apiaccess.EntitlementEnded || e2.ValidUntil == nil || !e2.ValidUntil.Equal(until) ||
 		!slices.Equal(e2.Modes, []string{"buylist"}) || e2.Note != "changed" || e2.StoreScope != "ALL_ACCESS" {
 		t.Errorf("second upsert %+v, first id %d", e2, e1.ID)
 	}
@@ -208,19 +208,19 @@ func contractUpsertKeepsValidFrom(t *testing.T, s store) {
 	if _, err := s.UpsertStripeEntitlement(ctx, e); err == nil {
 		t.Error("upsert without external_ref accepted")
 	}
-	dup := grant(a.ID, "stripe", "ALL_ACCESS", "retail")
+	dup := grant(a.ID, apiaccess.SourceStripe, "ALL_ACCESS", "retail")
 	dup.ExternalRef = "sub_contract"
 	if _, err := s.AddEntitlement(ctx, dup); err == nil {
 		t.Error("a second row for one external_ref accepted")
 	}
 	for _, ref := range []string{"sub_b", "sub_a"} {
-		live := grant(a.ID, "stripe", "ALL_ACCESS", "retail")
+		live := grant(a.ID, apiaccess.SourceStripe, "ALL_ACCESS", "retail")
 		live.ExternalRef = ref
 		if _, err := s.UpsertStripeEntitlement(ctx, live); err != nil {
 			t.Fatal(err)
 		}
 	}
-	manual := grant(a.ID, "manual", "ALL_ACCESS", "retail")
+	manual := grant(a.ID, apiaccess.SourceManual, "ALL_ACCESS", "retail")
 	manual.ExternalRef = "manual_ref"
 	if _, err := s.AddEntitlement(ctx, manual); err != nil {
 		t.Fatal(err)
@@ -492,7 +492,7 @@ func contractAccounts(t *testing.T, s store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Email != "ann@example.com" || a.Status != "active" || a.Note != "zoho 12" || a.SessionEpoch != 0 || !near(a.CreatedAt, before, time.Now()) {
+	if a.Email != "ann@example.com" || a.Status != apiaccess.AccountActive || a.Note != "zoho 12" || a.SessionEpoch != 0 || !near(a.CreatedAt, before, time.Now()) {
 		t.Errorf("created %+v", a)
 	}
 	if _, err := s.CreateAccount(ctx, "ann@example.com", ""); err == nil {
@@ -520,10 +520,10 @@ func contractAccounts(t *testing.T, s store) {
 	if err := s.SetAccountStatus(ctx, a.ID, "frozen"); err == nil {
 		t.Error("unknown status accepted")
 	}
-	if err := s.SetAccountStatus(ctx, missing, "active"); !errors.Is(err, apiaccess.ErrNotFound) {
+	if err := s.SetAccountStatus(ctx, missing, apiaccess.AccountActive); !errors.Is(err, apiaccess.ErrNotFound) {
 		t.Errorf("status of missing: %v", err)
 	}
-	if err := s.SetAccountStatus(ctx, a.ID, "suspended"); err != nil {
+	if err := s.SetAccountStatus(ctx, a.ID, apiaccess.AccountSuspended); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetAccountNote(ctx, a.ID, "renewed"); err != nil {
@@ -532,7 +532,7 @@ func contractAccounts(t *testing.T, s store) {
 	if err := s.SetAccountNote(ctx, missing, "x"); !errors.Is(err, apiaccess.ErrNotFound) {
 		t.Errorf("note of missing: %v", err)
 	}
-	if got, _ := s.GetAccount(ctx, a.ID); got.Status != "suspended" || got.Note != "renewed" {
+	if got, _ := s.GetAccount(ctx, a.ID); got.Status != apiaccess.AccountSuspended || got.Note != "renewed" {
 		t.Errorf("after updates %+v", got)
 	}
 	search := func(q string) []string {
@@ -620,7 +620,7 @@ func contractEntitlements(t *testing.T, s store) {
 		t.Errorf("none yet: %#v %v", ents, err)
 	}
 	until := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
-	e := grant(a.ID, "manual", "ALL_ACCESS", "retail")
+	e := grant(a.ID, apiaccess.SourceManual, "ALL_ACCESS", "retail")
 	e.ValidUntil, e.Note, e.Addons, e.Games = &until, "annual", []string{"extra_game:1"}, []string{"magic", "pokemon"}
 	got, err := s.AddEntitlement(ctx, e)
 	if err != nil || got.ValidUntil == nil || !got.ValidUntil.Equal(until) || got.Note != "annual" ||
@@ -635,7 +635,7 @@ func contractEntitlements(t *testing.T, s store) {
 		t.Errorf("end missing: %v", err)
 	}
 	ents, _ := s.ListEntitlements(ctx, a.ID)
-	if len(ents) != 1 || ents[0].Status != "ended" || ents[0].ValidUntil == nil || !ents[0].ValidUntil.Equal(at) {
+	if len(ents) != 1 || ents[0].Status != apiaccess.EntitlementEnded || ents[0].ValidUntil == nil || !ents[0].ValidUntil.Equal(at) {
 		t.Errorf("ended %+v", ents)
 	}
 }
@@ -788,10 +788,10 @@ func contractAdminActions(t *testing.T, s store) {
 func contractDemoAccess(t *testing.T, s store) {
 	now := time.Now()
 	future, past := now.Add(14*24*time.Hour), now.Add(-time.Hour)
-	add := func(email, source string, from time.Time, until *time.Time, ref string) apiaccess.Account {
+	add := func(email string, source apiaccess.Source, from time.Time, until *time.Time, ref string) apiaccess.Account {
 		a := mustAccount(t, s, email)
 		e := grant(a.ID, source, "ALL_ACCESS", "retail")
-		e.ValidFrom, e.ValidUntil, e.Note, e.ExternalRef = from, until, source+" note", ref
+		e.ValidFrom, e.ValidUntil, e.Note, e.ExternalRef = from, until, string(source)+" note", ref
 		if _, err := s.AddEntitlement(ctx, e); err != nil {
 			t.Fatal(err)
 		}
@@ -803,7 +803,7 @@ func contractDemoAccess(t *testing.T, s store) {
 	if _, err := s.CreateTrial(ctx, "Patron@example.com", future, now.AddDate(-1, 0, 0), tg); err != nil {
 		t.Fatal(err)
 	}
-	manual := add("manual@example.com", "manual", now.Add(-2*time.Hour), nil, "")
+	manual := add("manual@example.com", apiaccess.SourceManual, now.Add(-2*time.Hour), nil, "")
 	for i := 0; i < 2; i++ {
 		if _, _, err := s.CreateKey(ctx, manual.ID, "k", apiaccess.KeyDemo); err != nil {
 			t.Fatal(err)
@@ -813,9 +813,9 @@ func contractDemoAccess(t *testing.T, s store) {
 	if _, err := s.RevokeKey(ctx, keys[0].ID, 0); err != nil {
 		t.Fatal(err)
 	}
-	add("stripe@example.com", "stripe", now.Add(-time.Minute), nil, "sub_demo")
-	add("expired@example.com", "manual", now.Add(-48*time.Hour), &past, "")
-	ended := add("ended@example.com", "manual", now.Add(-time.Minute), nil, "")
+	add("stripe@example.com", apiaccess.SourceStripe, now.Add(-time.Minute), nil, "sub_demo")
+	add("expired@example.com", apiaccess.SourceManual, now.Add(-48*time.Hour), &past, "")
+	ended := add("ended@example.com", apiaccess.SourceManual, now.Add(-time.Minute), nil, "")
 	ents, _ := s.ListEntitlements(ctx, ended.ID)
 	if _, err := s.EndEntitlement(ctx, ents[0].ID, 0, future); err != nil {
 		t.Fatal(err)
@@ -824,11 +824,11 @@ func contractDemoAccess(t *testing.T, s store) {
 	if err != nil || len(got) != 2 {
 		t.Fatalf("demo access %+v %v", got, err)
 	}
-	if d := got[0]; d.AccountID != trial.ID || d.Source != "trial" || d.Requester != "patron@example.com" || d.EndsAt == nil ||
+	if d := got[0]; d.AccountID != trial.ID || d.Source != apiaccess.SourceTrial || d.Requester != "patron@example.com" || d.EndsAt == nil ||
 		!sameMicro(*d.EndsAt, future) || d.Keys != 0 || d.LastUsed != nil || d.Note != "trial note" {
 		t.Errorf("trial row %+v", d)
 	}
-	if d := got[1]; d.AccountID != manual.ID || d.Email != "manual@example.com" || d.Source != "manual" || d.Requester != "" || d.EndsAt != nil || d.Keys != 1 {
+	if d := got[1]; d.AccountID != manual.ID || d.Email != "manual@example.com" || d.Source != apiaccess.SourceManual || d.Requester != "" || d.EndsAt != nil || d.Keys != 1 {
 		t.Errorf("manual row %+v", d)
 	}
 }

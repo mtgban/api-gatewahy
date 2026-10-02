@@ -34,7 +34,7 @@ type changeRecorder interface {
 type accountStore interface {
 	accountLookup
 	CreateAccount(ctx context.Context, email, note string) (apiaccess.Account, error)
-	SetAccountStatus(ctx context.Context, id int64, status string) error
+	SetAccountStatus(ctx context.Context, id int64, status apiaccess.AccountStatus) error
 	ListAccounts(ctx context.Context) ([]apiaccess.Account, error)
 }
 
@@ -80,8 +80,8 @@ type adminDeps struct {
 var adminVerbs = map[string][]verb[adminDeps]{
 	"account": {
 		{"add", accountAdd},
-		{"suspend", accountSetStatus("suspend", "suspended")},
-		{"reinstate", accountSetStatus("reinstate", "active")},
+		{"suspend", accountSetStatus("suspend", apiaccess.AccountSuspended)},
+		{"reinstate", accountSetStatus("reinstate", apiaccess.AccountActive)},
 		{"list", accountList},
 	},
 	"key": {
@@ -143,7 +143,7 @@ func withStore(ctx context.Context, args []string, stderr io.Writer, fn func(*ap
 		fmt.Fprintln(stderr, "api-gatewahy:", err)
 		return 1
 	}
-	store, err := apiaccess.NewClient(*cfg.APIAccess)
+	store, err := apiaccess.NewClient(ctx, *cfg.APIAccess)
 	if err != nil {
 		fmt.Fprintln(stderr, "api-gatewahy:", err)
 		return 1
@@ -180,7 +180,7 @@ func accountAdd(ctx context.Context, d adminDeps, args []string, stdout, stderr 
 }
 
 // accountSetStatus is suspend and reinstate, which differ only in the status set.
-func accountSetStatus(name, status string) verbFunc[adminDeps] {
+func accountSetStatus(name string, status apiaccess.AccountStatus) verbFunc[adminDeps] {
 	return func(ctx context.Context, d adminDeps, args []string, stdout, stderr io.Writer) int {
 		fs := verbFlags("account "+name, stderr)
 		email := fs.String("email", "", "account email")
@@ -194,7 +194,7 @@ func accountSetStatus(name, status string) verbFunc[adminDeps] {
 		if err := d.store.SetAccountStatus(ctx, a.ID, status); err != nil {
 			return fail(stderr, err)
 		}
-		recordChange(ctx, d.store, stderr, "status", a.ID, "", status)
+		recordChange(ctx, d.store, stderr, "status", a.ID, "", string(status))
 		fmt.Fprintf(stdout, "account %d %s is now %s\n", a.ID, a.Email, status)
 		return 0
 	}

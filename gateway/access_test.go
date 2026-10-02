@@ -14,7 +14,7 @@ var (
 )
 
 func ent(games []string, scope string, modes ...string) apiaccess.Entitlement {
-	return apiaccess.Entitlement{Status: "active", ValidFrom: past, Games: games, StoreScope: scope, Modes: modes}
+	return apiaccess.Entitlement{Status: apiaccess.EntitlementActive, ValidFrom: past, Games: games, StoreScope: scope, Modes: modes}
 }
 
 func TestResolve(t *testing.T) {

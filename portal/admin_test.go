@@ -27,6 +27,28 @@ func TestAdminIsHiddenFromNonAdmins(t *testing.T) {
 	}
 }
 
+// The template compares the typed statuses with string literals; pin both branches.
+func TestAdminAccountPageFollowsStatus(t *testing.T) {
+	ts := newTestServer(t)
+	ctx := context.Background()
+	_, ck, _ := ts.signIn(t, "Admin@Example.com")
+	cust, _ := ts.store.GetOrCreateAccount(ctx, "cust@example.com", "")
+	e, _ := ts.store.AddEntitlement(ctx, entitlementFor(cust.ID, apiaccess.SourceManual, "BASE_ACCESS"))
+	page := "/admin/accounts/" + itoa(cust.ID)
+	endForm := "/entitlements/" + itoa(e.ID) + "/end"
+
+	body := ts.do("GET", page, "", ck).Body.String()
+	if !strings.Contains(body, `name="status" value="suspended"`) || !strings.Contains(body, endForm) {
+		t.Errorf("active account with an active grant should offer Suspend and End: %s", body)
+	}
+	_ = ts.store.SetAccountStatus(ctx, cust.ID, apiaccess.AccountSuspended)
+	_, _ = ts.store.EndEntitlement(ctx, e.ID, 0, ts.now)
+	body = ts.do("GET", page, "", ck).Body.String()
+	if !strings.Contains(body, `name="status" value="active"`) || strings.Contains(body, endForm) {
+		t.Errorf("suspended account with an ended grant should offer Reinstate and no End: %s", body)
+	}
+}
+
 func TestAdminAccountsAndActions(t *testing.T) {
 	ts := newTestServer(t)
 	ctx := context.Background()
@@ -47,7 +69,7 @@ func TestAdminAccountsAndActions(t *testing.T) {
 	}
 
 	rec = ts.do("POST", "/admin/accounts/"+id+"/status", "csrf="+csrf+"&status=suspended", ck)
-	if a, _ := ts.store.GetAccount(ctx, cust.ID); rec.Code != 302 || a.Status != "suspended" {
+	if a, _ := ts.store.GetAccount(ctx, cust.ID); rec.Code != 302 || a.Status != apiaccess.AccountSuspended {
 		t.Errorf("suspend: %d %s", rec.Code, a.Status)
 	}
 	ts.do("POST", "/admin/accounts/"+id+"/status", "csrf="+csrf+"&status=active", ck)
@@ -67,7 +89,7 @@ func TestAdminAccountsAndActions(t *testing.T) {
 	form := "csrf=" + csrf + "&games=magic&games=pokemon&stores=BASE_ACCESS&modes=retail&modes=buylist&until=2027-01-31&note=arranged"
 	rec = ts.do("POST", "/admin/accounts/"+id+"/entitlements", form, ck)
 	ents, _ := ts.store.ListEntitlements(ctx, cust.ID)
-	if rec.Code != 302 || len(ents) != 1 || ents[0].Source != "manual" || ents[0].StoreScope != "BASE_ACCESS" || ents[0].ValidUntil == nil || ents[0].Note != "arranged" {
+	if rec.Code != 302 || len(ents) != 1 || ents[0].Source != apiaccess.SourceManual || ents[0].StoreScope != "BASE_ACCESS" || ents[0].ValidUntil == nil || ents[0].Note != "arranged" {
 		t.Fatalf("grant: %d %+v", rec.Code, ents)
 	}
 	if rec := ts.do("POST", "/admin/accounts/"+id+"/entitlements", "csrf="+csrf+"&games=chess&stores=ALL_ACCESS&modes=retail", ck); rec.Code != 400 || !strings.Contains(rec.Body.String(), "chess") {
@@ -77,7 +99,7 @@ func TestAdminAccountsAndActions(t *testing.T) {
 		t.Errorf("bad mode: %d", rec.Code)
 	}
 	rec = ts.do("POST", "/admin/accounts/"+id+"/entitlements/"+itoa(ents[0].ID)+"/end", "csrf="+csrf, ck)
-	if ents, _ = ts.store.ListEntitlements(ctx, cust.ID); rec.Code != 302 || ents[0].Status != "ended" {
+	if ents, _ = ts.store.ListEntitlements(ctx, cust.ID); rec.Code != 302 || ents[0].Status != apiaccess.EntitlementEnded {
 		t.Error("entitlement not ended")
 	}
 
@@ -407,7 +429,7 @@ func TestAdminDestructiveButtonsConfirm(t *testing.T) {
 	ts := newTestServer(t)
 	_, ck, _ := ts.signIn(t, "admin@example.com")
 	a, _ := ts.store.GetOrCreateAccount(context.Background(), "cust@example.com", "")
-	e, _ := ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, "manual", "BASE_ACCESS"))
+	e, _ := ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, apiaccess.SourceManual, "BASE_ACCESS"))
 	_, k, _ := ts.store.CreateKey(context.Background(), a.ID, "k", apiaccess.KeyLive)
 	id := strconv.FormatInt(a.ID, 10)
 	body := ts.do("GET", "/admin/accounts/"+id, "", ck).Body.String()
@@ -443,7 +465,7 @@ func TestAdminHomeListsDemoAccess(t *testing.T) {
 	ctx := context.Background()
 	a, _ := ts.store.GetOrCreateAccount(ctx, "trial@example.com", "")
 	ends := ts.now.Add(15 * 24 * time.Hour)
-	e := entitlementFor(a.ID, "trial", "ALL_ACCESS")
+	e := entitlementFor(a.ID, apiaccess.SourceTrial, "ALL_ACCESS")
 	_, _ = ts.store.CreateTrial(ctx, "patron@example.com", ends, ts.now.Add(-time.Hour), e)
 	_, _, _ = ts.store.CreateKey(ctx, a.ID, "k", apiaccess.KeyDemo)
 	body := ts.do("GET", "/admin", "", ck).Body.String()

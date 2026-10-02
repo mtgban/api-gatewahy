@@ -104,7 +104,7 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "api-gatewahy:", err)
 		return 1
 	}
-	store, err := apiaccess.NewClient(*cfg.APIAccess)
+	store, err := apiaccess.NewClient(ctx, *cfg.APIAccess)
 	if err != nil {
 		fmt.Fprintln(stderr, "api-gatewahy:", err)
 		return 1
@@ -252,7 +252,7 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 		var lastDropped int64
 		runDaily(jobsCtx, 0, 5, "daily summary", alert, func(ctx context.Context, now time.Time) {
 			dropped := meter.Dropped()
-			dailySummary(ctx, store, alert, now, cfg.UsageRetentionDays, dropped-lastDropped)
+			dailySummary(ctx, store, alert, now, cfg, dropped-lastDropped)
 			lastDropped = dropped
 		})
 	}()
@@ -530,8 +530,30 @@ func capPanicText(p any) string {
 	return s
 }
 
-// dailySummary posts yesterday's usage. dropped counts rows lost since the last summary.
-func dailySummary(ctx context.Context, store *apiaccess.Client, alert func(string), now time.Time, retentionDays int, dropped int64) {
+// Retention of the tables the daily job prunes without a config key.
+const (
+	stripeEventRetentionDays = 30 // by received_at; Stripe retries an event for 3 days
+	inviteRetentionDays      = 30 // past expires_at, used or not
+)
+
+// dailyStore is what the daily summary reads and prunes.
+type dailyStore interface {
+	SummarizeUsage(ctx context.Context, since, until time.Time, accountID int64) ([]apiaccess.UsageRow, error)
+	KeysCreatedBetween(ctx context.Context, from, to time.Time) ([]apiaccess.Key, error)
+	PruneUsage(ctx context.Context, before time.Time) (int64, error)
+	PruneStripeEvents(ctx context.Context, before time.Time) (int64, error)
+	PruneInvites(ctx context.Context, before time.Time) (int64, error)
+	PruneAdminActions(ctx context.Context, before time.Time) (int64, error)
+}
+
+// dailySummary posts yesterday's usage, then prunes. dropped counts rows lost since the last summary.
+func dailySummary(ctx context.Context, store dailyStore, alert func(string), now time.Time, cfg *config.Config, dropped int64) {
+	postSummary(ctx, store, alert, now, dropped)
+	pruneTables(ctx, store, now, cfg)
+}
+
+// postSummary alerts yesterday's usage, or logs why it cannot.
+func postSummary(ctx context.Context, store dailyStore, alert func(string), now time.Time, dropped int64) {
 	day := now.UTC().Truncate(24*time.Hour).AddDate(0, 0, -1)
 	rows, err := store.SummarizeUsage(ctx, day, day.AddDate(0, 0, 1), 0)
 	if err != nil {
@@ -543,9 +565,24 @@ func dailySummary(ctx context.Context, store *apiaccess.Client, alert func(strin
 		log.Println("daily summary keys:", err)
 	}
 	alert(gateway.SummaryText(day, rows, keys, dropped))
-	if n, err := store.PruneUsage(ctx, now.AddDate(0, 0, -retentionDays)); err != nil {
-		log.Println("prune usage:", err)
-	} else if n > 0 {
-		log.Printf("pruned %d usage rows", n)
+}
+
+// pruneTables deletes rows past each table's retention, logging each count.
+func pruneTables(ctx context.Context, store dailyStore, now time.Time, cfg *config.Config) {
+	for _, p := range []struct {
+		what  string
+		days  int
+		prune func(context.Context, time.Time) (int64, error)
+	}{
+		{"usage rows", cfg.UsageRetentionDays, store.PruneUsage},
+		{"stripe events", stripeEventRetentionDays, store.PruneStripeEvents},
+		{"invites", inviteRetentionDays, store.PruneInvites},
+		{"admin actions", cfg.AuditRetentionDays, store.PruneAdminActions},
+	} {
+		if n, err := p.prune(ctx, now.AddDate(0, 0, -p.days)); err != nil {
+			log.Printf("prune %s: %v", p.what, err)
+		} else if n > 0 {
+			log.Printf("pruned %d %s", n, p.what)
+		}
 	}
 }

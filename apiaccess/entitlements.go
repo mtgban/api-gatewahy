@@ -22,16 +22,35 @@ const (
 // ValidModes in canonical order.
 var ValidModes = []string{"retail", "buylist", "sealed"}
 
+// EntitlementStatus says whether a row can still grant access.
+type EntitlementStatus string
+
+// The entitlement statuses; migration 2 checks the column against them.
+const (
+	EntitlementActive EntitlementStatus = "active"
+	EntitlementEnded  EntitlementStatus = "ended"
+)
+
+// Source is where an entitlement came from.
+type Source string
+
+// The entitlement sources; migration 2 checks the column against them.
+const (
+	SourceStripe Source = "stripe"
+	SourceManual Source = "manual"
+	SourceTrial  Source = "trial"
+)
+
 // Entitlement is one grant of access. An account's access is the union of its active rows.
 type Entitlement struct {
 	ID          int64
 	AccountID   int64
-	Source      string
+	Source      Source
 	Games       []string
 	StoreScope  string
 	Modes       []string
 	Addons      []string
-	Status      string
+	Status      EntitlementStatus
 	ValidFrom   time.Time
 	ValidUntil  *time.Time
 	ExternalRef string
@@ -41,7 +60,7 @@ type Entitlement struct {
 
 // ActiveAt reports whether the row grants access at now.
 func (e Entitlement) ActiveAt(now time.Time) bool {
-	if e.Status != "active" || now.Before(e.ValidFrom) {
+	if e.Status != EntitlementActive || now.Before(e.ValidFrom) {
 		return false
 	}
 	return e.ValidUntil == nil || now.Before(*e.ValidUntil)
@@ -50,7 +69,7 @@ func (e Entitlement) ActiveAt(now time.Time) bool {
 // IsActiveStripePlan reports whether e's Stripe subscription is still live,
 // counting a past_due row even past its grace: Stripe still bills it.
 func (e Entitlement) IsActiveStripePlan() bool {
-	return e.Source == "stripe" && e.Status == "active"
+	return e.Source == SourceStripe && e.Status == EntitlementActive
 }
 
 // HasActiveStripePlan reports whether ents includes a live Stripe subscription.
@@ -165,7 +184,7 @@ func prepareEntitlement(e Entitlement) (Entitlement, sql.NullTime, sql.NullStrin
 	}
 	e.Modes = modes
 	if e.Status == "" {
-		e.Status = "active"
+		e.Status = EntitlementActive
 	}
 	if e.ValidFrom.IsZero() {
 		e.ValidFrom = time.Now()
@@ -273,7 +292,7 @@ func (c *Client) EndEntitlement(ctx context.Context, id, accountID int64, at tim
 	if rowErr != nil {
 		return Entitlement{}, rowErr
 	}
-	if row.Source == "stripe" {
+	if row.Source == SourceStripe {
 		return Entitlement{}, ErrStripeEntitlement
 	}
 	return Entitlement{}, ErrNotFound

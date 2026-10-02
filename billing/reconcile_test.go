@@ -41,7 +41,7 @@ func rows(t *testing.T, s *apiaccesstest.MemStore) map[string]apiaccess.Entitlem
 // seedRow stores an active stripe row for ref, as an earlier reconcile would have.
 func seedRow(t *testing.T, s *apiaccesstest.MemStore, ref string) {
 	t.Helper()
-	e := apiaccess.Entitlement{AccountID: testAccount.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}, ExternalRef: ref}
+	e := apiaccess.Entitlement{AccountID: testAccount.ID, Source: apiaccess.SourceStripe, Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}, ExternalRef: ref}
 	if _, err := s.UpsertStripeEntitlement(context.Background(), e); err != nil {
 		t.Fatal(err)
 	}
@@ -61,18 +61,18 @@ func TestMapStatus(t *testing.T) {
 	graced := anchor.Add(grace)
 	cases := []struct {
 		status stripe.SubscriptionStatus
-		want   string
+		want   apiaccess.EntitlementStatus
 		until  *time.Time
 	}{
-		{stripe.SubscriptionStatusActive, "active", nil},
-		{stripe.SubscriptionStatusTrialing, "active", nil},
-		{stripe.SubscriptionStatusPastDue, "active", &graced},
-		{stripe.SubscriptionStatusCanceled, "ended", &reconNow},
-		{stripe.SubscriptionStatusUnpaid, "ended", &reconNow},
-		{stripe.SubscriptionStatusIncompleteExpired, "ended", &reconNow},
-		{stripe.SubscriptionStatusIncomplete, "ended", &reconNow},
-		{stripe.SubscriptionStatusPaused, "ended", &reconNow},
-		{"something_new", "ended", &reconNow},
+		{stripe.SubscriptionStatusActive, apiaccess.EntitlementActive, nil},
+		{stripe.SubscriptionStatusTrialing, apiaccess.EntitlementActive, nil},
+		{stripe.SubscriptionStatusPastDue, apiaccess.EntitlementActive, &graced},
+		{stripe.SubscriptionStatusCanceled, apiaccess.EntitlementEnded, &reconNow},
+		{stripe.SubscriptionStatusUnpaid, apiaccess.EntitlementEnded, &reconNow},
+		{stripe.SubscriptionStatusIncompleteExpired, apiaccess.EntitlementEnded, &reconNow},
+		{stripe.SubscriptionStatusIncomplete, apiaccess.EntitlementEnded, &reconNow},
+		{stripe.SubscriptionStatusPaused, apiaccess.EntitlementEnded, &reconNow},
+		{"something_new", apiaccess.EntitlementEnded, &reconNow},
 	}
 	for _, c := range cases {
 		status, until := billing.MapStatus(c.status, anchor, time.Time{}, grace, reconNow)
@@ -176,7 +176,7 @@ func TestReconcileWritesTheRow(t *testing.T) {
 	if !ok {
 		t.Fatal("no row written")
 	}
-	if e.AccountID != testAccount.ID || e.Source != "stripe" || e.Status != "active" || e.ValidUntil != nil || e.ExternalRef != "sub_1" ||
+	if e.AccountID != testAccount.ID || e.Source != apiaccess.SourceStripe || e.Status != apiaccess.EntitlementActive || e.ValidUntil != nil || e.ExternalRef != "sub_1" ||
 		!slices.Equal(e.Games, []string{"magic", "pokemon"}) || e.StoreScope != "CK,CKBLLast,SCG,TCGDirect,TCGDirectNet,TCGLow,TCGMarket,TCGPlayer" ||
 		!slices.Equal(e.Modes, []string{"retail", "buylist"}) || !slices.Equal(e.Addons, []string{"extra_store:1", "extra_game:1"}) ||
 		!strings.Contains(e.Note, "À la carte") {
@@ -210,14 +210,14 @@ func TestReconcileStatusesAndGrace(t *testing.T) {
 	due := rows(t, s)["sub_due"]
 	// all_data_monthly's period starts a month before periodEnd; grace runs from there.
 	wantUntil := periodEnd.AddDate(0, -1, 0).Add(10 * 24 * time.Hour)
-	if due.Status != "active" || due.ValidUntil == nil || !due.ValidUntil.Equal(wantUntil) {
+	if due.Status != apiaccess.EntitlementActive || due.ValidUntil == nil || !due.ValidUntil.Equal(wantUntil) {
 		t.Errorf("past_due row %+v, want until %s", due, wantUntil)
 	}
 	if err := r.Subscription(context.Background(), "sub_gone"); err != nil {
 		t.Fatal(err)
 	}
 	gone := rows(t, s)["sub_gone"]
-	if gone.Status != "ended" || gone.ValidUntil == nil || !gone.ValidUntil.Equal(reconNow) {
+	if gone.Status != apiaccess.EntitlementEnded || gone.ValidUntil == nil || !gone.ValidUntil.Equal(reconNow) {
 		t.Errorf("canceled row %+v", gone)
 	}
 }
@@ -331,7 +331,7 @@ func TestReconcileNeverEndsOnFetchFailure(t *testing.T) {
 	if err := r.Subscription(context.Background(), "sub_1"); err == nil {
 		t.Error("fetch failure swallowed")
 	}
-	if rows(t, s)["sub_1"].Status != "active" {
+	if rows(t, s)["sub_1"].Status != apiaccess.EntitlementActive {
 		t.Error("row changed on a fetch failure")
 	}
 }
@@ -379,7 +379,7 @@ func TestReconcileAll(t *testing.T) {
 	if res.Checked != 4 || res.Failed != 1 || len(res.Errors) != 1 {
 		t.Errorf("result %+v", res)
 	}
-	if got := rows(t, s); got["sub_a"].Status != "active" || got["sub_b"].Status != "active" || got["sub_c"].Status != "ended" {
+	if got := rows(t, s); got["sub_a"].Status != apiaccess.EntitlementActive || got["sub_b"].Status != apiaccess.EntitlementActive || got["sub_c"].Status != apiaccess.EntitlementEnded {
 		t.Errorf("rows %+v", got)
 	}
 	// Three listed plus the unlisted sub_c, each fetched once.
@@ -448,7 +448,7 @@ func TestReconcileWhenStoresDoNotResolve(t *testing.T) {
 	if err := r.Subscription(context.Background(), "sub_gone"); err != nil {
 		t.Fatalf("cancelled with the site down: %v", err)
 	}
-	if e := rows(t, s)["sub_gone"]; e.Status != "ended" || e.StoreScope != "cardkingdom" {
+	if e := rows(t, s)["sub_gone"]; e.Status != apiaccess.EntitlementEnded || e.StoreScope != "cardkingdom" {
 		t.Errorf("cancelled row %+v", e)
 	}
 	if len(alerts) != 2 {
