@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
-	"github.com/mtgban/api-gatewahy/session"
 	"github.com/mtgban/mtgban-website/apihandoff"
 )
 
@@ -34,13 +33,6 @@ type sessionConfirmData struct {
 	Name     string
 	Token    string
 	ReturnTo string
-}
-
-func (s *Server) registerTrial(mux *http.ServeMux) {
-	mux.HandleFunc("GET /trial", s.trialConfirm)
-	mux.HandleFunc("POST /trial", s.trial)
-	mux.HandleFunc("GET /session", s.sessionConfirm)
-	mux.HandleFunc("POST /session", s.patreonSession)
 }
 
 // verifyHandoff checks the token's signature, expiry, and purpose without
@@ -103,12 +95,9 @@ func (s *Server) trialConfirm(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "trial_confirm.html", p)
 }
 
-// trial grants a 15-day all-access trial to a Patreon supporter and signs them in.
+// trial grants a 15-day all-access trial to a Patreon supporter and signs
+// them in. requireSameOrigin guards this route.
 func (s *Server) trial(w http.ResponseWriter, r *http.Request) {
-	if !s.sameOrigin(r) {
-		s.fail(w, r, http.StatusForbidden, "That request did not come from this site. Open the link again and use the button on the page.")
-		return
-	}
 	claims, ok := s.handoffClaims(r, apihandoff.PurposeTrial)
 	if !ok {
 		s.handoffFailed(w, "Trial link expired")
@@ -153,7 +142,7 @@ func (s *Server) trial(w http.ResponseWriter, r *http.Request) {
 	if err := s.Mail.Send(ctx, a.Email, subject, text, htmlBody); err != nil {
 		s.logf("trial mail %s: %v", a.Email, err)
 	}
-	s.Sessions.Issue(w, session.Session{AccountID: a.ID, Email: a.Email, Epoch: a.SessionEpoch})
+	s.issueSession(w, a)
 	if r.FormValue("return_to") != "" {
 		s.mergePendingReturnTo(w, r, returnTo)
 	}
@@ -185,11 +174,8 @@ func (s *Server) sessionConfirm(w http.ResponseWriter, r *http.Request) {
 }
 
 // patreonSession signs a Patreon user in, creating the account if needed.
+// requireSameOrigin guards this route.
 func (s *Server) patreonSession(w http.ResponseWriter, r *http.Request) {
-	if !s.sameOrigin(r) {
-		s.fail(w, r, http.StatusForbidden, "That request did not come from this site. Open the link again and use the button on the page.")
-		return
-	}
 	claims, ok := s.handoffClaims(r, apihandoff.PurposeLogin)
 	if !ok {
 		s.handoffFailed(w, "Sign-in link expired")
@@ -206,7 +192,7 @@ func (s *Server) patreonSession(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusForbidden, suspendedMsg)
 		return
 	}
-	s.Sessions.Issue(w, session.Session{AccountID: a.ID, Email: a.Email, Epoch: a.SessionEpoch})
+	s.issueSession(w, a)
 	if r.FormValue("return_to") != "" {
 		s.mergePendingReturnTo(w, r, returnTo)
 	}

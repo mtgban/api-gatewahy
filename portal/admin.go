@@ -49,19 +49,6 @@ type adminUsageData struct {
 	Paths     []apiaccess.PathUsageRow
 }
 
-func (s *Server) registerAdmin(mux *http.ServeMux) {
-	mux.HandleFunc("GET /admin", s.withAdmin(s.adminHome))
-	mux.HandleFunc("POST /admin/reconcile", s.withAdmin(s.adminReconcile))
-	mux.HandleFunc("GET /admin/usage", s.withAdmin(s.adminUsage))
-	mux.HandleFunc("GET /admin/accounts/{id}", s.withAdmin(s.adminAccount))
-	mux.HandleFunc("POST /admin/accounts/{id}/status", s.withAdmin(s.adminStatus))
-	mux.HandleFunc("POST /admin/accounts/{id}/note", s.withAdmin(s.adminNote))
-	mux.HandleFunc("POST /admin/accounts/{id}/keys/{kid}/revoke", s.withAdmin(s.adminRevokeKey))
-	mux.HandleFunc("POST /admin/accounts/{id}/entitlements", s.withAdmin(s.adminAddEntitlement))
-	mux.HandleFunc("POST /admin/accounts/{id}/entitlements/{eid}/end", s.withAdmin(s.adminEndEntitlement))
-	mux.HandleFunc("POST /admin/accounts/{id}/invites", s.withAdmin(s.adminInvite))
-}
-
 func (s *Server) renderAdminHome(w http.ResponseWriter, r *http.Request, sess session.Session, status int, notice, errMsg string) {
 	q := strings.TrimSpace(r.FormValue("q"))
 	var (
@@ -269,7 +256,7 @@ func (s *Server) adminAddEntitlement(w http.ResponseWriter, r *http.Request, ses
 		return
 	}
 	bad := func(msg string) { s.renderAdminAccount(w, r, sess, a, http.StatusBadRequest, "", msg, "") }
-	e := apiaccess.Entitlement{AccountID: a.ID, Source: "manual", Games: listValues(r.Form, "games"), Note: strings.TrimSpace(r.FormValue("note"))}
+	e := apiaccess.Entitlement{AccountID: a.ID, Source: "manual", Games: listValues(r.PostForm, "games"), Note: strings.TrimSpace(r.FormValue("note"))}
 	if len(e.Games) == 0 {
 		bad("Pick at least one game.")
 		return
@@ -286,7 +273,7 @@ func (s *Server) adminAddEntitlement(w http.ResponseWriter, r *http.Request, ses
 		return
 	}
 	e.StoreScope = scope
-	modes, err := apiaccess.ValidateModes(listValues(r.Form, "modes"))
+	modes, err := apiaccess.ValidateModes(listValues(r.PostForm, "modes"))
 	if err != nil {
 		bad("Modes: " + err.Error())
 		return

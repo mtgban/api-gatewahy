@@ -13,7 +13,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -64,23 +63,6 @@ type Store interface {
 }
 
 var _ Store = (*apiaccess.Client)(nil)
-
-// reserved are the portal's fixed routes; the Stripe landing paths must not collide with them.
-var reservedExact = []string{"/", "/login", "/logout", "/account", "/portal", "/trial", "/session", "/admin", "/checkout", "/static/portal.css", "/healthz", "/stripe/webhook"}
-var reservedPrefixes = []string{"/login/", "/account/", "/admin/", "/static/", "/v1/"}
-
-// Reserved reports whether path is a portal route or under one.
-func Reserved(path string) bool {
-	if slices.Contains(reservedExact, path) {
-		return true
-	}
-	for _, p := range reservedPrefixes {
-		if strings.HasPrefix(path, p) {
-			return true
-		}
-	}
-	return false
-}
 
 // Server serves the customer and admin pages.
 type Server struct {
@@ -204,24 +186,6 @@ func (s *Server) logf(format string, args ...any) {
 	log.Printf(format, args...)
 }
 
-// Register mounts every portal route on mux.
-func (s *Server) Register(mux *http.ServeMux) {
-	s.init()
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, s.PricingURL, http.StatusFound)
-	})
-	mux.HandleFunc("GET /static/portal.css", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/css; charset=utf-8")
-		w.Header().Set("Cache-Control", "public, max-age=3600")
-		_, _ = w.Write(s.css)
-	})
-	s.registerLogin(mux)
-	s.registerCheckout(mux)
-	s.registerAccount(mux)
-	s.registerTrial(mux)
-	s.registerAdmin(mux)
-}
-
 // pageFor is the common page frame for sess.
 func (s *Server) pageFor(sess *session.Session, title string) page {
 	p := page{Title: title, Session: sess, PricingURL: s.PricingURL, PublicURL: s.PublicURL, PrivacyURL: siteOrigin(s.PricingURL) + "/privacy", GuideURL: siteOrigin(s.PricingURL) + "/guide#api-getting-started"}
@@ -294,6 +258,11 @@ func (s *Server) current(r *http.Request) (session.Session, apiaccess.Account, e
 	return sess, a, nil
 }
 
+// issueSession starts a browser session for a signed-in account.
+func (s *Server) issueSession(w http.ResponseWriter, a apiaccess.Account) {
+	s.Sessions.Issue(w, session.Session{AccountID: a.ID, Email: a.Email, Epoch: a.SessionEpoch})
+}
+
 // withSession runs h for a signed-in active account and checks CSRF on POST.
 func (s *Server) withSession(h func(w http.ResponseWriter, r *http.Request, sess session.Session, a apiaccess.Account)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -309,7 +278,9 @@ func (s *Server) withSession(h func(w http.ResponseWriter, r *http.Request, sess
 			http.Error(w, "sign in first", http.StatusUnauthorized)
 			return
 		}
-		if r.Method == http.MethodPost && !s.Sessions.CheckCSRF(sess, r.FormValue("csrf")) {
+		// A parse error leaves PostForm empty, which fails the CSRF check below.
+		_ = r.ParseForm()
+		if r.Method == http.MethodPost && !s.Sessions.CheckCSRF(sess, r.PostForm.Get("csrf")) {
 			http.Error(w, csrfExpiredMsg, http.StatusForbidden)
 			return
 		}
@@ -353,6 +324,21 @@ func (s *Server) sameOrigin(r *http.Request) bool {
 		origin = siteOrigin(r.Header.Get("Referer"))
 	}
 	return origin != "" && strings.EqualFold(origin, siteOrigin(s.PublicURL))
+}
+
+// sameOriginFailMsg is shown when requireSameOrigin refuses a POST; login's
+// own preamble shows a different message, see its route in routes.go.
+const sameOriginFailMsg = "That request did not come from this site. Open the link again and use the button on the page."
+
+// requireSameOrigin refuses a POST that did not come from this site.
+func (s *Server) requireSameOrigin(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.sameOrigin(r) {
+			s.fail(w, r, http.StatusForbidden, sameOriginFailMsg)
+			return
+		}
+		h(w, r)
+	}
 }
 
 // validReturnTo accepts an https URL on mtgban.com or a subdomain, or
