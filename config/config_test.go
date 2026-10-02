@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -63,9 +64,11 @@ func TestParseRejectsTrailingData(t *testing.T) {
 }
 
 func TestParseKeepsAdminActionsRetention(t *testing.T) {
-	c, err := Parse(strings.NewReader(strings.Replace(goodJSON, `{`, `{"admin_actions_retention_days": 30,`, 1)))
-	if err != nil || c.AuditRetentionDays != 30 {
-		t.Errorf("admin_actions_retention_days %d %v, want 30", c.AuditRetentionDays, err)
+	for _, days := range []int{30, 0} {
+		c, err := Parse(strings.NewReader(strings.Replace(goodJSON, `{`, fmt.Sprintf(`{"admin_actions_retention_days": %d,`, days), 1)))
+		if err != nil || c.AuditRetentionDays != days {
+			t.Errorf("admin_actions_retention_days %d %v, want %d", c.AuditRetentionDays, err, days)
+		}
 	}
 }
 

@@ -323,8 +323,9 @@ migration, and on no other (the `apiaccess_app` role already has it).
 After posting the daily summary at 00:05 UTC the gateway prunes `usage`
 past `usage_retention_days`, `stripe_events` 30 days after they arrived,
 `invites` 30 days after they expired, used or not, and `admin_actions`
-past `admin_actions_retention_days`; `magic_links` and `handoff_nonces`
-clear their own expired rows as they are written.
+past `admin_actions_retention_days` (`0` keeps them forever);
+`magic_links` and `handoff_nonces` clear their own expired rows as they
+are written.
 
 `public_url` is where customers land after Stripe Checkout:
 `stripe.success_path` and `stripe.cancel_path` are joined onto it.
