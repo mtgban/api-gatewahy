@@ -15,18 +15,17 @@ import (
 	"github.com/mtgban/api-gatewahy/billing"
 	"github.com/mtgban/api-gatewahy/billing/billingtest"
 	"github.com/mtgban/mtgban-website/apiproductlist"
-	"github.com/mtgban/mtgban-website/timeseries"
 )
 
 // sqlConfigFromDSN turns a postgres:// DSN into the SQLConfig apiaccess.NewClient wants.
-func sqlConfigFromDSN(dsn string) (timeseries.SQLConfig, error) {
+func sqlConfigFromDSN(dsn string) (apiaccess.SQLConfig, error) {
 	u, err := url.Parse(dsn)
 	if err != nil {
-		return timeseries.SQLConfig{}, err
+		return apiaccess.SQLConfig{}, err
 	}
 	port, _ := strconv.Atoi(u.Port())
 	password, _ := u.User.Password()
-	return timeseries.SQLConfig{
+	return apiaccess.SQLConfig{
 		Host:     u.Hostname(),
 		Port:     port,
 		User:     u.User.Username(),

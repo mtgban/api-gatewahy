@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
-	"net/netip"
 	"net/url"
 	"sort"
 	"strconv"
@@ -17,6 +16,7 @@ import (
 	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
+	"github.com/mtgban/api-gatewahy/clientip"
 	"github.com/mtgban/mtgban-website/ratelimit"
 	"golang.org/x/time/rate"
 )
@@ -261,30 +261,6 @@ func bearerKey(r *http.Request) string {
 	return r.URL.Query().Get("key")
 }
 
-// ClientIP is the address in header, else the peer address. A multi-valued
-// header yields its last element, the one the trusted edge appended; anything
-// before it came from the client. Anything that is not an IP literal, or a
-// zoned IPv6 literal, falls back to the peer.
-func ClientIP(r *http.Request, header string) string {
-	if header != "" {
-		if vs := r.Header.Values(header); len(vs) > 0 {
-			parts := strings.Split(vs[len(vs)-1], ",")
-			if ip, err := netip.ParseAddr(strings.TrimSpace(parts[len(parts)-1])); err == nil && ip.Zone() == "" {
-				return ip.Unmap().String()
-			}
-		}
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	ip, err := netip.ParseAddr(host)
-	if err != nil || ip.Zone() != "" {
-		return ""
-	}
-	return ip.Unmap().String()
-}
-
 // statusWriter records what the proxy wrote.
 type statusWriter struct {
 	http.ResponseWriter
@@ -327,7 +303,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := ClientIP(r, h.opts.ClientIPHeader)
+	ip := clientip.FromRequest(r, h.opts.ClientIPHeader)
 	// Throttled by address before any key is read, so forged keys cannot drive the database.
 	if !h.ipLimiter.Allow(ip) {
 		w.Header().Set("Retry-After", "1")

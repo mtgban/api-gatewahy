@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/mtgban/mtgban-website/timeseries"
-
 	// registers the postgres driver database/sql opens by name
 	_ "github.com/lib/pq"
 )
@@ -27,7 +25,7 @@ type Client struct {
 }
 
 // NewClient opens a pool, pings, and applies pending migrations.
-func NewClient(ctx context.Context, cfg timeseries.SQLConfig) (*Client, error) {
+func NewClient(ctx context.Context, cfg SQLConfig) (*Client, error) {
 	db, err := cfg.OpenDB()
 	if err != nil {
 		return nil, fmt.Errorf("apiaccess: open: %w", err)

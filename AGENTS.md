@@ -39,9 +39,9 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 go run . serve -config config.json
 ```
 
-- The DSN needs a password, any password for a trust-auth local server:
-  `timeseries.SQLConfig.DSN()` is unquoted `key=value`, and an empty
-  password swallows `dbname`, so tests connect to the wrong database.
+- `APIACCESS_TEST_DSN` is a URL. The config-file form goes through
+  `apiaccess.SQLConfig.DSN()`, which quotes every value, so an empty
+  password or one with a space is fine there.
 - Use a scratch database. The tests delete rows from every apiaccess table.
 - `STRIPE_TEST_KEY=sk_test_…` turns on the tests that call real Stripe.
 - README "Running locally" walks through a full local setup against a

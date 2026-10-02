@@ -391,9 +391,7 @@ func newMux(d muxDeps) http.Handler {
 	})
 	mux.HandleFunc("/v1/games.json", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			_, _ = w.Write([]byte(`{"error": "method not allowed"}`))
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -411,11 +409,17 @@ func newMux(d muxDeps) http.Handler {
 	}
 	mux.Handle("/v1/", d.gateway)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`{"error": "not found"}`))
+		writeJSONError(w, http.StatusNotFound, "not found")
 	})
 	return recoverPanics(mux)
+}
+
+// writeJSONError writes the gateway's uniform JSON error shape.
+func writeJSONError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	// msg is a plain ASCII constant, so %q is valid JSON.
+	_, _ = w.Write([]byte(fmt.Sprintf(`{"error": %q}`, msg)))
 }
 
 // plainPage serves one sentence as text/plain to a GET.
@@ -464,9 +468,7 @@ func recoverPanics(next http.Handler) http.Handler {
 			}
 			log.Printf("panic serving %s: %v\n%s", r.URL.Path, p, debug.Stack())
 			if !ww.wrote {
-				ww.Header().Set("Content-Type", "application/json")
-				ww.WriteHeader(http.StatusInternalServerError)
-				_, _ = ww.Write([]byte(`{"error": "internal error"}`))
+				writeJSONError(ww, http.StatusInternalServerError, "internal error")
 			}
 		}()
 		next.ServeHTTP(ww, r)
@@ -564,7 +566,40 @@ func postSummary(ctx context.Context, store dailyStore, alert func(string), now 
 	if err != nil {
 		log.Println("daily summary keys:", err)
 	}
-	alert(gateway.SummaryText(day, rows, keys, dropped))
+	alert(summaryText(day, rows, keys, dropped))
+}
+
+// humanBytes renders n with a binary unit suffix.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+// summaryText renders the daily Discord message.
+func summaryText(day time.Time, rows []apiaccess.UsageRow, newKeys []apiaccess.Key, dropped int64) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "API usage for %s\n", day.Format("2006-01-02"))
+	if len(rows) == 0 {
+		b.WriteString("no API traffic\n")
+	}
+	for _, r := range rows {
+		fmt.Fprintf(&b, "%s / %s: %d requests, %s, %d errors\n", r.Email, r.Game, r.Requests, humanBytes(r.Bytes), r.Errors)
+	}
+	for _, k := range newKeys {
+		fmt.Fprintf(&b, "new key %s (%s) for account %d\n", k.Prefix, k.Label, k.AccountID)
+	}
+	if dropped > 0 {
+		fmt.Fprintf(&b, "%d usage rows dropped\n", dropped)
+	}
+	return b.String()
 }
 
 // pruneTables deletes rows past each table's retention, logging each count.

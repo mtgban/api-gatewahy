@@ -196,20 +196,7 @@ func (c *Client) KeysCreatedBetween(ctx context.Context, from, to time.Time) ([]
 }
 
 func (c *Client) queryKeys(ctx context.Context, query string, args ...any) ([]Key, error) {
-	rows, err := c.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	var out []Key
-	for rows.Next() {
-		k, err := scanKey(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, k)
-	}
-	return out, rows.Err()
+	return queryAll(ctx, c.db, scanKey, query, args...)
 }
 
 // TouchKeys records last_used_at for each key id, keeping the later value.

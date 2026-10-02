@@ -615,19 +615,6 @@ func TestPerIPLimitRunsBeforeAnyLookup(t *testing.T) {
 	}
 }
 
-func TestClientIPTakesTheLastHeaderValue(t *testing.T) {
-	req := httptest.NewRequest("GET", "/", nil)
-	req.RemoteAddr = "198.51.100.9:1234"
-	req.Header.Set("X-Forwarded-For", "10.0.0.1, 203.0.113.5")
-	if got := ClientIP(req, "X-Forwarded-For"); got != "203.0.113.5" {
-		t.Errorf("last hop: %q", got)
-	}
-	req.Header.Set("X-Forwarded-For", "not-an-ip")
-	if got := ClientIP(req, "X-Forwarded-For"); got != "198.51.100.9" {
-		t.Errorf("fallback: %q", got)
-	}
-}
-
 // bodyString returns body[key] when it is a string, and "" otherwise.
 func bodyString(body map[string]any, key string) string {
 	s, ok := body[key].(string)
@@ -726,16 +713,6 @@ func TestModifyResponseDropsUpstreamRateLimit(t *testing.T) {
 	values := rec.Header().Values("RateLimit-Limit")
 	if len(values) != 1 || values[0] != "1000" {
 		t.Errorf("RateLimit-Limit values %v, want exactly the gateway's", values)
-	}
-}
-
-func TestClientIPReadsLastOfRepeatedHeaderLines(t *testing.T) {
-	req := httptest.NewRequest("GET", "/", nil)
-	req.RemoteAddr = "198.51.100.9:1234"
-	req.Header.Add("X-Forwarded-For", "10.0.0.1")
-	req.Header.Add("X-Forwarded-For", "203.0.113.5")
-	if got := ClientIP(req, "X-Forwarded-For"); got != "203.0.113.5" {
-		t.Errorf("last header line: got %q", got)
 	}
 }
 

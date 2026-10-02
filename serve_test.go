@@ -24,6 +24,25 @@ import (
 	"github.com/mtgban/mtgban-website/apiproductlist"
 )
 
+func TestSummaryText(t *testing.T) {
+	day := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
+	rows := []apiaccess.UsageRow{
+		{Email: "ck@example.com", Game: "magic", Requests: 120, Bytes: 5 << 20, Errors: 2},
+		{Email: "ck@example.com", Game: "pokemon", Requests: 3, Bytes: 1024, Errors: 0},
+	}
+	keys := []apiaccess.Key{{Prefix: "abcd1234", Label: "prod"}}
+	got := summaryText(day, rows, keys, 7)
+	for _, want := range []string{"2026-09-14", "ck@example.com", "magic", "120", "5.0 MB", "2 errors", "pokemon", "abcd1234", "prod", "7 usage rows dropped"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("summary missing %q:\n%s", want, got)
+		}
+	}
+	empty := summaryText(day, nil, nil, 0)
+	if !strings.Contains(empty, "no API traffic") {
+		t.Errorf("empty summary:\n%s", empty)
+	}
+}
+
 func TestNextRunAt(t *testing.T) {
 	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
 	got := nextRunAt(now, 0, 5)
@@ -102,8 +121,8 @@ func TestMuxGamesAndHealth(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/games.json", nil))
-	if rec.Code != 405 || rec.Header().Get("Content-Type") != "application/json" {
-		t.Errorf("games post: %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	if rec.Code != 405 || rec.Header().Get("Content-Type") != "application/json" || rec.Body.String() != `{"error": "method not allowed"}` {
+		t.Errorf("games post: %d %q %q", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
 	}
 
 	rec = httptest.NewRecorder()
@@ -120,8 +139,8 @@ func TestMuxGamesAndHealth(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/somewhere", nil))
-	if rec.Code != 404 || rec.Header().Get("Content-Type") != "application/json" {
-		t.Errorf("fallthrough %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	if rec.Code != 404 || rec.Header().Get("Content-Type") != "application/json" || rec.Body.String() != `{"error": "not found"}` {
+		t.Errorf("fallthrough %d %q %q", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
 	}
 }
 
@@ -224,15 +243,8 @@ func TestMuxRecoversPanic(t *testing.T) {
 	})
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/magic/mtgban/retail.json", nil))
-	if rec.Code != 500 || rec.Header().Get("Content-Type") != "application/json" {
-		t.Fatalf("status %d headers %v", rec.Code, rec.Header())
-	}
-	var body map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	if body["error"] != "internal error" {
-		t.Errorf("body %v", body)
+	if rec.Code != 500 || rec.Header().Get("Content-Type") != "application/json" || rec.Body.String() != `{"error": "internal error"}` {
+		t.Fatalf("status %d headers %v body %q", rec.Code, rec.Header(), rec.Body.String())
 	}
 }
 
