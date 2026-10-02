@@ -115,24 +115,26 @@ func Parse(r io.Reader) (*Config, error) {
 	if err := dec.Decode(&c); err != nil {
 		return nil, err
 	}
-	// An explicit empty client_ip_header means trust only the peer address.
+	// An explicit empty client_ip_header means trust only the peer address,
+	// and an explicit zero admin_actions_retention_days keeps the audit log.
 	var given struct {
-		ClientIPHeader *string `json:"client_ip_header"`
-		Stripe         *struct {
+		ClientIPHeader     *string `json:"client_ip_header"`
+		AuditRetentionDays *int    `json:"admin_actions_retention_days"`
+		Stripe             *struct {
 			GraceDays *int `json:"grace_days"`
 		} `json:"stripe"`
 	}
 	if err := json.Unmarshal(data, &given); err != nil {
 		return nil, err
 	}
-	c.applyDefaults(given.ClientIPHeader == nil, given.Stripe == nil || given.Stripe.GraceDays == nil)
+	c.applyDefaults(given.ClientIPHeader == nil, given.AuditRetentionDays == nil, given.Stripe == nil || given.Stripe.GraceDays == nil)
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
 	return &c, nil
 }
 
-func (c *Config) applyDefaults(defaultClientIPHeader, defaultGraceDays bool) {
+func (c *Config) applyDefaults(defaultClientIPHeader, defaultAuditRetention, defaultGraceDays bool) {
 	if defaultClientIPHeader {
 		c.ClientIPHeader = DefaultClientIPHeader
 	}
@@ -178,7 +180,7 @@ func (c *Config) applyDefaults(defaultClientIPHeader, defaultGraceDays bool) {
 	if c.UsageRetentionDays <= 0 {
 		c.UsageRetentionDays = 395
 	}
-	if c.AuditRetentionDays == 0 {
+	if defaultAuditRetention {
 		c.AuditRetentionDays = 90
 	}
 	if c.PublicURL == "" {

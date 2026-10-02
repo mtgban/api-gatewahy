@@ -125,7 +125,7 @@ instance, so each job runs once:
 | Job | When | What |
 |---|---|---|
 | Prober | at start, then hourly | Mints a BASE_ACCESS retail signature per game, GETs `/api/mtgban/stores.json`, alerts Discord on a state change (failing ↔ recovered) |
-| Daily summary | 00:05 UTC | Yesterday's usage by account and game, keys created, rows dropped by the meter → Discord; then `PruneUsage` older than `usage_retention_days`, `PruneStripeEvents` and `PruneInvites` (30 days, constants in `serve.go`), `PruneAdminActions` older than `admin_actions_retention_days` |
+| Daily summary | 00:05 UTC | Yesterday's usage by account and game, keys created, rows dropped by the meter → Discord; then `PruneUsage` older than `usage_retention_days`, `PruneStripeEvents` and `PruneInvites` (30 days, constants in `serve.go`), `PruneAdminActions` older than `admin_actions_retention_days` (skipped when 0) |
 | Stripe reconcile | 03:00 UTC (billing on) | `Reconciler.All`, summary → Discord |
 | Trial reminders | 09:00 UTC (portal on) | Mails trials ending within 3 days, marks each reminded |
 
@@ -219,8 +219,8 @@ Migration 2 CHECKs account status, entitlement status and source, key
 kind and normalized emails against the typed Go constants; modes are
 enforced in Go only. The daily job prunes `stripe_events` and expired
 `invites` after 30 days and `admin_actions` after
-`admin_actions_retention_days`; `magic_links` and `handoff_nonces` are
-swept on insert.
+`admin_actions_retention_days` (`0` keeps them forever); `magic_links` and
+`handoff_nonces` are swept on insert.
 
 ### 4.3 Keys
 

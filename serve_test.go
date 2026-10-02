@@ -480,4 +480,11 @@ func TestDailySummaryPrunesEveryTable(t *testing.T) {
 	if !maps.EqualFunc(f.cutoffs, want, time.Time.Equal) || alerts != 0 || !strings.Contains(logs.String(), "daily summary: down") {
 		t.Errorf("after a failed summary: cutoffs %v, alerts %d, log %s", f.cutoffs, alerts, logs.String())
 	}
+
+	// Zero admin_actions retention keeps the audit log forever.
+	f = &dailyFake{cutoffs: map[string]time.Time{}}
+	dailySummary(context.Background(), f, func(string) {}, now, &config.Config{UsageRetentionDays: 395}, 0)
+	if _, pruned := f.cutoffs["admin_actions"]; pruned || len(f.cutoffs) != 3 {
+		t.Errorf("with zero audit retention: cutoffs %v, want usage, stripe_events and invites only", f.cutoffs)
+	}
 }

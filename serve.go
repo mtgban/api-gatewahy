@@ -579,6 +579,10 @@ func pruneTables(ctx context.Context, store dailyStore, now time.Time, cfg *conf
 		{"invites", inviteRetentionDays, store.PruneInvites},
 		{"admin actions", cfg.AuditRetentionDays, store.PruneAdminActions},
 	} {
+		// Zero keeps the table forever; only admin_actions_retention_days can be zero.
+		if p.days == 0 {
+			continue
+		}
 		if n, err := p.prune(ctx, now.AddDate(0, 0, -p.days)); err != nil {
 			log.Printf("prune %s: %v", p.what, err)
 		} else if n > 0 {
