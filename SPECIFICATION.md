@@ -256,7 +256,7 @@ flip or a new row does.
 |---|---|
 | `route.go` | `ParseRoute`: only `/v1/{game}/mtgban/{sub}`; kinds search, meta (sets/stores), retail/buylist/all/sealed; rejects `..`; `NeedsModes` |
 | `access.go` | `Resolve(ents, game, now) (Access, bool)`: union of active rows naming the game; ALL > BASE > explicit union |
-| `resolver.go` | `Resolver`: key hash → `apiaccess.Lookup` cache with TTL, negative caching, stale-on-error, 10,000-entry bound |
+| `resolver.go` | `Resolver`: key hash → `apiaccess.Lookup` cache with TTL, negative caching, stale-on-error, 10,000-entry bound plus 1,000 for unknown keys |
 | `handler.go` | `Handler.ServeHTTP`, one `httputil.ReverseProxy` + `http.Transport` per game, `ClientIP`, `statusWriter` |
 | `meter.go` | `UsageMeter`: non-blocking `Record`, batched COPY every 5 s or 200 rows, 3 attempts, then drop and count |
 | `probe.go` | `Prober`: hourly signature health check per game |
@@ -298,11 +298,12 @@ flip or a new row does.
 - A cached lookup is fresh for `cache_ttl_seconds` (60). On a store error an
   entry younger than TTL + `stale_grace_seconds` (600) is served, so a
   revoked key can work for at most 11 minutes during a database outage.
-  Unknown keys are cached negatively in the same map.
+  Unknown keys are cached negatively in a separate 1,000-entry map, so a
+  flood of forged keys evicts only other unknown keys, never a real one.
 - The resolver releases its mutex during the DB call; concurrent misses for
-  one hash each query, and an `Invalidate` that lands during a query is
-  overwritten by that query's result.
-- The DB call runs on the request context with no deadline of its own.
+  one hash in one invalidation generation share a single query, and a
+  result an `Invalidate` overtook is not stored.
+- The DB call runs detached from the request, bounded by the 5 s lookup timeout.
 
 ## 6. Billing (`billing/`)
 

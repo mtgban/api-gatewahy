@@ -3,10 +3,12 @@ package gateway
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
+	"golang.org/x/sync/singleflight"
 )
 
 // LookupSource is what the resolver caches in front of.
@@ -21,8 +23,12 @@ var (
 	ErrUnavailable = errors.New("lookup unavailable")
 )
 
-// DefaultMaxEntries bounds the cache so unknown keys cannot grow it forever.
+// DefaultMaxEntries bounds the cache of known keys.
 const DefaultMaxEntries = 10000
+
+// DefaultMaxUnknown bounds unknown-key entries separately, so forged keys
+// cannot evict real ones.
+const DefaultMaxUnknown = 1000
 
 // DefaultStaleGrace bounds how long a store outage keeps stale entries alive.
 const DefaultStaleGrace = 10 * time.Minute
@@ -37,7 +43,7 @@ type cacheEntry struct {
 	fetched time.Time
 }
 
-// fetchResult is what a LookupKey call sends back over its result channel.
+// fetchResult is what a LookupKey call hands back to each waiting caller.
 type fetchResult struct {
 	lookup apiaccess.Lookup
 	err    error
@@ -50,11 +56,14 @@ type Resolver struct {
 	ttl        time.Duration
 	now        func() time.Time
 	maxEntries int
+	maxUnknown int
+	group      singleflight.Group
 
 	mu            sync.Mutex
 	staleGrace    time.Duration
 	lookupTimeout time.Duration
 	cache         map[string]cacheEntry
+	unknown       map[string]cacheEntry
 	generation    uint64
 }
 
@@ -64,8 +73,9 @@ func NewResolver(src LookupSource, ttl time.Duration, now func() time.Time) *Res
 		now = time.Now
 	}
 	return &Resolver{src: src, ttl: ttl, now: now, maxEntries: DefaultMaxEntries,
-		staleGrace: DefaultStaleGrace, lookupTimeout: DefaultLookupTimeout,
-		cache: map[string]cacheEntry{}}
+		maxUnknown: DefaultMaxUnknown, staleGrace: DefaultStaleGrace,
+		lookupTimeout: DefaultLookupTimeout,
+		cache:         map[string]cacheEntry{}, unknown: map[string]cacheEntry{}}
 }
 
 // SetStaleGrace bounds stale serving; d below zero restores DefaultStaleGrace.
@@ -89,7 +99,7 @@ func (r *Resolver) SetLookupTimeout(d time.Duration) {
 	r.lookupTimeout = d
 }
 
-// SetMaxEntries bounds the cache; n below one restores DefaultMaxEntries.
+// SetMaxEntries bounds the known-key cache; n below one restores DefaultMaxEntries.
 func (r *Resolver) SetMaxEntries(n int) {
 	if n <= 0 {
 		n = DefaultMaxEntries
@@ -99,11 +109,22 @@ func (r *Resolver) SetMaxEntries(n int) {
 	r.maxEntries = n
 }
 
-// Resolve returns the lookup for hash, from cache when fresh.
+// SetMaxUnknown bounds unknown-key entries; n below one restores DefaultMaxUnknown.
+func (r *Resolver) SetMaxUnknown(n int) {
+	if n <= 0 {
+		n = DefaultMaxUnknown
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.maxUnknown = n
+}
+
+// Resolve returns the lookup for hash, from cache when fresh. Concurrent
+// misses for one hash in one generation share a single store lookup.
 func (r *Resolver) Resolve(ctx context.Context, hash string) (apiaccess.Lookup, error) {
 	now := r.now()
 	r.mu.Lock()
-	e, ok := r.cache[hash]
+	e, ok := r.entryLocked(hash)
 	grace := r.staleGrace
 	timeout := r.lookupTimeout
 	gen := r.generation
@@ -113,25 +134,36 @@ func (r *Resolver) Resolve(ctx context.Context, hash string) (apiaccess.Lookup, 
 	}
 
 	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
-	resCh := make(chan fetchResult, 1)
-	go func() {
-		lk, err := r.src.LookupKey(fetchCtx, hash)
-		resCh <- fetchResult{lookup: lk, err: err}
-	}()
+	defer cancel()
+	// Keying on gen keeps a caller from joining a fetch an Invalidate overtook.
+	key := strconv.FormatUint(gen, 10) + ":" + hash
+	resCh := r.group.DoChan(key, func() (any, error) {
+		// Detached from the starting caller, so its giving up cannot fail the rest.
+		lookupCtx, lookupCancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+		defer lookupCancel()
+		// A driver that ignores ctx must not pin the key: drop it once the lookup times out.
+		defer context.AfterFunc(lookupCtx, func() { r.group.Forget(key) })()
+		lk, err := r.src.LookupKey(lookupCtx, hash)
+		return fetchResult{lookup: lk, err: err}, nil
+	})
 
 	select {
 	case res := <-resCh:
-		cancel()
-		return r.storeFetch(hash, gen, grace, res)
+		return r.storeFetch(hash, gen, grace, res.Val.(fetchResult))
 	case <-fetchCtx.Done():
-		// lib/pq won't honor ctx on a blocked read, so let the fetch
-		// finish on its own; it must never store once abandoned.
-		go func() {
-			<-resCh
-			cancel()
-		}()
+		// lib/pq won't honor ctx on a blocked read; the late result lands in
+		// resCh, which is buffered, so an abandoned fetch never stores.
 		return r.staleOrUnavailable(hash, gen, grace)
 	}
+}
+
+// entryLocked finds hash in either map; a hash lives in at most one.
+func (r *Resolver) entryLocked(hash string) (cacheEntry, bool) {
+	if e, ok := r.cache[hash]; ok {
+		return e, true
+	}
+	e, ok := r.unknown[hash]
+	return e, ok
 }
 
 // storeFetch caches a completed fetch's result, unless an Invalidate for
@@ -154,8 +186,15 @@ func (r *Resolver) storeFetch(hash string, gen uint64, grace time.Duration, res 
 		r.mu.Unlock()
 		return e.result()
 	}
-	r.makeRoomLocked(now)
-	r.cache[hash] = e
+	if e.unknown {
+		delete(r.cache, hash)
+		r.makeRoomLocked(r.unknown, r.maxUnknown, now)
+		r.unknown[hash] = e
+	} else {
+		delete(r.unknown, hash)
+		r.makeRoomLocked(r.cache, r.maxEntries, now)
+		r.cache[hash] = e
+	}
 	r.mu.Unlock()
 	return e.result()
 }
@@ -169,27 +208,28 @@ func (r *Resolver) staleOrUnavailable(hash string, gen uint64, grace time.Durati
 	if r.generation != gen {
 		return apiaccess.Lookup{}, ErrUnavailable
 	}
-	if e, ok := r.cache[hash]; ok && now.Sub(e.fetched) <= r.ttl+grace {
+	if e, ok := r.entryLocked(hash); ok && now.Sub(e.fetched) <= r.ttl+grace {
 		return e.result()
 	}
 	return apiaccess.Lookup{}, ErrUnavailable
 }
 
-// makeRoomLocked drops expired entries, then arbitrary ones; each is reconstructible.
-func (r *Resolver) makeRoomLocked(now time.Time) {
-	if len(r.cache) < r.maxEntries {
+// makeRoomLocked drops m's expired entries, then arbitrary ones, until it
+// is under limit; each is reconstructible.
+func (r *Resolver) makeRoomLocked(m map[string]cacheEntry, limit int, now time.Time) {
+	if len(m) < limit {
 		return
 	}
-	for h, e := range r.cache {
+	for h, e := range m {
 		if now.Sub(e.fetched) >= r.ttl+r.staleGrace {
-			delete(r.cache, h)
+			delete(m, h)
 		}
 	}
-	for h := range r.cache {
-		if len(r.cache) < r.maxEntries {
+	for h := range m {
+		if len(m) < limit {
 			return
 		}
-		delete(r.cache, h)
+		delete(m, h)
 	}
 }
 
@@ -207,7 +247,9 @@ func (r *Resolver) Invalidate(hash string) {
 	r.generation++
 	if hash == "" {
 		r.cache = map[string]cacheEntry{}
+		r.unknown = map[string]cacheEntry{}
 		return
 	}
 	delete(r.cache, hash)
+	delete(r.unknown, hash)
 }
