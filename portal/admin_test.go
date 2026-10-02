@@ -82,8 +82,12 @@ func TestAdminAccountsAndActions(t *testing.T) {
 	}
 
 	rec = ts.do("POST", "/admin/accounts/"+id+"/invites", "csrf="+csrf+"&interval=quarterly&days=7&note=deal", ck)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "inv"+strings.Repeat("y", 30)) {
-		t.Errorf("invite: %d %s", rec.Code, rec.Body.String())
+	shown := regexp.MustCompile(`<div class="key-box">([^<]+)</div>`).FindStringSubmatch(rec.Body.String())
+	if rec.Code != 200 || shown == nil {
+		t.Fatalf("invite: %d %s", rec.Code, rec.Body.String())
+	}
+	if inv, ok := ts.store.InviteByToken(shown[1]); !ok || inv.IntervalKey != "quarterly" || inv.Note != "deal" || !inv.ExpiresAt.Equal(ts.now.AddDate(0, 0, 7)) {
+		t.Errorf("shown token %q stored as %+v %v", shown[1], inv, ok)
 	}
 	if rec := ts.do("POST", "/admin/accounts/"+id+"/invites", "csrf="+csrf+"&interval=monthly", ck); rec.Code != 400 {
 		t.Errorf("public interval invite: %d", rec.Code)
@@ -117,7 +121,8 @@ func TestAdminAccountsAndActions(t *testing.T) {
 	ts.ReconcileAll = func(context.Context) (billing.Result, error) { return billing.Result{Checked: 1}, nil }
 	ts.do("POST", "/admin/reconcile", "csrf="+csrf, ck)
 	found := false
-	for _, act := range ts.store.actions {
+	acts, _ := ts.store.ListAdminActions(context.Background(), 0, 100)
+	for _, act := range acts {
 		if act.Action == "reconcile" && act.AccountID == 0 {
 			found = true
 		}
@@ -134,14 +139,14 @@ func TestAdminAccountListErrorsAreLoggedAndDoNotClobber(t *testing.T) {
 	cust, _ := ts.store.GetOrCreateAccount(ctx, "cust2@example.com", "")
 	id := itoa(cust.ID)
 
-	ts.store.listKeysErr = errors.New("keys down")
+	ts.store.Fail["ListKeys"] = errors.New("keys down")
 	rec := ts.do("GET", "/admin/accounts/"+id, "", ck)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), tryAgainMsg) {
 		t.Errorf("keys error not surfaced: %d %s", rec.Code, rec.Body.String())
 	}
 
-	ts.store.listKeysErr = nil
-	ts.store.listActionsErr = errors.New("actions down")
+	delete(ts.store.Fail, "ListKeys")
+	ts.store.Fail["ListAdminActions"] = errors.New("actions down")
 	rec = ts.do("GET", "/admin/accounts/"+id, "", ck)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), tryAgainMsg) {
 		t.Errorf("actions error not surfaced: %d %s", rec.Code, rec.Body.String())
@@ -149,7 +154,7 @@ func TestAdminAccountListErrorsAreLoggedAndDoNotClobber(t *testing.T) {
 
 	// A form error set before the list calls run must survive a list failure,
 	// not be overwritten by the generic tryAgainMsg.
-	ts.store.listEntitlementsErr = errors.New("entitlements down")
+	ts.store.Fail["ListEntitlements"] = errors.New("entitlements down")
 	rec = ts.do("POST", "/admin/accounts/"+id+"/status", "csrf="+csrf+"&status=bogus", ck)
 	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "Status must be active or suspended.") {
 		t.Errorf("form error clobbered by list error: %d %s", rec.Code, rec.Body.String())
@@ -166,8 +171,8 @@ func TestAdminTargetDistinguishesNotFoundFromStoreError(t *testing.T) {
 	if rec := ts.do("GET", "/admin/accounts/999999", "", ck); rec.Code != 404 {
 		t.Errorf("missing account: %d", rec.Code)
 	}
-	ts.store.getAccountErr = errors.New("db down")
-	ts.store.getAccountErrID = cust.ID
+	ts.store.Fail["GetAccount"] = errors.New("db down")
+	ts.store.FailID["GetAccount"] = cust.ID
 	rec := ts.do("GET", "/admin/accounts/"+itoa(cust.ID), "", ck)
 	if rec.Code != 500 || !strings.Contains(rec.Body.String(), tryAgainMsg) {
 		t.Errorf("store error should be 500 not 404: %d %s", rec.Code, rec.Body.String())
@@ -182,7 +187,7 @@ func TestAdminEndEntitlementStoreFailureIs500(t *testing.T) {
 	_, ck, csrf := ts.signIn(t, "admin@example.com")
 	cust, _ := ts.store.GetOrCreateAccount(ctx, "cust3@example.com", "")
 	ent, _ := ts.store.AddEntitlement(ctx, entitlementFor(cust.ID, "manual", apiaccess.ScopeBase))
-	ts.store.listEntitlementsErr = errors.New("entitlements down")
+	ts.store.Fail["ListEntitlements"] = errors.New("entitlements down")
 	rec := ts.do("POST", "/admin/accounts/"+itoa(cust.ID)+"/entitlements/"+itoa(ent.ID)+"/end", "csrf="+csrf, ck)
 	if rec.Code != 500 || !strings.Contains(rec.Body.String(), tryAgainMsg) {
 		t.Errorf("store error should be 500 not 404: %d %s", rec.Code, rec.Body.String())
@@ -197,7 +202,7 @@ func TestAdminEndEntitlementRaceIsNotFound(t *testing.T) {
 	_, ck, csrf := ts.signIn(t, "admin@example.com")
 	cust, _ := ts.store.GetOrCreateAccount(ctx, "cust5@example.com", "")
 	ent, _ := ts.store.AddEntitlement(ctx, entitlementFor(cust.ID, "manual", apiaccess.ScopeBase))
-	ts.store.endEntitlementErr = apiaccess.ErrNotFound
+	ts.store.Fail["EndEntitlement"] = apiaccess.ErrNotFound
 	rec := ts.do("POST", "/admin/accounts/"+itoa(cust.ID)+"/entitlements/"+itoa(ent.ID)+"/end", "csrf="+csrf, ck)
 	if rec.Code != 404 {
 		t.Errorf("race not-found should be 404: %d %s", rec.Code, rec.Body.String())
@@ -211,7 +216,7 @@ func TestAdminAddEntitlementStoreFailureIs500(t *testing.T) {
 	cust, _ := ts.store.GetOrCreateAccount(ctx, "cust3@example.com", "")
 	id := itoa(cust.ID)
 
-	ts.store.entitlementErr = errors.New("db down")
+	ts.store.Fail["AddEntitlement"] = errors.New("db down")
 	form := "csrf=" + csrf + "&games=magic&stores=ALL_ACCESS&modes=retail"
 	rec := ts.do("POST", "/admin/accounts/"+id+"/entitlements", form, ck)
 	if rec.Code != 500 || !strings.Contains(rec.Body.String(), tryAgainMsg) {
@@ -299,11 +304,11 @@ func TestAdminUsageMapsErrorsAndValidatesRange(t *testing.T) {
 	if rec := ts.do("GET", "/admin/usage?since=2026-09-20&until=2026-09-01", "", ck); rec.Code != 400 {
 		t.Errorf("since after until: %d", rec.Code)
 	}
-	ts.store.usageErr = apiaccess.ErrNotFound
+	ts.store.Fail["SummarizeUsage"] = apiaccess.ErrNotFound
 	if rec := ts.do("GET", "/admin/usage", "", ck); rec.Code != 404 {
 		t.Errorf("not found: %d", rec.Code)
 	}
-	ts.store.usageErr = errors.New("db down")
+	ts.store.Fail["SummarizeUsage"] = errors.New("db down")
 	if rec := ts.do("GET", "/admin/usage", "", ck); rec.Code != 500 {
 		t.Errorf("other error: %d", rec.Code)
 	}
@@ -332,10 +337,8 @@ func TestAdminUsageAndReconcile(t *testing.T) {
 	ctx := context.Background()
 	_, ck, csrf := ts.signIn(t, "admin@example.com")
 	cust, _ := ts.store.GetOrCreateAccount(ctx, "cust@example.com", "")
-	ts.store.usage = []memUsage{
-		{Ts: ts.now, Row: apiaccess.UsageRow{AccountID: cust.ID, Email: "cust@example.com", Game: "magic", Requests: 5}},
-		{Ts: ts.now, Row: apiaccess.UsageRow{AccountID: cust.ID, Email: "cust@example.com", Game: "pokemon", Requests: 7}},
-	}
+	ts.addUsage(5, apiaccess.Usage{Ts: ts.now, AccountID: cust.ID, Game: "magic", Path: "/sets.json", Status: 200})
+	ts.addUsage(7, apiaccess.Usage{Ts: ts.now, AccountID: cust.ID, Game: "pokemon", Path: "/sets.json", Status: 200})
 
 	rec := ts.do("GET", "/admin/usage?since=2026-09-01&until=2026-10-01&game=pokemon", "", ck)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "pokemon") || strings.Contains(rec.Body.String(), ">magic<") {
@@ -365,7 +368,9 @@ func TestAdminEndRefusesStripeRow(t *testing.T) {
 	ctx := context.Background()
 	a, _ := ts.store.GetOrCreateAccount(ctx, "cust@example.com", "")
 	stripeEnt, _ := ts.store.AddEntitlement(ctx, entitlementFor(a.ID, "stripe", "ALL_ACCESS"))
-	manualEnt, _ := ts.store.AddEntitlement(ctx, entitlementFor(a.ID, "manual", "BASE_ACCESS"))
+	manual := entitlementFor(a.ID, "manual", "BASE_ACCESS")
+	manual.ExternalRef = ""
+	manualEnt, _ := ts.store.AddEntitlement(ctx, manual)
 	id := strconv.FormatInt(a.ID, 10)
 
 	body := ts.do("GET", "/admin/accounts/"+id, "", ck).Body.String()
@@ -379,12 +384,16 @@ func TestAdminEndRefusesStripeRow(t *testing.T) {
 		t.Error("no Cancel in Stripe text for the stripe row")
 	}
 
-	auditsBefore, notifiedBefore := len(ts.store.actions), len(ts.store.notified)
+	audits := func() int {
+		acts, _ := ts.store.ListAdminActions(ctx, 0, 1000)
+		return len(acts)
+	}
+	auditsBefore, notifiedBefore := audits(), len(ts.store.Notified)
 	rec := ts.do("POST", "/admin/accounts/"+id+"/entitlements/"+itoa(stripeEnt.ID)+"/end", "csrf="+csrf, ck)
 	if rec.Code != 400 || !strings.Contains(rec.Body.String(), stripeEndMsg) {
 		t.Fatalf("end stripe row: %d %s", rec.Code, rec.Body.String())
 	}
-	if len(ts.store.actions) != auditsBefore || len(ts.store.notified) != notifiedBefore {
+	if audits() != auditsBefore || len(ts.store.Notified) != notifiedBefore {
 		t.Error("stripe refusal audited or notified")
 	}
 	ents, _ := ts.store.ListEntitlements(ctx, a.ID)
@@ -451,8 +460,8 @@ func TestAdminUsageByKeyAndPaths(t *testing.T) {
 	ctx := context.Background()
 	a, _ := ts.store.GetOrCreateAccount(ctx, "u@example.com", "")
 	_, k, _ := ts.store.CreateKey(ctx, a.ID, "laptop", apiaccess.KeyLive)
-	ts.store.addUsage(a.ID, k.ID, "magic", "/retail/ZEN.json", 200, ts.now.Add(-time.Hour))
-	ts.store.addUsage(a.ID, k.ID, "magic", "/sets.json", 404, ts.now.Add(-time.Hour))
+	ts.addUsage(1, apiaccess.Usage{Ts: ts.now.Add(-time.Hour), KeyID: k.ID, AccountID: a.ID, Game: "magic", Path: "/retail/ZEN.json", Status: 200})
+	ts.addUsage(1, apiaccess.Usage{Ts: ts.now.Add(-time.Hour), KeyID: k.ID, AccountID: a.ID, Game: "magic", Path: "/sets.json", Status: 404})
 	since, until := ts.now.Add(-48*time.Hour).Format("2006-01-02"), ts.now.Add(24*time.Hour).Format("2006-01-02")
 	filters := "since=" + since + "&until=" + until + "&email=u@example.com"
 	body := ts.do("GET", "/admin/usage?"+filters+"&key="+k.Prefix, "", ck).Body.String()
@@ -483,7 +492,7 @@ func TestAdminUsageByKeyNeedsAnAccount(t *testing.T) {
 	ctx := context.Background()
 	a, _ := ts.store.GetOrCreateAccount(ctx, "u@example.com", "")
 	_, k, _ := ts.store.CreateKey(ctx, a.ID, "laptop", apiaccess.KeyLive)
-	ts.store.addUsage(a.ID, k.ID, "magic", "/retail/ZEN.json", 200, ts.now.Add(-time.Hour))
+	ts.addUsage(1, apiaccess.Usage{Ts: ts.now.Add(-time.Hour), KeyID: k.ID, AccountID: a.ID, Game: "magic", Path: "/retail/ZEN.json", Status: 200})
 
 	body := ts.do("GET", "/admin/usage", "", ck).Body.String()
 	if !strings.Contains(body, "Filter by account to see requests per key.") {
@@ -492,7 +501,7 @@ func TestAdminUsageByKeyNeedsAnAccount(t *testing.T) {
 	if strings.Contains(body, "<th>Key</th>") {
 		t.Error("the by-key table rendered without an account filter")
 	}
-	if n := ts.store.usageByKeyCalls; n != 0 {
+	if n := ts.store.Calls["UsageByKey"]; n != 0 {
 		t.Errorf("UsageByKey ran %d times without an account filter", n)
 	}
 }

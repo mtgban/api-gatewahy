@@ -1,4 +1,4 @@
-package billing
+package billing_test
 
 import (
 	"context"
@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
+	"github.com/mtgban/api-gatewahy/billing"
+	"github.com/mtgban/api-gatewahy/billing/billingtest"
 	"github.com/mtgban/mtgban-website/apiproductlist"
 	"github.com/mtgban/mtgban-website/timeseries"
 )
@@ -80,7 +82,7 @@ func TestCatalogEntitlementRoundtrip(t *testing.T) {
 	}
 
 	for _, pkg := range testCatalog.Packages {
-		plan := Plan{Package: pkg.Key, Interval: "monthly", Games: []string{"magic"}}
+		plan := billing.Plan{Package: pkg.Key, Interval: "monthly", Games: []string{"magic"}}
 		if pkg.StoreScope == apiproductlist.StoreScopeExplicit {
 			plan.Stores = []string{"cardkingdom", "starcitygames"}
 		}
@@ -88,7 +90,7 @@ func TestCatalogEntitlementRoundtrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: normalize: %v", pkg.Key, err)
 		}
-		resolved, err := plan.Resolve(ctx, testCatalog, newFakeStores())
+		resolved, err := plan.Resolve(ctx, testCatalog, billingtest.NewFakeStores())
 		if err != nil {
 			t.Fatalf("%s: resolve: %v", pkg.Key, err)
 		}

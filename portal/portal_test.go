@@ -3,7 +3,6 @@ package portal
 import (
 	"bytes"
 	"context"
-	"errors"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -12,16 +11,23 @@ import (
 	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
+	"github.com/mtgban/api-gatewahy/apiaccess/apiaccesstest"
+	"github.com/mtgban/api-gatewahy/billing"
+	"github.com/mtgban/api-gatewahy/billing/billingtest"
 	"github.com/mtgban/api-gatewahy/mailer"
 	"github.com/mtgban/api-gatewahy/session"
 	"github.com/mtgban/mtgban-website/apihandoff"
 	"github.com/mtgban/mtgban-website/apiproductlist"
 )
 
+var _ Store = (*apiaccesstest.MemStore)(nil)
+
 // testServer wires a Server on the in-memory store with the logging mailer.
 type testServer struct {
 	*Server
-	store  *memStore
+	t      *testing.T
+	store  *apiaccesstest.MemStore
+	stores *billingtest.FakeStores
 	mail   *bytes.Buffer
 	logBuf *bytes.Buffer
 	mux    *http.ServeMux
@@ -31,15 +37,16 @@ type testServer struct {
 func newTestServer(t *testing.T) *testServer {
 	t.Helper()
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
-	store := newMemStore()
-	store.clock = func() time.Time { return now }
+	store := apiaccesstest.New()
+	store.Now = func() time.Time { return now }
+	stores := billingtest.NewFakeStores()
 	var mailBuf bytes.Buffer
 	var logBuf bytes.Buffer
 	s := &Server{
 		Store:             store,
 		Catalog:           apiproductlist.MustLoad(),
 		Games:             []string{"magic", "pokemon"},
-		Stores:            newFakeStores(),
+		Stores:            stores,
 		Sessions:          &session.Codec{Secret: []byte("0123456789abcdef0123456789abcdef"), Now: func() time.Time { return now }},
 		Mail:              &mailer.Log{Out: &mailBuf},
 		PublicURL:         "https://api.test",
@@ -55,7 +62,29 @@ func newTestServer(t *testing.T) *testServer {
 	}
 	mux := http.NewServeMux()
 	s.Register(mux)
-	return &testServer{Server: s, store: store, mail: &mailBuf, logBuf: &logBuf, mux: mux, now: now}
+	return &testServer{Server: s, t: t, store: store, stores: stores, mail: &mailBuf, logBuf: &logBuf, mux: mux, now: now}
+}
+
+// withStripe turns billing on for a test server over a seeded fake Stripe.
+func (ts *testServer) withStripe() *billingtest.FakeAPI {
+	f := billingtest.SeededFakeAPI(ts.t, ts.Catalog)
+	ts.Stripe = f
+	ts.Checkout = &billing.Checkout{Store: ts.store, API: f, Catalog: ts.Catalog, Stores: ts.Stores, Games: ts.Games,
+		SuccessURL: ts.PublicURL + ts.SuccessPath, CancelURL: ts.PublicURL + ts.CancelPath, Now: ts.Now}
+	ts.Reconcile = func(context.Context, string) error { return nil }
+	return f
+}
+
+// addUsage records n requests like u, as the gateway's meter would.
+func (ts *testServer) addUsage(n int, u apiaccess.Usage) {
+	ts.t.Helper()
+	rows := make([]apiaccess.Usage, n)
+	for i := range rows {
+		rows[i] = u
+	}
+	if err := ts.store.InsertUsage(context.Background(), rows); err != nil {
+		ts.t.Fatal(err)
+	}
 }
 
 // do runs one request; cookies carry across when passed in. A POST is marked same-origin.
@@ -236,6 +265,13 @@ func entitlementFor(accountID int64, source, scope string) apiaccess.Entitlement
 		Modes: []string{"retail", "buylist"}, Status: "active", ExternalRef: "sub_1"}
 }
 
+// trialFor is the grant a trial writes; unlike entitlementFor it carries no external ref.
+func trialFor(accountID int64, scope string) apiaccess.Entitlement {
+	e := entitlementFor(accountID, "trial", scope)
+	e.ExternalRef = ""
+	return e
+}
+
 func TestSameOrigin(t *testing.T) {
 	ts := newTestServer(t)
 	cases := []struct {
@@ -306,19 +342,5 @@ func TestReservedPaths(t *testing.T) {
 		if Reserved(p) {
 			t.Errorf("%q: want not reserved", p)
 		}
-	}
-}
-
-func TestMemStoreConsumeNonce(t *testing.T) {
-	m := newMemStore()
-	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
-	if err := m.ConsumeNonce(context.Background(), "n", now.Add(time.Hour), now); err != nil {
-		t.Fatalf("first: %v", err)
-	}
-	if err := m.ConsumeNonce(context.Background(), "n", now.Add(time.Hour), now); !errors.Is(err, apiaccess.ErrNonceUsed) {
-		t.Fatalf("second: %v", err)
-	}
-	if err := m.ConsumeNonce(context.Background(), "n", now.Add(3*time.Hour), now.Add(2*time.Hour)); err != nil {
-		t.Fatalf("after sweep: %v", err)
 	}
 }

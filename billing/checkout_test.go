@@ -1,4 +1,4 @@
-package billing
+package billing_test
 
 import (
 	"bytes"
@@ -6,63 +6,112 @@ import (
 	"errors"
 	"log"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
+	"github.com/mtgban/api-gatewahy/apiaccess/apiaccesstest"
+	"github.com/mtgban/api-gatewahy/billing"
+	"github.com/mtgban/api-gatewahy/billing/billingtest"
 	"github.com/mtgban/mtgban-website/apiproductlist"
 	"github.com/stripe/stripe-go/v84"
 )
 
 // seededFake is a fake Stripe holding every catalog price.
-func seededFake(t *testing.T) *fakeAPI {
+func seededFake(t *testing.T) *billingtest.FakeAPI {
 	t.Helper()
-	f := newFakeAPI()
-	if _, err := Seed(context.Background(), f, testCatalog); err != nil {
-		t.Fatal(err)
-	}
-	return f
+	return billingtest.SeededFakeAPI(t, testCatalog)
 }
 
-var testAccount = apiaccess.Account{ID: 7, Email: "ck@example.com", Status: "active"}
+// testAccount is the first account newStore creates, so its id is 1.
+var testAccount = apiaccess.Account{ID: 1, Email: "ck@example.com", Status: "active"}
 
-func newTestCheckout(f *fakeAPI, s *memStore) *Checkout {
-	return &Checkout{
-		Store: s, API: f, Catalog: testCatalog, Stores: newFakeStores(), Games: testGames,
+// testAccountRef is testAccount's id as Stripe metadata carries it.
+var testAccountRef = strconv.FormatInt(testAccount.ID, 10)
+
+// checkoutNow is the clock the checkout, the reconciler and the store share.
+var checkoutNow = time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+
+// newStore is an in-memory store holding testAccount.
+func newStore(t *testing.T) *apiaccesstest.MemStore {
+	t.Helper()
+	s := apiaccesstest.New()
+	s.Now = func() time.Time { return checkoutNow }
+	if a, err := s.CreateAccount(context.Background(), testAccount.Email, ""); err != nil || a.ID != testAccount.ID {
+		t.Fatalf("test account %+v %v", a, err)
+	}
+	return s
+}
+
+// storedAccount reads testAccount back with whatever the code under test stored on it.
+func storedAccount(t *testing.T, s *apiaccesstest.MemStore) apiaccess.Account {
+	t.Helper()
+	a, err := s.GetAccount(context.Background(), testAccount.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// invite mints an invite that lives a day on the store clock and returns its token.
+func invite(t *testing.T, s *apiaccesstest.MemStore, intervalKey, email string) string {
+	t.Helper()
+	token, _, err := s.CreateInvite(context.Background(), intervalKey, email, 24*time.Hour, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
+// inviteUsed reports whether the invite behind token is spent.
+func inviteUsed(t *testing.T, s *apiaccesstest.MemStore, token string) bool {
+	t.Helper()
+	inv, ok := s.InviteByToken(token)
+	if !ok {
+		t.Fatalf("no invite for %q", token)
+	}
+	return inv.UsedAt != nil
+}
+
+func newTestCheckout(f *billingtest.FakeAPI, s *apiaccesstest.MemStore) *billing.Checkout {
+	return &billing.Checkout{
+		Store: s, API: f, Catalog: testCatalog, Stores: billingtest.NewFakeStores(), Games: testGames,
 		SuccessURL: "https://api.mtgban.com/checkout/success", CancelURL: "https://api.mtgban.com/checkout/cancel",
-		Now: func() time.Time { return time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC) },
+		Now: func() time.Time { return checkoutNow },
 	}
 }
 
 func TestCheckoutCreatesSessionAndCustomer(t *testing.T) {
 	f := seededFake(t)
-	s := newMemStore(testAccount)
+	s := newStore(t)
 	co := newTestCheckout(f, s)
 	ctx := context.Background()
 
-	sess, err := co.Create(ctx, Request{Account: testAccount, Plan: Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom", "starcitygames"}}})
+	sess, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom", "starcitygames"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(sess.URL, "https://checkout.stripe.test/") || sess.ID == "" {
 		t.Errorf("session %+v", sess)
 	}
-	if len(f.sessions) != 1 {
-		t.Fatalf("sessions %d", len(f.sessions))
+	if len(f.Sessions) != 1 {
+		t.Fatalf("sessions %d", len(f.Sessions))
 	}
-	p := f.sessions[0]
+	p := f.Sessions[0]
 	if stripe.StringValue(p.Mode) != "subscription" || !stripe.BoolValue(p.AllowPromotionCodes) ||
-		stripe.StringValue(p.ClientReferenceID) != "7" || stripe.StringValue(p.SuccessURL) != co.SuccessURL || stripe.StringValue(p.CancelURL) != co.CancelURL {
+		stripe.StringValue(p.ClientReferenceID) != testAccountRef || stripe.StringValue(p.SuccessURL) != co.SuccessURL || stripe.StringValue(p.CancelURL) != co.CancelURL {
 		t.Errorf("session params %+v", p)
 	}
-	if stripe.StringValue(p.Customer) != s.accounts[7].StripeCustomerID || s.accounts[7].StripeCustomerID == "" {
-		t.Errorf("customer %q stored %q", stripe.StringValue(p.Customer), s.accounts[7].StripeCustomerID)
+	stored := storedAccount(t, s)
+	if stripe.StringValue(p.Customer) != stored.StripeCustomerID || stored.StripeCustomerID == "" {
+		t.Errorf("customer %q stored %q", stripe.StringValue(p.Customer), stored.StripeCustomerID)
 	}
-	if cust := f.customers[s.accounts[7].StripeCustomerID]; cust == nil || cust.Email != "ck@example.com" || cust.Metadata["account_id"] != "7" {
+	if cust := f.Customers[stored.StripeCustomerID]; cust == nil || cust.Email != "ck@example.com" || cust.Metadata["account_id"] != testAccountRef {
 		t.Errorf("customer %+v", cust)
 	}
-	want := map[string]int64{f.priceByKey("starter_monthly").ID: 1, f.priceByKey("extra_store_monthly").ID: 1, f.priceByKey("extra_game_monthly").ID: 1}
+	want := map[string]int64{f.PriceByKey("starter_monthly").ID: 1, f.PriceByKey("extra_store_monthly").ID: 1, f.PriceByKey("extra_game_monthly").ID: 1}
 	if len(p.LineItems) != 3 {
 		t.Fatalf("line items %d", len(p.LineItems))
 	}
@@ -72,111 +121,111 @@ func TestCheckoutCreatesSessionAndCustomer(t *testing.T) {
 		}
 	}
 	md := p.SubscriptionData.Metadata
-	if md["package"] != "starter" || md["interval"] != "monthly" || md["games"] != "magic,pokemon" || md["stores"] != "cardkingdom,starcitygames" || md["account_id"] != "7" {
+	if md["package"] != "starter" || md["interval"] != "monthly" || md["games"] != "magic,pokemon" || md["stores"] != "cardkingdom,starcitygames" || md["account_id"] != testAccountRef {
 		t.Errorf("metadata %v", md)
 	}
 
 	// A second checkout reuses the stored customer.
-	if _, err := co.Create(ctx, Request{Account: s.accounts[7], Plan: Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}}); err != nil {
+	if _, err := co.Create(ctx, billing.Request{Account: stored, Plan: billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if f.calls["CreateCustomer"] != 1 {
-		t.Errorf("CreateCustomer called %d times", f.calls["CreateCustomer"])
+	if f.Calls["CreateCustomer"] != 1 {
+		t.Errorf("CreateCustomer called %d times", f.Calls["CreateCustomer"])
 	}
 }
 
 func TestCheckoutRejectsBadPlans(t *testing.T) {
 	f := seededFake(t)
-	co := newTestCheckout(f, newMemStore(testAccount))
+	co := newTestCheckout(f, newStore(t))
 	ctx := context.Background()
-	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: Plan{Package: "all_data", Interval: "quarterly", Games: []string{"magic"}}}); !errors.Is(err, ErrInviteRequired) {
+	if _, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: billing.Plan{Package: "all_data", Interval: "quarterly", Games: []string{"magic"}}}); !errors.Is(err, billing.ErrInviteRequired) {
 		t.Errorf("quarterly without invite: %v", err)
 	}
-	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}}}); err == nil {
+	if _, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}}}); err == nil {
 		t.Error("starter without stores accepted")
 	}
-	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: Plan{Package: "all_data", Interval: "monthly", Games: []string{"yugioh"}}}); err == nil {
+	if _, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"yugioh"}}}); err == nil {
 		t.Error("unknown game accepted")
 	}
 	suspended := testAccount
 	suspended.Status = "suspended"
-	if _, err := co.Create(ctx, Request{Account: suspended, Plan: Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}}); err == nil || !strings.Contains(err.Error(), "suspended") {
+	if _, err := co.Create(ctx, billing.Request{Account: suspended, Plan: billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}}); err == nil || !strings.Contains(err.Error(), "suspended") {
 		t.Errorf("suspended account: %v", err)
 	}
-	if len(f.sessions) != 0 || f.calls["CreateCustomer"] != 0 {
+	if len(f.Sessions) != 0 || f.Calls["CreateCustomer"] != 0 {
 		t.Error("a rejected plan reached Stripe")
 	}
 }
 
 func TestCheckoutInvites(t *testing.T) {
 	f := seededFake(t)
-	s := newMemStore(testAccount)
+	s := newStore(t)
 	co := newTestCheckout(f, s)
 	ctx := context.Background()
-	later := co.Now().Add(24 * time.Hour)
-	quarterly := Plan{Package: "all_stores", Interval: "quarterly", Games: []string{"magic"}}
+	quarterly := billing.Plan{Package: "all_stores", Interval: "quarterly", Games: []string{"magic"}}
 
-	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: quarterly, Invite: "nope"}); !errors.Is(err, apiaccess.ErrInviteInvalid) {
+	if _, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: quarterly, Invite: "nope"}); !errors.Is(err, apiaccess.ErrInviteInvalid) {
 		t.Errorf("unknown invite: %v", err)
 	}
 
-	s.addInvite("bound", "quarterly", "someone@else.com", later)
-	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: quarterly, Invite: "bound"}); !errors.Is(err, apiaccess.ErrInviteInvalid) {
+	bound := invite(t, s, "quarterly", "someone@else.com")
+	if _, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: quarterly, Invite: bound}); !errors.Is(err, apiaccess.ErrInviteInvalid) {
 		t.Errorf("invite bound to another email: %v", err)
 	}
 
-	s.addInvite("wrong-interval", "annual", "", later)
-	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: quarterly, Invite: "wrong-interval"}); err == nil || !strings.Contains(err.Error(), "annual") {
+	wrongInterval := invite(t, s, "annual", "")
+	if _, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: quarterly, Invite: wrongInterval}); err == nil || !strings.Contains(err.Error(), "annual") {
 		t.Errorf("invite for another interval: %v", err)
 	}
-	if s.invites["wrong-interval"].UsedAt != nil {
+	if inviteUsed(t, s, wrongInterval) {
 		t.Error("mismatched invite was not released")
 	}
 
-	s.addInvite("good", "quarterly", "CK@example.com", later)
-	f.fail["CreateCheckoutSession"] = errors.New("stripe down")
-	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: quarterly, Invite: "good"}); err == nil {
+	good := invite(t, s, "quarterly", "CK@example.com")
+	f.Fail["CreateCheckoutSession"] = errors.New("stripe down")
+	if _, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: quarterly, Invite: good}); err == nil {
 		t.Error("stripe failure swallowed")
 	}
-	if s.invites["good"].UsedAt != nil {
+	if inviteUsed(t, s, good) {
 		t.Error("invite not released after a failed session")
 	}
-	delete(f.fail, "CreateCheckoutSession")
-	if _, err := co.Create(ctx, Request{Account: s.accounts[7], Plan: quarterly, Invite: "good"}); err != nil {
+	delete(f.Fail, "CreateCheckoutSession")
+	stored := storedAccount(t, s)
+	if _, err := co.Create(ctx, billing.Request{Account: stored, Plan: quarterly, Invite: good}); err != nil {
 		t.Fatalf("retry with released invite: %v", err)
 	}
-	if s.invites["good"].UsedAt == nil {
+	if !inviteUsed(t, s, good) {
 		t.Error("invite not consumed")
 	}
-	if _, err := co.Create(ctx, Request{Account: s.accounts[7], Plan: quarterly, Invite: "good"}); !errors.Is(err, apiaccess.ErrInviteInvalid) {
+	if _, err := co.Create(ctx, billing.Request{Account: stored, Plan: quarterly, Invite: good}); !errors.Is(err, apiaccess.ErrInviteInvalid) {
 		t.Errorf("invite replayed: %v", err)
 	}
-	if len(f.sessions) != 1 || stripe.StringValue(f.sessions[0].LineItems[0].Price) != f.priceByKey("all_stores_quarterly").ID {
-		t.Errorf("sessions %+v", f.sessions)
+	if len(f.Sessions) != 1 || stripe.StringValue(f.Sessions[0].LineItems[0].Price) != f.PriceByKey("all_stores_quarterly").ID {
+		t.Errorf("sessions %+v", f.Sessions)
 	}
 }
 
 func TestCheckoutNeedsSeededPrices(t *testing.T) {
-	f := newFakeAPI()
-	co := newTestCheckout(f, newMemStore(testAccount))
-	_, err := co.Create(context.Background(), Request{Account: testAccount, Plan: Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}})
-	if !errors.Is(err, ErrPriceNotSeeded) {
+	f := billingtest.NewFakeAPI()
+	co := newTestCheckout(f, newStore(t))
+	_, err := co.Create(context.Background(), billing.Request{Account: testAccount, Plan: billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}})
+	if !errors.Is(err, billing.ErrPriceNotSeeded) {
 		t.Errorf("unseeded: %v", err)
 	}
-	if f.calls["CreateCustomer"] != 0 {
+	if f.Calls["CreateCustomer"] != 0 {
 		t.Error("customer created before the line items were resolved")
 	}
 }
 
 func TestCheckoutEveryPackage(t *testing.T) {
 	f := seededFake(t)
-	co := newTestCheckout(f, newMemStore(testAccount))
+	co := newTestCheckout(f, newStore(t))
 	for _, pkg := range testCatalog.Packages {
-		plan := Plan{Package: pkg.Key, Interval: "monthly", Games: []string{"magic"}}
+		plan := billing.Plan{Package: pkg.Key, Interval: "monthly", Games: []string{"magic"}}
 		if pkg.StoreScope == apiproductlist.StoreScopeExplicit {
 			plan.Stores = []string{"cardkingdom"}
 		}
-		if _, err := co.Create(context.Background(), Request{Account: testAccount, Plan: plan}); err != nil {
+		if _, err := co.Create(context.Background(), billing.Request{Account: testAccount, Plan: plan}); err != nil {
 			t.Errorf("%s: %v", pkg.Key, err)
 		}
 	}
@@ -184,116 +233,115 @@ func TestCheckoutEveryPackage(t *testing.T) {
 
 func TestAbandonReleasesInviteOnlyWhenStripeExpiresTheSession(t *testing.T) {
 	f := seededFake(t)
-	s := newMemStore(testAccount)
+	s := newStore(t)
 	co := newTestCheckout(f, s)
 	ctx := context.Background()
-	later := co.Now().Add(24 * time.Hour)
-	quarterly := Plan{Package: "all_stores", Interval: "quarterly", Games: []string{"magic"}}
+	quarterly := billing.Plan{Package: "all_stores", Interval: "quarterly", Games: []string{"magic"}}
 
-	s.addInvite("walk-away", "quarterly", "", later)
-	sess, err := co.Create(ctx, Request{Account: testAccount, Plan: quarterly, Invite: "walk-away"})
+	walkAway := invite(t, s, "quarterly", "")
+	sess, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: quarterly, Invite: walkAway})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := co.Abandon(ctx, sess.ID, "walk-away"); err != nil {
+	if err := co.Abandon(ctx, sess.ID, walkAway); err != nil {
 		t.Fatalf("abandon: %v", err)
 	}
-	if f.sessionStatus[sess.ID] != stripe.CheckoutSessionStatusExpired {
-		t.Errorf("session %s is %s", sess.ID, f.sessionStatus[sess.ID])
+	if f.SessionStatus[sess.ID] != stripe.CheckoutSessionStatusExpired {
+		t.Errorf("session %s is %s", sess.ID, f.SessionStatus[sess.ID])
 	}
-	if s.invites["walk-away"].UsedAt != nil {
+	if inviteUsed(t, s, walkAway) {
 		t.Error("invite not released after the session expired")
 	}
 
 	// A session the customer already paid for cannot be expired, so its invite stays spent.
-	s.addInvite("paid", "quarterly", "", later)
-	sess, err = co.Create(ctx, Request{Account: testAccount, Plan: quarterly, Invite: "paid"})
+	paid := invite(t, s, "quarterly", "")
+	sess, err = co.Create(ctx, billing.Request{Account: testAccount, Plan: quarterly, Invite: paid})
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.sessionStatus[sess.ID] = stripe.CheckoutSessionStatusComplete
-	if err := co.Abandon(ctx, sess.ID, "paid"); err == nil {
+	f.SessionStatus[sess.ID] = stripe.CheckoutSessionStatusComplete
+	if err := co.Abandon(ctx, sess.ID, paid); err == nil {
 		t.Error("abandon of a completed session succeeded")
 	}
-	if s.invites["paid"].UsedAt == nil {
+	if !inviteUsed(t, s, paid) {
 		t.Error("invite released although the session completed")
 	}
 
 	// Stripe down: the invite stays spent rather than risk a double spend.
-	s.addInvite("outage", "quarterly", "", later)
-	sess, err = co.Create(ctx, Request{Account: testAccount, Plan: quarterly, Invite: "outage"})
+	outage := invite(t, s, "quarterly", "")
+	sess, err = co.Create(ctx, billing.Request{Account: testAccount, Plan: quarterly, Invite: outage})
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.fail["ExpireCheckoutSession"] = errors.New("stripe down")
-	if err := co.Abandon(ctx, sess.ID, "outage"); err == nil {
+	f.Fail["ExpireCheckoutSession"] = errors.New("stripe down")
+	if err := co.Abandon(ctx, sess.ID, outage); err == nil {
 		t.Error("stripe failure swallowed")
 	}
-	if s.invites["outage"].UsedAt == nil {
+	if !inviteUsed(t, s, outage) {
 		t.Error("invite released although Stripe did not confirm the expiry")
 	}
 }
 
 func TestCheckoutResolvesStoresBeforeStripe(t *testing.T) {
 	f := seededFake(t)
-	s := newMemStore(testAccount)
+	s := newStore(t)
 	co := newTestCheckout(f, s)
-	lister := newFakeStores()
+	lister := billingtest.NewFakeStores()
 	co.Stores = lister
 	ctx := context.Background()
-	s.addInvite("held", "quarterly", "", co.Now().Add(time.Hour))
+	held := invite(t, s, "quarterly", "")
 
-	unknown := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"trollandtoad"}}
-	var ve *ValidationError
-	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: unknown}); !errors.As(err, &ve) || ve.Msg != "Store trollandtoad is not available for the games you picked." {
+	unknown := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"trollandtoad"}}
+	var ve *billing.ValidationError
+	if _, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: unknown}); !errors.As(err, &ve) || ve.Msg != "Store trollandtoad is not available for the games you picked." {
 		t.Errorf("unknown key: %v", err)
 	}
-	lister.fail = errors.New("connection refused")
-	down := Plan{Package: "starter", Interval: "quarterly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}}
-	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: down, Invite: "held"}); !errors.Is(err, ErrStoresUnavailable) {
+	lister.Fail = errors.New("connection refused")
+	down := billing.Plan{Package: "starter", Interval: "quarterly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}}
+	if _, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: down, Invite: held}); !errors.Is(err, billing.ErrStoresUnavailable) {
 		t.Errorf("site down: %v", err)
 	}
-	if f.calls["CreateCustomer"] != 0 || f.calls["CreateCheckoutSession"] != 0 || s.invites["held"].UsedAt != nil {
-		t.Errorf("stripe or the invite was touched: %v used %v", f.calls, s.invites["held"].UsedAt)
+	if f.Calls["CreateCustomer"] != 0 || f.Calls["CreateCheckoutSession"] != 0 || inviteUsed(t, s, held) {
+		t.Errorf("stripe or the invite was touched: %v", f.Calls)
 	}
 }
 
 func TestCheckoutWithOneSiteDown(t *testing.T) {
 	f := seededFake(t)
-	co := newTestCheckout(f, newMemStore(testAccount))
-	lister := newFakeStores()
-	lister.down = map[string]bool{"pokemon": true}
+	co := newTestCheckout(f, newStore(t))
+	lister := billingtest.NewFakeStores()
+	lister.Down = map[string]bool{"pokemon": true}
 	co.Stores = lister
-	plan := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom"}}
-	if _, err := co.Create(context.Background(), Request{Account: testAccount, Plan: plan}); !errors.Is(err, ErrStoresUnavailable) {
+	plan := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom"}}
+	if _, err := co.Create(context.Background(), billing.Request{Account: testAccount, Plan: plan}); !errors.Is(err, billing.ErrStoresUnavailable) {
 		t.Errorf("pokemon down: %v", err)
 	}
-	if f.calls["CreateCheckoutSession"] != 0 || f.calls["CreateCustomer"] != 0 {
-		t.Errorf("stripe touched: %v", f.calls)
+	if f.Calls["CreateCheckoutSession"] != 0 || f.Calls["CreateCustomer"] != 0 {
+		t.Errorf("stripe touched: %v", f.Calls)
 	}
 }
 
 func TestCheckoutReusesTheCallersResolve(t *testing.T) {
 	f := seededFake(t)
-	co := newTestCheckout(f, newMemStore(testAccount))
-	lister := newFakeStores()
+	co := newTestCheckout(f, newStore(t))
+	lister := billingtest.NewFakeStores()
 	co.Stores = lister
-	plan, _ := Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}}.Validate(testCatalog, testGames, false)
+	plan, _ := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}}.Validate(testCatalog, testGames, false)
 	resolved, err := plan.Resolve(context.Background(), testCatalog, lister)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := co.Create(context.Background(), Request{Account: testAccount, Plan: plan, Resolved: &resolved}); err != nil {
+	if _, err := co.Create(context.Background(), billing.Request{Account: testAccount, Plan: plan, Resolved: &resolved}); err != nil {
 		t.Fatal(err)
 	}
-	if lister.calls != 1 {
-		t.Errorf("%d site lookups, want the caller's one", lister.calls)
+	if n := lister.TotalCalls(); n != 1 {
+		t.Errorf("%d site lookups, want the caller's one", n)
 	}
 }
 
 // releaseStore fails a release on a cancelled context, as Postgres does.
 type releaseStore struct {
-	*memStore
+	*apiaccesstest.MemStore
 	released []string
 	fail     error
 }
@@ -306,25 +354,24 @@ func (s *releaseStore) ReleaseInvite(ctx context.Context, token string) error {
 		return s.fail
 	}
 	s.released = append(s.released, token)
-	return s.memStore.ReleaseInvite(ctx, token)
+	return s.MemStore.ReleaseInvite(ctx, token)
 }
 
 func TestCheckoutReleasesInviteAfterTheClientLeaves(t *testing.T) {
 	f := seededFake(t)
-	s := &releaseStore{memStore: newMemStore(testAccount)}
-	co := newTestCheckout(f, s.memStore)
+	s := &releaseStore{MemStore: newStore(t)}
+	co := newTestCheckout(f, s.MemStore)
 	co.Store = s
-	later := co.Now().Add(24 * time.Hour)
-	quarterly := Plan{Package: "all_stores", Interval: "quarterly", Games: []string{"magic"}}
+	quarterly := billing.Plan{Package: "all_stores", Interval: "quarterly", Games: []string{"magic"}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	f.fail["CreateCheckoutSession"] = context.Canceled
+	f.Fail["CreateCheckoutSession"] = context.Canceled
 
-	s.addInvite("left", "quarterly", "", later)
-	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: quarterly, Invite: "left"}); !errors.Is(err, context.Canceled) {
+	left := invite(t, s.MemStore, "quarterly", "")
+	if _, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: quarterly, Invite: left}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("create: %v", err)
 	}
-	if s.invites["left"].UsedAt != nil || !slices.Equal(s.released, []string{"left"}) {
+	if inviteUsed(t, s.MemStore, left) || !slices.Equal(s.released, []string{left}) {
 		t.Errorf("invite still spent after the client left; released %v", s.released)
 	}
 
@@ -333,8 +380,8 @@ func TestCheckoutReleasesInviteAfterTheClientLeaves(t *testing.T) {
 	log.SetOutput(&logged)
 	t.Cleanup(func() { log.SetOutput(saved) })
 	s.fail = errors.New("db down")
-	s.addInvite("stuck", "quarterly", "", later)
-	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: quarterly, Invite: "stuck"}); err == nil {
+	stuck := invite(t, s.MemStore, "quarterly", "")
+	if _, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: quarterly, Invite: stuck}); err == nil {
 		t.Fatal("create succeeded")
 	}
 	if !strings.Contains(logged.String(), "db down") {
@@ -344,7 +391,7 @@ func TestCheckoutReleasesInviteAfterTheClientLeaves(t *testing.T) {
 
 // stuckStore holds every invite release until its context ends.
 type stuckStore struct {
-	*memStore
+	*apiaccesstest.MemStore
 }
 
 func (s *stuckStore) ReleaseInvite(ctx context.Context, _ string) error {
@@ -354,18 +401,16 @@ func (s *stuckStore) ReleaseInvite(ctx context.Context, _ string) error {
 
 func TestCheckoutBoundsTheInviteRelease(t *testing.T) {
 	f := seededFake(t)
-	s := &stuckStore{memStore: newMemStore(testAccount)}
-	co := newTestCheckout(f, s.memStore)
+	s := &stuckStore{MemStore: newStore(t)}
+	co := newTestCheckout(f, s.MemStore)
 	co.Store = s
-	saved := releaseTimeout
-	releaseTimeout = time.Millisecond
-	t.Cleanup(func() { releaseTimeout = saved })
-	s.addInvite("stuck", "quarterly", "", co.Now().Add(24*time.Hour))
-	f.fail["CreateCheckoutSession"] = errors.New("stripe down")
+	t.Cleanup(billing.SetReleaseTimeout(time.Millisecond))
+	stuck := invite(t, s.MemStore, "quarterly", "")
+	f.Fail["CreateCheckoutSession"] = errors.New("stripe down")
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := co.Create(context.Background(), Request{Account: testAccount, Plan: Plan{Package: "all_stores", Interval: "quarterly", Games: []string{"magic"}}, Invite: "stuck"})
+		_, err := co.Create(context.Background(), billing.Request{Account: testAccount, Plan: billing.Plan{Package: "all_stores", Interval: "quarterly", Games: []string{"magic"}}, Invite: stuck})
 		done <- err
 	}()
 	select {
@@ -378,87 +423,97 @@ func TestCheckoutBoundsTheInviteRelease(t *testing.T) {
 	}
 }
 
+// putStripeRow writes testAccount's stripe row for sub_1 with the given status and valid_until.
+func putStripeRow(t *testing.T, s *apiaccesstest.MemStore, status string, until *time.Time) {
+	t.Helper()
+	e := apiaccess.Entitlement{AccountID: testAccount.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"},
+		Status: status, ValidFrom: checkoutNow.Add(-24 * time.Hour), ValidUntil: until, ExternalRef: "sub_1"}
+	if _, err := s.UpsertStripeEntitlement(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCheckoutRefusesAnAccountWithAPlan(t *testing.T) {
 	f := seededFake(t)
-	s := newMemStore(testAccount)
+	s := newStore(t)
 	co := newTestCheckout(f, s)
 	ctx := context.Background()
-	s.addInvite("inv", "quarterly", "", co.Now().Add(24*time.Hour))
-	s.ents["sub_1"] = apiaccess.Entitlement{ID: 1, AccountID: 7, Source: "stripe", Status: "active", ValidFrom: co.Now().Add(-24 * time.Hour), ExternalRef: "sub_1"}
-	monthly := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}
-	quarterly := Plan{Package: "all_stores", Interval: "quarterly", Games: []string{"magic"}}
+	inv := invite(t, s, "quarterly", "")
+	putStripeRow(t, s, "active", nil)
+	monthly := billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}
+	quarterly := billing.Plan{Package: "all_stores", Interval: "quarterly", Games: []string{"magic"}}
 
-	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: monthly}); !errors.Is(err, ErrHasPlan) {
+	if _, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: monthly}); !errors.Is(err, billing.ErrHasPlan) {
 		t.Errorf("monthly with a plan: %v", err)
 	}
-	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: quarterly, Invite: "inv"}); !errors.Is(err, ErrHasPlan) {
+	if _, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: quarterly, Invite: inv}); !errors.Is(err, billing.ErrHasPlan) {
 		t.Errorf("quarterly with a plan: %v", err)
 	}
-	if s.invites["inv"].UsedAt != nil {
+	if inviteUsed(t, s, inv) {
 		t.Error("refused checkout consumed the invite")
 	}
-	if len(f.sessions) != 0 || f.calls["CreateCustomer"] != 0 {
+	if len(f.Sessions) != 0 || f.Calls["CreateCustomer"] != 0 {
 		t.Error("a refused checkout reached Stripe")
 	}
 
 	// Grace lapsing does not end the Stripe subscription, so a row past its
 	// valid_until still blocks checkout while its status stays active.
 	past := co.Now().Add(-time.Hour)
-	lapsed := s.ents["sub_1"]
-	lapsed.ValidUntil = &past
-	s.ents["sub_1"] = lapsed
-	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: monthly}); !errors.Is(err, ErrHasPlan) {
+	putStripeRow(t, s, "active", &past)
+	if _, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: monthly}); !errors.Is(err, billing.ErrHasPlan) {
 		t.Errorf("lapsed-but-active stripe row allowed checkout: %v", err)
 	}
 
 	// Only an ended row frees the account to buy a new plan.
-	ended := lapsed
-	ended.Status = "ended"
-	s.ents["sub_1"] = ended
-	if _, err := co.Create(ctx, Request{Account: testAccount, Plan: monthly}); err != nil {
+	putStripeRow(t, s, "ended", &past)
+	if _, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: monthly}); err != nil {
 		t.Errorf("ended stripe row blocked checkout: %v", err)
 	}
 }
 
 func TestCheckoutExpiresTheCustomersOtherSessions(t *testing.T) {
 	f := seededFake(t)
-	s := newMemStore(testAccount, apiaccess.Account{ID: 8, Email: "other@example.com", Status: "active"})
+	s := newStore(t)
+	otherAccount, err := s.CreateAccount(context.Background(), "other@example.com", "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	co := newTestCheckout(f, s)
 	ctx := context.Background()
-	plan := Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}
+	plan := billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}
 
-	first, err := co.Create(ctx, Request{Account: testAccount, Plan: plan})
+	first, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: plan})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.calls["ListOpenCheckoutSessions"] != 0 {
-		t.Errorf("a new customer listed sessions %d times", f.calls["ListOpenCheckoutSessions"])
+	if f.Calls["ListOpenCheckoutSessions"] != 0 {
+		t.Errorf("a new customer listed sessions %d times", f.Calls["ListOpenCheckoutSessions"])
 	}
-	other, err := co.Create(ctx, Request{Account: s.accounts[8], Plan: plan})
+	other, err := co.Create(ctx, billing.Request{Account: otherAccount, Plan: plan})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := co.Create(ctx, Request{Account: s.accounts[7], Plan: plan})
+	second, err := co.Create(ctx, billing.Request{Account: storedAccount(t, s), Plan: plan})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.sessionStatus[other.ID] != stripe.CheckoutSessionStatusOpen {
-		t.Errorf("another customer's session %s", f.sessionStatus[other.ID])
+	if f.SessionStatus[other.ID] != stripe.CheckoutSessionStatusOpen {
+		t.Errorf("another customer's session %s", f.SessionStatus[other.ID])
 	}
-	if f.sessionStatus[first.ID] != stripe.CheckoutSessionStatusExpired || f.sessionStatus[second.ID] != stripe.CheckoutSessionStatusOpen {
-		t.Errorf("first %s, second %s", f.sessionStatus[first.ID], f.sessionStatus[second.ID])
+	if f.SessionStatus[first.ID] != stripe.CheckoutSessionStatusExpired || f.SessionStatus[second.ID] != stripe.CheckoutSessionStatusOpen {
+		t.Errorf("first %s, second %s", f.SessionStatus[first.ID], f.SessionStatus[second.ID])
 	}
 
 	// An expire Stripe refuses is logged, not fatal; a failed listing fails the checkout.
-	f.fail["ExpireCheckoutSession"] = errors.New("already complete")
-	if _, err := co.Create(ctx, Request{Account: s.accounts[7], Plan: plan}); err != nil {
+	f.Fail["ExpireCheckoutSession"] = errors.New("already complete")
+	if _, err := co.Create(ctx, billing.Request{Account: storedAccount(t, s), Plan: plan}); err != nil {
 		t.Errorf("expire failure failed the checkout: %v", err)
 	}
-	f.fail["ListOpenCheckoutSessions"] = errors.New("stripe down")
-	if _, err := co.Create(ctx, Request{Account: s.accounts[7], Plan: plan}); err == nil {
+	f.Fail["ListOpenCheckoutSessions"] = errors.New("stripe down")
+	if _, err := co.Create(ctx, billing.Request{Account: storedAccount(t, s), Plan: plan}); err == nil {
 		t.Error("list failure swallowed")
 	}
-	if len(f.sessions) != 4 {
-		t.Errorf("sessions %d", len(f.sessions))
+	if len(f.Sessions) != 4 {
+		t.Errorf("sessions %d", len(f.Sessions))
 	}
 }
