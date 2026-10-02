@@ -176,10 +176,10 @@ The full key list with defaults is README's Configuration table.
 
 ### 4.1 Access and migrations
 
-- `database/sql` with `github.com/lib/pq`. `NewClient(ctx, timeseries.SQLConfig)`
+- `database/sql` with `github.com/lib/pq`. `NewClient(ctx, apiaccess.SQLConfig)`
   opens a pool (25 open by default), pings, and runs `migrate`.
-  `SQLConfig.DSN()` is an unquoted `key=value` string: a password that is
-  empty or contains a space breaks it.
+  `SQLConfig.DSN()` single-quotes every value, so an empty password or one
+  with a space or a quote works.
 - `migrate` applies the append-only `migrations` list (`migrations.go`):
   in one transaction it sets `lock_timeout = '5s'`, takes
   `pg_advisory_xact_lock`, creates `schema_migrations` if missing, and runs

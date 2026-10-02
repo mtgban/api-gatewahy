@@ -21,9 +21,26 @@ type DemoAccess struct {
 	LastUsed  *time.Time
 }
 
+func scanDemoAccess(row scanner) (DemoAccess, error) {
+	var d DemoAccess
+	var ends, last sql.NullTime
+	if err := row.Scan(&d.AccountID, &d.Email, &d.Source, &d.Requester, &d.Note, &d.GrantedAt, &ends, &d.Keys, &last); err != nil {
+		return DemoAccess{}, err
+	}
+	if ends.Valid {
+		t := ends.Time
+		d.EndsAt = &t
+	}
+	if last.Valid {
+		t := last.Time
+		d.LastUsed = &t
+	}
+	return d, nil
+}
+
 // ListDemoAccess returns active trial and manual entitlements, newest first.
 func (c *Client) ListDemoAccess(ctx context.Context) ([]DemoAccess, error) {
-	rows, err := c.db.QueryContext(ctx, `
+	return queryAll(ctx, c.db, scanDemoAccess, `
 		SELECT e.account_id, a.email, e.source,
 		       CASE WHEN e.source = 'trial'
 		            THEN coalesce((SELECT t.patreon_email FROM trials t WHERE t.account_id = e.account_id ORDER BY t.granted_at DESC LIMIT 1), '')
@@ -35,26 +52,4 @@ func (c *Client) ListDemoAccess(ctx context.Context) ([]DemoAccess, error) {
 		 WHERE e.status = 'active' AND e.source IN ('trial', 'manual')
 		   AND (e.valid_until IS NULL OR e.valid_until > now())
 		 ORDER BY e.valid_from DESC`)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	var out []DemoAccess
-	for rows.Next() {
-		var d DemoAccess
-		var ends, last sql.NullTime
-		if err := rows.Scan(&d.AccountID, &d.Email, &d.Source, &d.Requester, &d.Note, &d.GrantedAt, &ends, &d.Keys, &last); err != nil {
-			return nil, err
-		}
-		if ends.Valid {
-			t := ends.Time
-			d.EndsAt = &t
-		}
-		if last.Valid {
-			t := last.Time
-			d.LastUsed = &t
-		}
-		out = append(out, d)
-	}
-	return out, rows.Err()
 }

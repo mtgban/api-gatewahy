@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mtgban/api-gatewahy/apiaccess"
 	"github.com/mtgban/mtgban-website/timeseries"
 	"github.com/mtgban/simplecloud"
 )
@@ -48,7 +49,7 @@ type Config struct {
 	ClientIPHeader string                `json:"client_ip_header"`
 	PublicURL      string                `json:"public_url"`
 	GatewayEmail   string                `json:"gateway_email"`
-	APIAccess      *timeseries.SQLConfig `json:"apiaccess_config"`
+	APIAccess      *apiaccess.SQLConfig  `json:"apiaccess_config"`
 	Observability  *timeseries.SQLConfig `json:"observability_config"`
 	DiscordHook    string                `json:"discord_api_notif_hook"`
 	Games          map[string]Game       `json:"games"`

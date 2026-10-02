@@ -304,7 +304,9 @@ and accept the loss during one.
 `apiaccess_config` and `observability_config` are Postgres connections:
 `host`, `port`, `user`, `password`, `dbname`, `sslmode`, plus optional pool
 tuning (`readonly`, `max_open_conns`, `max_idle_conns`,
-`conn_max_lifetime_seconds`). `games` maps a game name to
+`conn_max_lifetime_seconds`). `readonly` only has an effect on
+`observability_config`; `apiaccess_config` accepts it and ignores it,
+since the gateway always writes there. `games` maps a game name to
 `{"upstream": "https://...", "secret": "..."}`; the secret must match the
 value under that game's `api_user_secrets["gateway@mtgban.com"]`.
 

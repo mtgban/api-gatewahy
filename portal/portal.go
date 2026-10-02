@@ -19,7 +19,7 @@ import (
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
 	"github.com/mtgban/api-gatewahy/billing"
-	"github.com/mtgban/api-gatewahy/gateway"
+	"github.com/mtgban/api-gatewahy/clientip"
 	"github.com/mtgban/api-gatewahy/mailer"
 	"github.com/mtgban/api-gatewahy/session"
 	"github.com/mtgban/mtgban-website/apiproductlist"
@@ -369,7 +369,7 @@ func siteOrigin(u string) string {
 
 // clientIP trusts the configured header when it holds an IP, else the peer.
 func (s *Server) clientIP(r *http.Request) string {
-	return gateway.ClientIP(r, s.ClientIPHeader)
+	return clientip.FromRequest(r, s.ClientIPHeader)
 }
 
 // notices are the messages a redirect may ask the next page to show.

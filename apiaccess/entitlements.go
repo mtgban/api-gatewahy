@@ -251,23 +251,16 @@ type StripeRef struct {
 	SubID     string
 }
 
+func scanStripeRef(row scanner) (StripeRef, error) {
+	var ref StripeRef
+	err := row.Scan(&ref.AccountID, &ref.SubID)
+	return ref, err
+}
+
 // ListActiveStripeRefs returns every active stripe row, ordered by account and subscription id.
 func (c *Client) ListActiveStripeRefs(ctx context.Context) ([]StripeRef, error) {
-	rows, err := c.db.QueryContext(ctx,
+	return queryAll(ctx, c.db, scanStripeRef,
 		`SELECT account_id, external_ref FROM entitlements WHERE source = 'stripe' AND status = 'active' AND external_ref IS NOT NULL ORDER BY account_id, external_ref`)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	var out []StripeRef
-	for rows.Next() {
-		var ref StripeRef
-		if err := rows.Scan(&ref.AccountID, &ref.SubID); err != nil {
-			return nil, err
-		}
-		out = append(out, ref)
-	}
-	return out, rows.Err()
 }
 
 // EndEntitlement marks the row ended as of at and returns it. accountID 0
@@ -308,18 +301,13 @@ func (c *Client) listEntitlements(ctx context.Context, accountID int64, activeOn
 	if activeOnly {
 		query += ` AND status = 'active'`
 	}
-	rows, err := c.db.QueryContext(ctx, query+` ORDER BY id`, accountID)
+	out, err := queryAll(ctx, c.db, scanEntitlement, query+` ORDER BY id`, accountID)
 	if err != nil {
-		return nil, err
+		return out, err
 	}
-	defer func() { _ = rows.Close() }()
-	out := []Entitlement{}
-	for rows.Next() {
-		e, err := scanEntitlement(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, e)
+	// ListEntitlements has always returned an empty slice, not nil, for no rows.
+	if out == nil {
+		out = []Entitlement{}
 	}
-	return out, rows.Err()
+	return out, nil
 }

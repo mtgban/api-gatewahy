@@ -78,21 +78,8 @@ func (c *Client) LastTrial(ctx context.Context, email string) (Trial, error) {
 
 // TrialsToRemind lists trials ending in [from, to) that were not reminded yet.
 func (c *Client) TrialsToRemind(ctx context.Context, from, to time.Time) ([]Trial, error) {
-	rows, err := c.db.QueryContext(ctx,
+	return queryAll(ctx, c.db, scanTrial,
 		`SELECT `+trialCols+` FROM trials WHERE ends_at >= $1 AND ends_at < $2 AND reminder_sent_at IS NULL ORDER BY ends_at`, from, to)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	var out []Trial
-	for rows.Next() {
-		t, err := scanTrial(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, t)
-	}
-	return out, rows.Err()
 }
 
 // MarkTrialReminded records that the ending-soon mail went out.
