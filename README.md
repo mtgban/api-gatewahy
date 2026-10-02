@@ -90,7 +90,9 @@ an account ends its sessions on the next request. The trial lasts
 `trial_days` (15 by default) of all data for every configured game, once
 per Patreon email every 180 days; a reminder mails three days before it
 ends. Rotating `GATEWAY_SESSION_SECRET` signs everyone out, which is the
-emergency logout. A Patreon handoff token names the game site that minted
+emergency logout. Cookies issued before purpose binding are rejected once,
+signing everyone out and dropping any saved checkout.
+A Patreon handoff token names the game site that minted
 it and is verified with that game's `secret` from `games`, the same value
 the site keeps under `api_user_secrets["gateway@mtgban.com"]`, so the
 handoff needs no secret of its own. Token-consuming posts (`/login/{token}`, `/trial`,

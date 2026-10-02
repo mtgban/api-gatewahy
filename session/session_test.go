@@ -61,6 +61,44 @@ func TestCSRFIsBoundToTheSession(t *testing.T) {
 	}
 }
 
+func TestTokensAreBoundToTheirPurpose(t *testing.T) {
+	c := codecAt(time.Now())
+	token, _ := c.Encode(Session{AccountID: 7, Email: "ann@example.com"})
+	if _, err := c.Open(token, PurposePending); !errors.Is(err, ErrInvalid) {
+		t.Errorf("session token opened as pending: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	c.SetPending(rec, url.Values{"a": {"7"}, "e": {"ann@example.com"}, "iat": {"1"}, "ep": {"0"}}, time.Hour)
+	pending := rec.Result().Cookies()[0].Value
+	if _, err := c.Decode(pending); !errors.Is(err, ErrInvalid) {
+		t.Errorf("pending token decoded as a session: %v", err)
+	}
+}
+
+func TestSealOverwritesAForgedPurpose(t *testing.T) {
+	c := codecAt(time.Now())
+	token := c.Seal(url.Values{"_p": {"session"}}, time.Hour, PurposePending)
+	if _, err := c.Open(token, PurposeSession); !errors.Is(err, ErrInvalid) {
+		t.Errorf("forged _p survived Seal: %v", err)
+	}
+	v, err := c.Open(token, PurposePending)
+	if err != nil || v.Get("_p") != "pending" {
+		t.Errorf("sealed purpose %v %v", v, err)
+	}
+	if _, err := c.Open(token, ""); !errors.Is(err, ErrInvalid) {
+		t.Errorf("empty purpose accepted: %v", err)
+	}
+}
+
+func TestNewCodecValidatesTheSecret(t *testing.T) {
+	if _, err := NewCodec(make([]byte, 31), 0, false, nil); err == nil || !strings.Contains(err.Error(), "32") {
+		t.Errorf("31 bytes: %v", err)
+	}
+	if _, err := NewCodec(make([]byte, 32), 0, false, nil); err != nil {
+		t.Errorf("32 bytes: %v", err)
+	}
+}
+
 func TestPendingValues(t *testing.T) {
 	now := time.Now()
 	c := codecAt(now)

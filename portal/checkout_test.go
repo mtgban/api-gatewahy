@@ -29,7 +29,7 @@ func TestCheckoutWithoutSessionShowsLoginAndKeepsThePlan(t *testing.T) {
 	if ck == nil {
 		t.Fatal("no pending cookie")
 	}
-	pv, err := ts.Sessions.Open(ck.Value)
+	pv, err := ts.Sessions.Open(ck.Value, session.PurposePending)
 	if err != nil || pv.Get("package") != "starter" || pv.Get("stores") != "cardkingdom,starcitygames" || pv.Get("return_to") != "https://pokemon.mtgban.com/api-plans" {
 		t.Errorf("pending %v %v", pv, err)
 	}
@@ -62,7 +62,7 @@ func TestCheckoutConfirmAndPost(t *testing.T) {
 		t.Fatalf("post: %d %q %d", rec.Code, rec.Header().Get("Location"), f.checkouts)
 	}
 	pending := cookieNamed(rec, session.PendingName)
-	pv, _ := ts.Sessions.Open(pending.Value)
+	pv, _ := ts.Sessions.Open(pending.Value, session.PurposePending)
 	if pv.Get("return_to") != "https://pokemon.mtgban.com/api-plans" || pv.Get("package") != "starter" || pv.Get("invite") != "" {
 		t.Errorf("pending after post %v", pv)
 	}
