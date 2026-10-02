@@ -12,7 +12,7 @@ import (
 type DemoAccess struct {
 	AccountID int64
 	Email     string
-	Source    string
+	Source    Source
 	Requester string
 	Note      string
 	GrantedAt time.Time

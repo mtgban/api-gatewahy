@@ -14,13 +14,13 @@ func TestListDemoAccess(t *testing.T) {
 	manual, _ := c.CreateAccount(ctx, "manual@example.com", "")
 	ends := time.Now().Add(15 * 24 * time.Hour)
 	if _, err := c.CreateTrial(ctx, "patron@example.com", ends, time.Now().Add(-time.Hour),
-		Entitlement{AccountID: trial.ID, Source: "trial", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}}); err != nil {
+		Entitlement{AccountID: trial.ID, Source: SourceTrial, Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.AddEntitlement(ctx, Entitlement{AccountID: paid.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}}); err != nil {
+	if _, err := c.AddEntitlement(ctx, Entitlement{AccountID: paid.ID, Source: SourceStripe, Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.AddEntitlement(ctx, Entitlement{AccountID: manual.ID, Source: "manual", Games: []string{"magic"}, StoreScope: "BASE_ACCESS", Modes: []string{"retail"}, Note: "zoho invoice 12"}); err != nil {
+	if _, err := c.AddEntitlement(ctx, Entitlement{AccountID: manual.ID, Source: SourceManual, Games: []string{"magic"}, StoreScope: "BASE_ACCESS", Modes: []string{"retail"}, Note: "zoho invoice 12"}); err != nil {
 		t.Fatal(err)
 	}
 	// A past trial on the manual account must not become its requester.
@@ -44,7 +44,7 @@ func TestListDemoAccess(t *testing.T) {
 	}
 	// An entitlement that already ran out must not appear.
 	past := time.Now().Add(-time.Hour)
-	if _, err := c.AddEntitlement(ctx, Entitlement{AccountID: paid.ID, Source: "trial", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}, ValidUntil: &past}); err != nil {
+	if _, err := c.AddEntitlement(ctx, Entitlement{AccountID: paid.ID, Source: SourceTrial, Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}, ValidUntil: &past}); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := c.ListDemoAccess(ctx)
@@ -58,10 +58,10 @@ func TestListDemoAccess(t *testing.T) {
 	for _, r := range rows {
 		byEmail[r.Email] = r
 	}
-	if r := byEmail["trial@example.com"]; r.Source != "trial" || r.Requester != "patron@example.com" || r.Keys != 2 || r.EndsAt == nil {
+	if r := byEmail["trial@example.com"]; r.Source != SourceTrial || r.Requester != "patron@example.com" || r.Keys != 2 || r.EndsAt == nil {
 		t.Errorf("trial row %+v", r)
 	}
-	if r := byEmail["manual@example.com"]; r.Source != "manual" || r.Note != "zoho invoice 12" || r.Keys != 0 || r.Requester != "" {
+	if r := byEmail["manual@example.com"]; r.Source != SourceManual || r.Note != "zoho invoice 12" || r.Keys != 0 || r.Requester != "" {
 		t.Errorf("manual row %+v", r)
 	}
 }

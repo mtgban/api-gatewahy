@@ -50,9 +50,9 @@ func TestBillingUsageErrors(t *testing.T) {
 func TestStripeSubscriptionFor(t *testing.T) {
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	past := now.Add(-time.Hour)
-	stripeActive := apiaccess.Entitlement{Source: "stripe", Status: "active", ExternalRef: "sub_1"}
-	stripeEnded := apiaccess.Entitlement{Source: "stripe", Status: "ended", ExternalRef: "sub_0"}
-	manual := apiaccess.Entitlement{Source: "manual", Status: "active"}
+	stripeActive := apiaccess.Entitlement{Source: apiaccess.SourceStripe, Status: apiaccess.EntitlementActive, ExternalRef: "sub_1"}
+	stripeEnded := apiaccess.Entitlement{Source: apiaccess.SourceStripe, Status: apiaccess.EntitlementEnded, ExternalRef: "sub_0"}
+	manual := apiaccess.Entitlement{Source: apiaccess.SourceManual, Status: apiaccess.EntitlementActive}
 	if id, err := billing.SubscriptionFor([]apiaccess.Entitlement{manual, stripeEnded, stripeActive}); err != nil || id != "sub_1" {
 		t.Errorf("one live: %q %v", id, err)
 	}
@@ -107,7 +107,7 @@ func billingFixture(t *testing.T, customerID string) (*billingtest.FakeAPI, *api
 // stripeRow stores the active stripe entitlement an earlier reconcile left for subID.
 func stripeRow(t *testing.T, store *apiaccesstest.MemStore, accountID int64, subID string) {
 	t.Helper()
-	e := apiaccess.Entitlement{AccountID: accountID, Source: "stripe", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}, ExternalRef: subID}
+	e := apiaccess.Entitlement{AccountID: accountID, Source: apiaccess.SourceStripe, Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}, ExternalRef: subID}
 	if _, err := store.UpsertStripeEntitlement(context.Background(), e); err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestStripeReconcile(t *testing.T) {
 	if code != 0 || out != "subscription sub_1 reconciled\n" {
 		t.Fatalf("one: exit %d, stdout %q, stderr %q", code, out, errb)
 	}
-	if ents := rows(); len(ents) != 1 || ents[0].ExternalRef != "sub_1" || ents[0].Status != "active" || len(store.Notified) != 1 {
+	if ents := rows(); len(ents) != 1 || ents[0].ExternalRef != "sub_1" || ents[0].Status != apiaccess.EntitlementActive || len(store.Notified) != 1 {
 		t.Errorf("one: rows %+v, notified %d", ents, len(store.Notified))
 	}
 

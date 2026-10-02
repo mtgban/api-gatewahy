@@ -58,7 +58,7 @@ func TestManualGrant(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
-		if e.AccountID != 7 || e.Source != "manual" || e.StoreScope != "CK,TCG" || e.Note != "annual" {
+		if e.AccountID != 7 || e.Source != SourceManual || e.StoreScope != "CK,TCG" || e.Note != "annual" {
 			t.Errorf("%s: entitlement %+v", c.name, e)
 		}
 		if !slices.Equal(e.Modes, []string{"retail", "buylist"}) {
@@ -87,9 +87,9 @@ func TestKeyKindFor(t *testing.T) {
 		ents []Entitlement
 		want KeyKind
 	}{
-		{"live", []Entitlement{{Source: "stripe", Status: "active", ValidFrom: past}}, KeyLive},
+		{"live", []Entitlement{{Source: SourceStripe, Status: EntitlementActive, ValidFrom: past}}, KeyLive},
 		{"demo, no entitlements", nil, KeyDemo},
-		{"demo, manual only", []Entitlement{{Source: "manual", Status: "active", ValidFrom: past}}, KeyDemo},
+		{"demo, manual only", []Entitlement{{Source: SourceManual, Status: EntitlementActive, ValidFrom: past}}, KeyDemo},
 	}
 	for _, c := range cases {
 		if got := KeyKindFor(c.ents); got != c.want {

@@ -66,6 +66,7 @@ type Config struct {
 	SigTTLSeconds          int          `json:"sig_ttl_seconds"`
 	ShutdownGraceSeconds   int          `json:"shutdown_grace_seconds"`
 	UsageRetentionDays     int          `json:"usage_retention_days"`
+	AuditRetentionDays     int          `json:"admin_actions_retention_days"`
 	Stripe                 StripeConfig `json:"stripe"`
 	PricingURL             string       `json:"pricing_url"`
 	AdminEmails            []string     `json:"admin_emails"`
@@ -177,6 +178,9 @@ func (c *Config) applyDefaults(defaultClientIPHeader, defaultGraceDays bool) {
 	if c.UsageRetentionDays <= 0 {
 		c.UsageRetentionDays = 395
 	}
+	if c.AuditRetentionDays == 0 {
+		c.AuditRetentionDays = 90
+	}
 	if c.PublicURL == "" {
 		c.PublicURL = DefaultPublicURL
 	}
@@ -232,6 +236,9 @@ func (c *Config) Validate() error {
 	}
 	if c.SigTTLSeconds <= 0 {
 		return errors.New("sig_ttl_seconds must be positive")
+	}
+	if c.AuditRetentionDays < 0 {
+		return errors.New("admin_actions_retention_days must not be negative")
 	}
 	if _, err := mail.ParseAddress(c.Mail.From); err != nil {
 		return fmt.Errorf("mail.from: %w", err)

@@ -26,32 +26,32 @@ type Client struct {
 	db *sql.DB
 }
 
-// NewClient opens a pool, pings, and ensures the schema.
-func NewClient(cfg timeseries.SQLConfig) (*Client, error) {
+// NewClient opens a pool, pings, and applies pending migrations.
+func NewClient(ctx context.Context, cfg timeseries.SQLConfig) (*Client, error) {
 	db, err := cfg.OpenDB()
 	if err != nil {
 		return nil, fmt.Errorf("apiaccess: open: %w", err)
 	}
-	return wrap(db)
+	return wrap(ctx, db)
 }
 
-// OpenDSN opens a pool from a Postgres URL, pings, and ensures the schema.
-func OpenDSN(dsn string) (*Client, error) {
+// OpenDSN opens a pool from a Postgres URL, pings, and applies pending migrations.
+func OpenDSN(ctx context.Context, dsn string) (*Client, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, err
 	}
-	return wrap(db)
+	return wrap(ctx, db)
 }
 
-func wrap(db *sql.DB) (*Client, error) {
-	if err := db.Ping(); err != nil {
+func wrap(ctx context.Context, db *sql.DB) (*Client, error) {
+	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("apiaccess: ping: %w", err)
 	}
-	if err := ensureSchema(db); err != nil {
+	if err := migrate(ctx, db); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("apiaccess: ensure schema: %w", err)
+		return nil, fmt.Errorf("apiaccess: migrate: %w", err)
 	}
 	return &Client{db: db}, nil
 }

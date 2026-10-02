@@ -131,7 +131,7 @@ func (s *Server) loginToken(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusInternalServerError, tryAgainMsg)
 		return
 	}
-	if a.Status != "active" {
+	if a.Status != apiaccess.AccountActive {
 		s.fail(w, r, http.StatusForbidden, suspendedMsg)
 		return
 	}

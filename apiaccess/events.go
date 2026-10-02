@@ -34,3 +34,8 @@ func (c *Client) DeleteStripeEvent(ctx context.Context, id string) error {
 	_, err := c.db.ExecContext(ctx, `DELETE FROM stripe_events WHERE id = $1`, id)
 	return err
 }
+
+// PruneStripeEvents deletes events received before the cutoff and returns how many.
+func (c *Client) PruneStripeEvents(ctx context.Context, before time.Time) (int64, error) {
+	return c.deleteCount(ctx, `DELETE FROM stripe_events WHERE received_at < $1`, before)
+}

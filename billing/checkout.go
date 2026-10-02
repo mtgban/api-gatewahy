@@ -61,7 +61,7 @@ type Session struct {
 // Create refuses an account with a Stripe plan, validates the plan, consumes a needed invite,
 // ensures the Stripe customer, expires its other open sessions, and returns a new one.
 func (c *Checkout) Create(ctx context.Context, req Request) (sess Session, err error) {
-	if req.Account.Status != "active" {
+	if req.Account.Status != apiaccess.AccountActive {
 		return Session{}, fmt.Errorf("billing: account %d is %s", req.Account.ID, req.Account.Status)
 	}
 	ents, err := c.Store.ListEntitlements(ctx, req.Account.ID)

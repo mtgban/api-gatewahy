@@ -359,7 +359,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "revoked API key", "")
 		return
 	}
-	if lk.Account.Status != "active" {
+	if lk.Account.Status != apiaccess.AccountActive {
 		writeError(w, http.StatusUnauthorized, "account suspended", "")
 		return
 	}

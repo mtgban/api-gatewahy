@@ -94,7 +94,12 @@ func (c *Client) SummarizeUsage(ctx context.Context, since, until time.Time, acc
 
 // PruneUsage deletes rows older than before and returns how many.
 func (c *Client) PruneUsage(ctx context.Context, before time.Time) (int64, error) {
-	res, err := c.db.ExecContext(ctx, `DELETE FROM usage WHERE ts < $1`, before)
+	return c.deleteCount(ctx, `DELETE FROM usage WHERE ts < $1`, before)
+}
+
+// deleteCount runs one DELETE and returns how many rows it removed.
+func (c *Client) deleteCount(ctx context.Context, query string, args ...any) (int64, error) {
+	res, err := c.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, err
 	}

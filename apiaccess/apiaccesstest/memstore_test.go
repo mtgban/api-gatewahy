@@ -20,9 +20,9 @@ func TestEveryStampReadsTheClock(t *testing.T) {
 	_, k, _ := m.CreateKey(ctx, a.ID, "", apiaccess.KeyLive)
 	revoked, _ := m.RevokeKey(ctx, k.ID, 0)
 	until := frozen.Add(time.Hour)
-	e, _ := m.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: "manual", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}, ValidUntil: &until})
+	e, _ := m.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: apiaccess.SourceManual, Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}, ValidUntil: &until})
 	tr, _ := m.CreateTrial(ctx, "clock@example.com", frozen.Add(time.Hour), frozen.Add(-time.Hour),
-		apiaccess.Entitlement{AccountID: a.ID, Source: "trial", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}})
+		apiaccess.Entitlement{AccountID: a.ID, Source: apiaccess.SourceTrial, Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}})
 	_, inv, _ := m.CreateInvite(ctx, "annual", "", time.Hour, "")
 	_ = m.RecordAdminAction(ctx, "admin@example.com", "x", 0, "", "")
 	acts, _ := m.ListAdminActions(ctx, 0, 1)

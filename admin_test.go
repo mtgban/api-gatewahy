@@ -87,10 +87,10 @@ func TestAdminAccountLifecycle(t *testing.T) {
 	if code, out, errb := admin(t, s, "account", "add", "-email", "CK@Example.com", "-note", "zoho 12"); code != 0 || !strings.Contains(out, "ck@example.com") {
 		t.Fatalf("add: %d %q %q", code, out, errb)
 	}
-	if code, _, _ := admin(t, s, "account", "suspend", "-email", "ck@example.com"); code != 0 || stored(t, s, "ck@example.com").Status != "suspended" {
+	if code, _, _ := admin(t, s, "account", "suspend", "-email", "ck@example.com"); code != 0 || stored(t, s, "ck@example.com").Status != apiaccess.AccountSuspended {
 		t.Fatalf("suspend: %d %+v", code, stored(t, s, "ck@example.com"))
 	}
-	if code, _, _ := admin(t, s, "account", "reinstate", "-email", "ck@example.com"); code != 0 || stored(t, s, "ck@example.com").Status != "active" {
+	if code, _, _ := admin(t, s, "account", "reinstate", "-email", "ck@example.com"); code != 0 || stored(t, s, "ck@example.com").Status != apiaccess.AccountActive {
 		t.Fatalf("reinstate: %d", code)
 	}
 	if code, out, _ := admin(t, s, "account", "list"); code != 0 || !strings.Contains(out, "ck@example.com") {
@@ -154,7 +154,7 @@ func TestAdminKeys(t *testing.T) {
 func TestAdminKeyCreateIsLiveOnAStripePlan(t *testing.T) {
 	s := apiaccesstest.New()
 	admin(t, s, "account", "add", "-email", "ck@example.com")
-	if _, err := s.AddEntitlement(context.Background(), apiaccess.Entitlement{AccountID: stored(t, s, "ck@example.com").ID, Source: "stripe",
+	if _, err := s.AddEntitlement(context.Background(), apiaccess.Entitlement{AccountID: stored(t, s, "ck@example.com").ID, Source: apiaccess.SourceStripe,
 		Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}, ValidFrom: time.Now().Add(-time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestAdminGrants(t *testing.T) {
 	}
 	e := entsOf(t, s, "ck@example.com")[0]
 	if e.StoreScope != "CK,TCG" || len(e.Games) != 2 || e.Games[1] != "pokemon" || e.Modes[0] != "retail" ||
-		e.ValidUntil == nil || e.ValidUntil.Year() != 2027 || e.Source != "manual" || e.Note != "annual" {
+		e.ValidUntil == nil || e.ValidUntil.Year() != 2027 || e.Source != apiaccess.SourceManual || e.Note != "annual" {
 		t.Errorf("grant %+v", e)
 	}
 	if code, _, errb := admin(t, s, "grant", "add", "-email", "ck@example.com", "-games", "magic", "-stores", "DEV_ACCESS", "-modes", "retail"); code != 1 || !strings.Contains(errb, "DEV_ACCESS") {
@@ -192,7 +192,7 @@ func TestAdminGrants(t *testing.T) {
 	if code, out, _ := admin(t, s, "grant", "list", "-email", "ck@example.com"); code != 0 || !strings.Contains(out, "CK,TCG") {
 		t.Errorf("list: %d %q", code, out)
 	}
-	if code, _, _ := admin(t, s, "grant", "end", "-id", strconv.FormatInt(e.ID, 10)); code != 0 || entsOf(t, s, "ck@example.com")[0].Status != "ended" {
+	if code, _, _ := admin(t, s, "grant", "end", "-id", strconv.FormatInt(e.ID, 10)); code != 0 || entsOf(t, s, "ck@example.com")[0].Status != apiaccess.EntitlementEnded {
 		t.Errorf("end: %d %+v", code, entsOf(t, s, "ck@example.com"))
 	}
 }

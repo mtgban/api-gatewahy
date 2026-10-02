@@ -24,7 +24,7 @@ func (s *Server) SendTrialReminders(ctx context.Context, now time.Time) {
 			s.logf("trial reminder %d: account: %v", t.ID, err)
 			continue
 		}
-		if a.Status != "active" {
+		if a.Status != apiaccess.AccountActive {
 			continue
 		}
 		ents, err := s.Store.ListEntitlements(ctx, t.AccountID)
@@ -52,7 +52,7 @@ func (s *Server) SendTrialReminders(ctx context.Context, now time.Time) {
 func trialEntitlementEnded(ents []apiaccess.Entitlement, now time.Time) bool {
 	var hasTrial, activeTrial bool
 	for _, e := range ents {
-		if e.Source != "trial" {
+		if e.Source != apiaccess.SourceTrial {
 			continue
 		}
 		hasTrial = true

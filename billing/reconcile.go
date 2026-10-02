@@ -103,18 +103,18 @@ func (r *Reconciler) failed(sub *stripe.Subscription, err error, pass bool) erro
 // MapStatus maps a Stripe status to entitlement status and end: past_due
 // keeps grace past periodStart, the unpaid period's start; ended rows end
 // at endedAt (or now if zero).
-func MapStatus(status stripe.SubscriptionStatus, periodStart, endedAt time.Time, grace time.Duration, now time.Time) (string, *time.Time) {
+func MapStatus(status stripe.SubscriptionStatus, periodStart, endedAt time.Time, grace time.Duration, now time.Time) (apiaccess.EntitlementStatus, *time.Time) {
 	switch status {
 	case stripe.SubscriptionStatusActive, stripe.SubscriptionStatusTrialing:
-		return "active", nil
+		return apiaccess.EntitlementActive, nil
 	case stripe.SubscriptionStatusPastDue:
 		until := periodStart.Add(grace)
-		return "active", &until
+		return apiaccess.EntitlementActive, &until
 	}
 	if endedAt.IsZero() {
 		endedAt = now
 	}
-	return "ended", &endedAt
+	return apiaccess.EntitlementEnded, &endedAt
 }
 
 // subPeriodStart is the latest item's current period start, and whether any
@@ -228,7 +228,7 @@ func (r *Reconciler) apply(ctx context.Context, sub *stripe.Subscription, pass b
 	resolved, err := plan.Resolve(ctx, r.Catalog, r.Stores)
 	if err != nil {
 		// Without keys there is nothing to stand in for the scope, so the row cannot be written.
-		if status != "ended" || len(plan.Stores) == 0 {
+		if status != apiaccess.EntitlementEnded || len(plan.Stores) == 0 {
 			return r.failed(sub, err, pass)
 		}
 		r.alertf("subscription %s: %v", sub.ID, err)
@@ -238,7 +238,7 @@ func (r *Reconciler) apply(ctx context.Context, sub *stripe.Subscription, pass b
 	}
 	e := apiaccess.Entitlement{
 		AccountID:   account.ID,
-		Source:      "stripe",
+		Source:      apiaccess.SourceStripe,
 		Games:       plan.Games,
 		StoreScope:  resolved.Scope,
 		Modes:       resolved.Modes,

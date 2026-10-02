@@ -23,7 +23,7 @@ func TestParseAppliesDefaults(t *testing.T) {
 	if c.Port != "8080" || c.InstanceName != "api-gatewahy" || c.Link != "http://www.mtgban.com" || c.CacheTTLSeconds != 60 ||
 		c.PerKeyRequestsPerSec != 10 || c.PerKeyBurst != 5 || c.UpstreamTimeoutSeconds != 300 ||
 		c.SigTTLSeconds != 300 || c.ShutdownGraceSeconds != 60 || c.StaleGraceSeconds != 600 || c.LookupTimeoutSeconds != 5 ||
-		c.UsageRetentionDays != 395 || c.ClientIPHeader != DefaultClientIPHeader {
+		c.UsageRetentionDays != 395 || c.AuditRetentionDays != 90 || c.ClientIPHeader != DefaultClientIPHeader {
 		t.Errorf("defaults not applied: %+v", c)
 	}
 }
@@ -59,6 +59,13 @@ func TestParseRejectsTrailingData(t *testing.T) {
 		if err == nil {
 			t.Errorf("suffix %q: accepted trailing data", suffix)
 		}
+	}
+}
+
+func TestParseKeepsAdminActionsRetention(t *testing.T) {
+	c, err := Parse(strings.NewReader(strings.Replace(goodJSON, `{`, `{"admin_actions_retention_days": 30,`, 1)))
+	if err != nil || c.AuditRetentionDays != 30 {
+		t.Errorf("admin_actions_retention_days %d %v, want 30", c.AuditRetentionDays, err)
 	}
 }
 
@@ -171,6 +178,7 @@ func TestValidateRejectsStripeFields(t *testing.T) {
 	}{
 		{"relative public_url", `"public_url": "api.mtgban.com",`, "public_url"},
 		{"negative grace", `"stripe": {"grace_days": -1},`, "grace_days"},
+		{"negative admin retention", `"admin_actions_retention_days": -1,`, "admin_actions_retention_days"},
 		{"path without slash", `"stripe": {"success_path": "done"},`, "success_path"},
 		{"cancel without slash", `"stripe": {"cancel_path": "nope"},`, "cancel_path"},
 		{"success equals cancel", `"stripe": {"success_path": "/x", "cancel_path": "/x"},`, "must differ"},

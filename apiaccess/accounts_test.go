@@ -20,7 +20,7 @@ func TestAccountsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Email != "ck@example.com" || a.Status != "active" || a.Note != "card kingdom" || a.ID == 0 {
+	if a.Email != "ck@example.com" || a.Status != AccountActive || a.Note != "card kingdom" || a.ID == 0 {
 		t.Errorf("created %+v", a)
 	}
 
@@ -37,11 +37,11 @@ func TestAccountsRoundTrip(t *testing.T) {
 		t.Errorf("missing account: %v", err)
 	}
 
-	if err := c.SetAccountStatus(ctx, a.ID, "suspended"); err != nil {
+	if err := c.SetAccountStatus(ctx, a.ID, AccountSuspended); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = c.GetAccount(ctx, a.ID)
-	if got.Status != "suspended" {
+	if got.Status != AccountSuspended {
 		t.Errorf("status %q", got.Status)
 	}
 

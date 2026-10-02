@@ -68,10 +68,10 @@ func (s *Server) renderAccount(w http.ResponseWriter, r *http.Request, status in
 			continue
 		}
 		d.Entitlements = append(d.Entitlements, s.describeEntitlement(sites, e))
-		if e.Source == "trial" && e.ValidUntil != nil {
+		if e.Source == apiaccess.SourceTrial && e.ValidUntil != nil {
 			d.TrialEnds = e.ValidUntil.Format("January 2, 2006")
 		}
-		if e.Source == "stripe" && d.ChangeURL == "" && s.Stripe != nil {
+		if e.Source == apiaccess.SourceStripe && d.ChangeURL == "" && s.Stripe != nil {
 			d.ChangeURL = mergeQuery(s.PricingURL, s.prefillQuery(sites, e))
 		}
 	}

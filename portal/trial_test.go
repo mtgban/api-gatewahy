@@ -48,7 +48,7 @@ func TestTrialGrantsOnceAndSignsIn(t *testing.T) {
 		t.Fatal("no account")
 	}
 	ents, _ := ts.store.ListEntitlements(ctx, a.ID)
-	if len(ents) != 1 || ents[0].Source != "trial" || ents[0].StoreScope != apiaccess.ScopeAll || len(ents[0].Modes) != 3 || strings.Join(ents[0].Games, ",") != "magic,pokemon" || ents[0].ValidUntil == nil {
+	if len(ents) != 1 || ents[0].Source != apiaccess.SourceTrial || ents[0].StoreScope != apiaccess.ScopeAll || len(ents[0].Modes) != 3 || strings.Join(ents[0].Games, ",") != "magic,pokemon" || ents[0].ValidUntil == nil {
 		t.Fatalf("entitlement %+v", ents)
 	}
 	if got := ents[0].ValidUntil.Sub(ts.now); got != 15*24*time.Hour {

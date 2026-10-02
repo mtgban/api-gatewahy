@@ -225,7 +225,7 @@ func TestSessionGateRedirectsAndChecksCSRF(t *testing.T) {
 	if rec := ts.do("POST", "/gated", "csrf="+csrf); rec.Code != 401 {
 		t.Errorf("anonymous post: %d", rec.Code)
 	}
-	_ = ts.store.SetAccountStatus(context.Background(), a.ID, "suspended")
+	_ = ts.store.SetAccountStatus(context.Background(), a.ID, apiaccess.AccountSuspended)
 	if rec := ts.do("GET", "/gated", "", ck); rec.Code != 403 || !strings.Contains(rec.Body.String(), "suspended") {
 		t.Errorf("suspended: %d %s", rec.Code, rec.Body.String())
 	}
@@ -238,11 +238,11 @@ func TestDescribeEntitlement(t *testing.T) {
 		e    apiaccess.Entitlement
 		want entitlementView
 	}{
-		{apiaccess.Entitlement{Source: "stripe", Games: []string{"magic"}, StoreScope: "BASE_ACCESS", Modes: []string{"retail", "buylist"}},
+		{apiaccess.Entitlement{Source: apiaccess.SourceStripe, Games: []string{"magic"}, StoreScope: "BASE_ACCESS", Modes: []string{"retail", "buylist"}},
 			entitlementView{Source: "Stripe subscription", Package: "Base Access", Games: "magic", Stores: "every EU and US store", Modes: "retail, buylist", Until: ""}},
-		{apiaccess.Entitlement{Source: "trial", Games: []string{"magic", "pokemon"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail", "buylist", "sealed"}, ValidUntil: &until},
+		{apiaccess.Entitlement{Source: apiaccess.SourceTrial, Games: []string{"magic", "pokemon"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail", "buylist", "sealed"}, ValidUntil: &until},
 			entitlementView{Source: "Trial", Package: "All Access", Games: "magic, pokemon", Stores: "every store", Modes: "retail, buylist, sealed", Until: "October 5, 2026", Trial: true}},
-		{apiaccess.Entitlement{Source: "manual", Games: []string{"magic"}, StoreScope: "TCGLow,TCGMarket,TCGDirect,TCGDirectNet,TCGPlayer,CK,ZZZ", Modes: []string{"retail"}},
+		{apiaccess.Entitlement{Source: apiaccess.SourceManual, Games: []string{"magic"}, StoreScope: "TCGLow,TCGMarket,TCGDirect,TCGDirectNet,TCGPlayer,CK,ZZZ", Modes: []string{"retail"}},
 			entitlementView{Source: "Arranged with MTGBAN", Package: "À la carte", Games: "magic", Stores: "TCGplayer, Card Kingdom, ZZZ", Modes: "retail"}},
 	}
 	for _, tc := range cases {
@@ -260,9 +260,9 @@ func TestPlanValuesRoundTrip(t *testing.T) {
 }
 
 // entitlementFor is an active entitlement for magic with the given source and scope.
-func entitlementFor(accountID int64, source, scope string) apiaccess.Entitlement {
+func entitlementFor(accountID int64, source apiaccess.Source, scope string) apiaccess.Entitlement {
 	return apiaccess.Entitlement{AccountID: accountID, Source: source, Games: []string{"magic"}, StoreScope: scope,
-		Modes: []string{"retail", "buylist"}, Status: "active", ExternalRef: "sub_1"}
+		Modes: []string{"retail", "buylist"}, Status: apiaccess.EntitlementActive, ExternalRef: "sub_1"}
 }
 
 // trialFor is the grant a trial writes; unlike entitlementFor it carries no external ref.

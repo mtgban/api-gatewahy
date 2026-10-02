@@ -171,7 +171,7 @@ func (m *MemStore) CreateAccount(_ context.Context, email, note string) (apiacce
 }
 
 func (m *MemStore) insertAccount(email, note string) *apiaccess.Account {
-	a := &apiaccess.Account{ID: m.nextID("accounts"), Email: apiaccess.NormalizeEmail(email), Status: "active", CreatedAt: m.now(), Note: note}
+	a := &apiaccess.Account{ID: m.nextID("accounts"), Email: apiaccess.NormalizeEmail(email), Status: apiaccess.AccountActive, CreatedAt: m.now(), Note: note}
 	m.accounts = append(m.accounts, a)
 	return a
 }
@@ -204,14 +204,14 @@ func (m *MemStore) GetAccount(_ context.Context, id int64) (apiaccess.Account, e
 	return *a, nil
 }
 
-// SetAccountStatus sets "active" or "suspended".
-func (m *MemStore) SetAccountStatus(_ context.Context, id int64, status string) error {
+// SetAccountStatus sets AccountActive or AccountSuspended.
+func (m *MemStore) SetAccountStatus(_ context.Context, id int64, status apiaccess.AccountStatus) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.enterID("SetAccountStatus", id); err != nil {
 		return err
 	}
-	if status != "active" && status != "suspended" {
+	if !status.Valid() {
 		return errors.New("apiaccess: status must be active or suspended")
 	}
 	a := m.account(id)
@@ -460,7 +460,7 @@ func (m *MemStore) canonical(e apiaccess.Entitlement) (apiaccess.Entitlement, er
 		return apiaccess.Entitlement{}, err
 	}
 	if e.Status == "" {
-		e.Status = "active"
+		e.Status = apiaccess.EntitlementActive
 	}
 	if e.ValidFrom.IsZero() {
 		e.ValidFrom = m.Now()
@@ -557,7 +557,7 @@ func (m *MemStore) ListActiveStripeRefs(context.Context) ([]apiaccess.StripeRef,
 	}
 	var out []apiaccess.StripeRef
 	for _, e := range m.ents {
-		if e.Source == "stripe" && e.Status == "active" && e.ExternalRef != "" {
+		if e.Source == apiaccess.SourceStripe && e.Status == apiaccess.EntitlementActive && e.ExternalRef != "" {
 			out = append(out, apiaccess.StripeRef{AccountID: e.AccountID, SubID: e.ExternalRef})
 		}
 	}
@@ -579,13 +579,13 @@ func (m *MemStore) EndEntitlement(_ context.Context, id, accountID int64, at tim
 		if e.ID != id || (accountID != 0 && e.AccountID != accountID) {
 			continue
 		}
-		if e.Source == "stripe" {
+		if e.Source == apiaccess.SourceStripe {
 			return apiaccess.Entitlement{}, apiaccess.ErrStripeEntitlement
 		}
-		if e.Status == "ended" {
+		if e.Status == apiaccess.EntitlementEnded {
 			return apiaccess.Entitlement{}, apiaccess.ErrNotFound
 		}
-		e.Status = "ended"
+		e.Status = apiaccess.EntitlementEnded
 		e.ValidUntil = pgTimePtr(&at)
 		return copyEntitlement(e), nil
 	}
@@ -1098,7 +1098,7 @@ func (m *MemStore) ListDemoAccess(context.Context) ([]apiaccess.DemoAccess, erro
 	now := m.Now()
 	var out []apiaccess.DemoAccess
 	for _, e := range m.ents {
-		if e.Status != "active" || (e.Source != "trial" && e.Source != "manual") || (e.ValidUntil != nil && !e.ValidUntil.After(now)) {
+		if e.Status != apiaccess.EntitlementActive || (e.Source != apiaccess.SourceTrial && e.Source != apiaccess.SourceManual) || (e.ValidUntil != nil && !e.ValidUntil.After(now)) {
 			continue
 		}
 		a := m.account(e.AccountID)
@@ -1106,7 +1106,7 @@ func (m *MemStore) ListDemoAccess(context.Context) ([]apiaccess.DemoAccess, erro
 			continue
 		}
 		d := apiaccess.DemoAccess{AccountID: e.AccountID, Email: a.Email, Source: e.Source, Note: e.Note, GrantedAt: e.ValidFrom, EndsAt: pgTimePtr(e.ValidUntil)}
-		if e.Source == "trial" {
+		if e.Source == apiaccess.SourceTrial {
 			var latest *apiaccess.Trial
 			for _, t := range m.trials {
 				if t.AccountID == e.AccountID && (latest == nil || t.GrantedAt.After(latest.GrantedAt)) {

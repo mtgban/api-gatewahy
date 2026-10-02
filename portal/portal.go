@@ -33,7 +33,7 @@ type Store interface {
 	GetAccount(ctx context.Context, id int64) (apiaccess.Account, error)
 	GetAccountByEmail(ctx context.Context, email string) (apiaccess.Account, error)
 	GetOrCreateAccount(ctx context.Context, email, note string) (apiaccess.Account, error)
-	SetAccountStatus(ctx context.Context, id int64, status string) error
+	SetAccountStatus(ctx context.Context, id int64, status apiaccess.AccountStatus) error
 	SetAccountNote(ctx context.Context, id int64, note string) error
 	ListAccounts(ctx context.Context) ([]apiaccess.Account, error)
 	SearchAccounts(ctx context.Context, q string) ([]apiaccess.Account, error)
@@ -252,7 +252,7 @@ func (s *Server) current(r *http.Request) (session.Session, apiaccess.Account, e
 	if sess.Epoch != a.SessionEpoch {
 		return session.Session{}, apiaccess.Account{}, errNoSession
 	}
-	if a.Status != "active" {
+	if a.Status != apiaccess.AccountActive {
 		return sess, a, errSuspended
 	}
 	return sess, a, nil

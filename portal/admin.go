@@ -196,8 +196,8 @@ func (s *Server) adminStatus(w http.ResponseWriter, r *http.Request, sess sessio
 	if !ok {
 		return
 	}
-	status := r.FormValue("status")
-	if status != "active" && status != "suspended" {
+	status := apiaccess.AccountStatus(r.FormValue("status"))
+	if !status.Valid() {
 		s.renderAdminAccount(w, r, sess, a, http.StatusBadRequest, "", "Status must be active or suspended.", "")
 		return
 	}
@@ -205,7 +205,7 @@ func (s *Server) adminStatus(w http.ResponseWriter, r *http.Request, sess sessio
 		s.renderAdminAccount(w, r, sess, a, http.StatusInternalServerError, "", tryAgainMsg, "")
 		return
 	}
-	s.audit(r, sess, "status", a.ID, "", status)
+	s.audit(r, sess, "status", a.ID, "", string(status))
 	s.notify(r)
 	s.adminRedirect(w, r, a, "status")
 }
@@ -323,7 +323,7 @@ func (s *Server) adminEndEntitlement(w http.ResponseWriter, r *http.Request, ses
 		http.NotFound(w, r)
 		return
 	}
-	if ents[i].Source == "stripe" {
+	if ents[i].Source == apiaccess.SourceStripe {
 		s.renderAdminAccount(w, r, sess, a, http.StatusBadRequest, "", stripeEndMsg, "")
 		return
 	}

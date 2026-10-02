@@ -112,12 +112,12 @@ func (s *Server) trial(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusInternalServerError, tryAgainMsg)
 		return
 	}
-	if a.Status != "active" {
+	if a.Status != apiaccess.AccountActive {
 		s.fail(w, r, http.StatusForbidden, suspendedMsg)
 		return
 	}
 	until := now.AddDate(0, 0, s.trialDays())
-	e := apiaccess.Entitlement{AccountID: a.ID, Source: "trial", Games: slices.Clone(s.Games), StoreScope: apiaccess.ScopeAll,
+	e := apiaccess.Entitlement{AccountID: a.ID, Source: apiaccess.SourceTrial, Games: slices.Clone(s.Games), StoreScope: apiaccess.ScopeAll,
 		Modes: slices.Clone(apiaccess.ValidModes), Note: "patreon trial"}
 	_, err = s.Store.CreateTrial(ctx, claims.Email, until, now.Add(-trialCooldown), e)
 	if errors.Is(err, apiaccess.ErrTrialTooSoon) {
@@ -188,7 +188,7 @@ func (s *Server) patreonSession(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusInternalServerError, tryAgainMsg)
 		return
 	}
-	if a.Status != "active" {
+	if a.Status != apiaccess.AccountActive {
 		s.fail(w, r, http.StatusForbidden, suspendedMsg)
 		return
 	}

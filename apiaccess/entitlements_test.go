@@ -58,11 +58,11 @@ func TestActiveAt(t *testing.T) {
 		e    Entitlement
 		want bool
 	}{
-		{"open ended", Entitlement{Status: "active", ValidFrom: past}, true},
-		{"future start", Entitlement{Status: "active", ValidFrom: until}, false},
-		{"expired", Entitlement{Status: "active", ValidFrom: past, ValidUntil: &past}, false},
-		{"until later", Entitlement{Status: "active", ValidFrom: past, ValidUntil: &until}, true},
-		{"ended", Entitlement{Status: "ended", ValidFrom: past}, false},
+		{"open ended", Entitlement{Status: EntitlementActive, ValidFrom: past}, true},
+		{"future start", Entitlement{Status: EntitlementActive, ValidFrom: until}, false},
+		{"expired", Entitlement{Status: EntitlementActive, ValidFrom: past, ValidUntil: &past}, false},
+		{"until later", Entitlement{Status: EntitlementActive, ValidFrom: past, ValidUntil: &until}, true},
+		{"ended", Entitlement{Status: EntitlementEnded, ValidFrom: past}, false},
 	}
 	for _, c := range cases {
 		if got := c.e.ActiveAt(now); got != c.want {
@@ -80,11 +80,11 @@ func TestHasActiveStripePlan(t *testing.T) {
 		want bool
 	}{
 		{"none", nil, false},
-		{"active stripe", []Entitlement{{Source: "stripe", Status: "active", ValidFrom: past}}, true},
-		{"active manual only", []Entitlement{{Source: "manual", Status: "active", ValidFrom: past}}, false},
-		{"ended stripe", []Entitlement{{Source: "stripe", Status: "ended", ValidFrom: past}}, false},
-		{"manual then stripe", []Entitlement{{Source: "manual", Status: "active", ValidFrom: past}, {Source: "stripe", Status: "active", ValidFrom: past}}, true},
-		{"stripe lapsed in grace", []Entitlement{{Source: "stripe", Status: "active", ValidFrom: past, ValidUntil: &past}}, true},
+		{"active stripe", []Entitlement{{Source: SourceStripe, Status: EntitlementActive, ValidFrom: past}}, true},
+		{"active manual only", []Entitlement{{Source: SourceManual, Status: EntitlementActive, ValidFrom: past}}, false},
+		{"ended stripe", []Entitlement{{Source: SourceStripe, Status: EntitlementEnded, ValidFrom: past}}, false},
+		{"manual then stripe", []Entitlement{{Source: SourceManual, Status: EntitlementActive, ValidFrom: past}, {Source: SourceStripe, Status: EntitlementActive, ValidFrom: past}}, true},
+		{"stripe lapsed in grace", []Entitlement{{Source: SourceStripe, Status: EntitlementActive, ValidFrom: past, ValidUntil: &past}}, true},
 	}
 	for _, c := range cases {
 		if got := HasActiveStripePlan(c.ents); got != c.want {
@@ -99,13 +99,13 @@ func TestEntitlementsRoundTrip(t *testing.T) {
 	a, _ := c.CreateAccount(ctx, "e@example.com", "")
 
 	e, err := c.AddEntitlement(ctx, Entitlement{
-		AccountID: a.ID, Source: "manual", Games: []string{"magic", "pokemon"},
+		AccountID: a.ID, Source: SourceManual, Games: []string{"magic", "pokemon"},
 		StoreScope: "BASE_ACCESS", Modes: []string{"retail", "buylist"}, Note: "test",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e.ID == 0 || e.Status != "active" || len(e.Games) != 2 || len(e.Addons) != 0 {
+	if e.ID == 0 || e.Status != EntitlementActive || len(e.Games) != 2 || len(e.Addons) != 0 {
 		t.Errorf("added %+v", e)
 	}
 
@@ -122,7 +122,7 @@ func TestEntitlementsRoundTrip(t *testing.T) {
 		t.Errorf("ended row still active: %+v", active)
 	}
 	all, _ := c.ListEntitlements(ctx, a.ID)
-	if len(all) != 1 || all[0].Status != "ended" || all[0].ValidUntil == nil {
+	if len(all) != 1 || all[0].Status != EntitlementEnded || all[0].ValidUntil == nil {
 		t.Errorf("ended row wrong: %+v", all)
 	}
 }
@@ -205,7 +205,7 @@ func TestAddEntitlementValidates(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()
 	a, _ := c.CreateAccount(ctx, "v@example.com", "")
-	base := Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "TCGLow", Modes: []string{"retail"}}
+	base := Entitlement{AccountID: a.ID, Source: SourceStripe, Games: []string{"magic"}, StoreScope: "TCGLow", Modes: []string{"retail"}}
 
 	dev := base
 	dev.StoreScope = "DEV_ACCESS"
@@ -240,12 +240,12 @@ func TestUpsertStripeEntitlement(t *testing.T) {
 	ctx := context.Background()
 	a, _ := c.CreateAccount(ctx, "up@example.com", "")
 
-	if _, err := c.UpsertStripeEntitlement(ctx, Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}}); err == nil {
+	if _, err := c.UpsertStripeEntitlement(ctx, Entitlement{AccountID: a.ID, Source: SourceStripe, Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}}); err == nil {
 		t.Error("upsert without external_ref accepted")
 	}
 
 	first, err := c.UpsertStripeEntitlement(ctx, Entitlement{
-		AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "BASE_ACCESS",
+		AccountID: a.ID, Source: SourceStripe, Games: []string{"magic"}, StoreScope: "BASE_ACCESS",
 		Modes: []string{"retail", "buylist"}, ExternalRef: "sub_1", Note: "v1",
 	})
 	if err != nil {
@@ -253,8 +253,8 @@ func TestUpsertStripeEntitlement(t *testing.T) {
 	}
 	until := time.Now().Add(48 * time.Hour).Truncate(time.Second)
 	second, err := c.UpsertStripeEntitlement(ctx, Entitlement{
-		AccountID: a.ID, Source: "stripe", Games: []string{"magic", "pokemon"}, StoreScope: "ALL_ACCESS",
-		Modes: []string{"retail", "buylist", "sealed"}, Addons: []string{"extra_game:1"}, Status: "active",
+		AccountID: a.ID, Source: SourceStripe, Games: []string{"magic", "pokemon"}, StoreScope: "ALL_ACCESS",
+		Modes: []string{"retail", "buylist", "sealed"}, Addons: []string{"extra_game:1"}, Status: EntitlementActive,
 		ValidUntil: &until, ExternalRef: "sub_1", Note: "v2",
 	})
 	if err != nil {
@@ -276,13 +276,13 @@ func TestUpsertStripeEntitlement(t *testing.T) {
 	}
 
 	ended, err := c.UpsertStripeEntitlement(ctx, Entitlement{
-		AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "ALL_ACCESS",
-		Modes: []string{"retail"}, Status: "ended", ExternalRef: "sub_1",
+		AccountID: a.ID, Source: SourceStripe, Games: []string{"magic"}, StoreScope: "ALL_ACCESS",
+		Modes: []string{"retail"}, Status: EntitlementEnded, ExternalRef: "sub_1",
 	})
-	if err != nil || ended.Status != "ended" {
+	if err != nil || ended.Status != EntitlementEnded {
 		t.Errorf("ended: %+v %v", ended, err)
 	}
-	if _, err := c.UpsertStripeEntitlement(ctx, Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "DEV_ACCESS", Modes: []string{"retail"}, ExternalRef: "sub_2"}); err == nil {
+	if _, err := c.UpsertStripeEntitlement(ctx, Entitlement{AccountID: a.ID, Source: SourceStripe, Games: []string{"magic"}, StoreScope: "DEV_ACCESS", Modes: []string{"retail"}, ExternalRef: "sub_2"}); err == nil {
 		t.Error("DEV_ACCESS accepted by upsert")
 	}
 }
@@ -292,7 +292,7 @@ func TestListActiveStripeRefs(t *testing.T) {
 	ctx := context.Background()
 	a, _ := c.CreateAccount(ctx, "refs@example.com", "")
 	b, _ := c.CreateAccount(ctx, "refs2@example.com", "")
-	base := Entitlement{AccountID: a.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}}
+	base := Entitlement{AccountID: a.ID, Source: SourceStripe, Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"}}
 	live := base
 	live.ExternalRef = "sub_live"
 	second := base
@@ -303,9 +303,9 @@ func TestListActiveStripeRefs(t *testing.T) {
 	other.ExternalRef = "sub_a"
 	gone := base
 	gone.ExternalRef = "sub_gone"
-	gone.Status = "ended"
+	gone.Status = EntitlementEnded
 	manual := base
-	manual.Source = "manual"
+	manual.Source = SourceManual
 	for _, e := range []Entitlement{manual} {
 		if _, err := c.AddEntitlement(ctx, e); err != nil {
 			t.Fatal(err)

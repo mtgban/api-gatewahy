@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mtgban/api-gatewahy/apiaccess"
 	"github.com/mtgban/api-gatewahy/session"
 )
 
@@ -119,7 +120,7 @@ func TestLoginContinuesPendingCheckout(t *testing.T) {
 func TestSuspendedAccountCannotSignIn(t *testing.T) {
 	ts := newTestServer(t)
 	a, _ := ts.store.GetOrCreateAccount(context.Background(), "ann@example.com", "")
-	_ = ts.store.SetAccountStatus(context.Background(), a.ID, "suspended")
+	_ = ts.store.SetAccountStatus(context.Background(), a.ID, apiaccess.AccountSuspended)
 	ts.do("POST", "/login", "email=ann%40example.com")
 	m := linkRe.FindStringSubmatch(ts.mail.String())
 	rec := ts.do("POST", "/login/"+m[1], "")
@@ -144,7 +145,7 @@ func TestLogoutClearsCookies(t *testing.T) {
 	}
 
 	b, ck2, csrf2 := ts.signIn(t, "bob@example.com")
-	_ = ts.store.SetAccountStatus(context.Background(), b.ID, "suspended")
+	_ = ts.store.SetAccountStatus(context.Background(), b.ID, apiaccess.AccountSuspended)
 	rec = ts.do("POST", "/logout", "csrf="+csrf2, ck2)
 	if rec.Code != 302 || rec.Header().Get("Location") != "https://mtgban.com/api-plans" {
 		t.Errorf("suspended: %d %q", rec.Code, rec.Header().Get("Location"))

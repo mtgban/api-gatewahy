@@ -26,7 +26,7 @@ func seededFake(t *testing.T) *billingtest.FakeAPI {
 }
 
 // testAccount is the first account newStore creates, so its id is 1.
-var testAccount = apiaccess.Account{ID: 1, Email: "ck@example.com", Status: "active"}
+var testAccount = apiaccess.Account{ID: 1, Email: "ck@example.com", Status: apiaccess.AccountActive}
 
 // testAccountRef is testAccount's id as Stripe metadata carries it.
 var testAccountRef = strconv.FormatInt(testAccount.ID, 10)
@@ -148,7 +148,7 @@ func TestCheckoutRejectsBadPlans(t *testing.T) {
 		t.Error("unknown game accepted")
 	}
 	suspended := testAccount
-	suspended.Status = "suspended"
+	suspended.Status = apiaccess.AccountSuspended
 	if _, err := co.Create(ctx, billing.Request{Account: suspended, Plan: billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}}); err == nil || !strings.Contains(err.Error(), "suspended") {
 		t.Errorf("suspended account: %v", err)
 	}
@@ -424,9 +424,9 @@ func TestCheckoutBoundsTheInviteRelease(t *testing.T) {
 }
 
 // putStripeRow writes testAccount's stripe row for sub_1 with the given status and valid_until.
-func putStripeRow(t *testing.T, s *apiaccesstest.MemStore, status string, until *time.Time) {
+func putStripeRow(t *testing.T, s *apiaccesstest.MemStore, status apiaccess.EntitlementStatus, until *time.Time) {
 	t.Helper()
-	e := apiaccess.Entitlement{AccountID: testAccount.ID, Source: "stripe", Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"},
+	e := apiaccess.Entitlement{AccountID: testAccount.ID, Source: apiaccess.SourceStripe, Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Modes: []string{"retail"},
 		Status: status, ValidFrom: checkoutNow.Add(-24 * time.Hour), ValidUntil: until, ExternalRef: "sub_1"}
 	if _, err := s.UpsertStripeEntitlement(context.Background(), e); err != nil {
 		t.Fatal(err)
@@ -439,7 +439,7 @@ func TestCheckoutRefusesAnAccountWithAPlan(t *testing.T) {
 	co := newTestCheckout(f, s)
 	ctx := context.Background()
 	inv := invite(t, s, "quarterly", "")
-	putStripeRow(t, s, "active", nil)
+	putStripeRow(t, s, apiaccess.EntitlementActive, nil)
 	monthly := billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}
 	quarterly := billing.Plan{Package: "all_stores", Interval: "quarterly", Games: []string{"magic"}}
 
@@ -459,13 +459,13 @@ func TestCheckoutRefusesAnAccountWithAPlan(t *testing.T) {
 	// Grace lapsing does not end the Stripe subscription, so a row past its
 	// valid_until still blocks checkout while its status stays active.
 	past := co.Now().Add(-time.Hour)
-	putStripeRow(t, s, "active", &past)
+	putStripeRow(t, s, apiaccess.EntitlementActive, &past)
 	if _, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: monthly}); !errors.Is(err, billing.ErrHasPlan) {
 		t.Errorf("lapsed-but-active stripe row allowed checkout: %v", err)
 	}
 
 	// Only an ended row frees the account to buy a new plan.
-	putStripeRow(t, s, "ended", &past)
+	putStripeRow(t, s, apiaccess.EntitlementEnded, &past)
 	if _, err := co.Create(ctx, billing.Request{Account: testAccount, Plan: monthly}); err != nil {
 		t.Errorf("ended stripe row blocked checkout: %v", err)
 	}

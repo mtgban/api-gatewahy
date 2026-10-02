@@ -94,7 +94,7 @@ default applies to every verb (see todo/refactor.md).
 
 ### 2.2 `serve` (`serve.go`)
 
-1. Load config; open `apiaccess.Client` (pings, then runs `ensureSchema`).
+1. Load config; open `apiaccess.Client` (pings, then runs pending migrations).
 2. Optional observability recorder (`observability_config`); failure to
    open it only logs.
 3. Feature switches, all read from the environment:
@@ -125,7 +125,7 @@ instance, so each job runs once:
 | Job | When | What |
 |---|---|---|
 | Prober | at start, then hourly | Mints a BASE_ACCESS retail signature per game, GETs `/api/mtgban/stores.json`, alerts Discord on a state change (failing ↔ recovered) |
-| Daily summary | 00:05 UTC | Yesterday's usage by account and game, keys created, rows dropped by the meter → Discord; then `PruneUsage` older than `usage_retention_days` |
+| Daily summary | 00:05 UTC | Yesterday's usage by account and game, keys created, rows dropped by the meter → Discord; then `PruneUsage` older than `usage_retention_days`, `PruneStripeEvents` and `PruneInvites` (30 days, constants in `serve.go`), `PruneAdminActions` older than `admin_actions_retention_days` |
 | Stripe reconcile | 03:00 UTC (billing on) | `Reconciler.All`, summary → Discord |
 | Trial reminders | 09:00 UTC (portal on) | Mails trials ending within 3 days, marks each reminded |
 
@@ -176,16 +176,20 @@ The full key list with defaults is README's Configuration table.
 
 ### 4.1 Access and migrations
 
-- `database/sql` with `github.com/lib/pq`. `NewClient(timeseries.SQLConfig)`
-  opens a pool (25 open by default), pings, and runs `ensureSchema`.
+- `database/sql` with `github.com/lib/pq`. `NewClient(ctx, timeseries.SQLConfig)`
+  opens a pool (25 open by default), pings, and runs `migrate`.
   `SQLConfig.DSN()` is an unquoted `key=value` string: a password that is
   empty or contains a space breaks it.
-- `ensureSchema` executes every statement of the append-only
-  `schemaStatements` slice in order **on every start**. Each is idempotent
-  (`CREATE … IF NOT EXISTS`, `ALTER … ADD COLUMN IF NOT EXISTS`). There is
-  no version table, transaction, advisory lock or `lock_timeout`. A schema
-  change is a new statement appended at the end; existing statements are
-  never edited.
+- `migrate` applies the append-only `migrations` list (`migrations.go`):
+  in one transaction it sets `lock_timeout = '5s'`, takes
+  `pg_advisory_xact_lock`, creates `schema_migrations` if missing, and runs
+  each migration whose version is not recorded there, then records it. Any
+  error, a lock timeout included, rolls the whole boot back and names the
+  migration. Migration 1 is the pre-migration schema in its `IF NOT EXISTS`
+  form, so a database built before versioning just records it. A schema
+  change is a new migration; shipped ones are never edited. The role needs
+  `CREATE` only while `schema_migrations` is missing or a migration is
+  pending.
 - Every method takes `ctx` first. Two transactions exist: `CreateTrial`
   (advisory lock on `hashtext('trial:'||email)`, then a conditional insert)
   and `InsertUsage` (a COPY). Everything else is one atomic statement.
@@ -209,10 +213,13 @@ The full key list with defaults is README's Configuration table.
 | `trials` | `patreon_email`, `account_id`, `granted_at`, `ends_at`, `reminder_sent_at` | One trial per email per 180 days |
 | `handoff_nonces` | `nonce`, `expires_at` | Burns a handoff token on accept |
 | `admin_actions` | `at`, `actor`, `action`, `account_id`, `target`, `detail` | Audit log; actor is the admin's email or `cli:<user>` |
+| `schema_migrations` | `version`, `applied_at` | The migrations that have run |
 
-Enumerated values (status, source, kind, modes) are enforced in Go only;
-there are no CHECK constraints. `stripe_events`, `invites` and
-`admin_actions` are never pruned; `magic_links` and `handoff_nonces` are
+Migration 2 CHECKs account status, entitlement status and source, key
+kind and normalized emails against the typed Go constants; modes are
+enforced in Go only. The daily job prunes `stripe_events` and expired
+`invites` after 30 days and `admin_actions` after
+`admin_actions_retention_days`; `magic_links` and `handoff_nonces` are
 swept on insert.
 
 ### 4.3 Keys

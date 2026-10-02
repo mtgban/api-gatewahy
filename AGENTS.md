@@ -105,7 +105,7 @@ trust their output; todo/refactor.md records the last measurement.
 | `admin.go` | `account`, `key`, `grant`, `usage` subcommands |
 | `billing_cmd.go` | `catalog`, `checkout`, `invite`, `stripe`, `portal`, `plan` subcommands |
 | `config/` | Load (file or b2://), defaults, validation |
-| `apiaccess/` | The Postgres store: `schema.go` (append-only migrations), one file per table or aggregate, `notify.go` (cache reload over LISTEN/NOTIFY) |
+| `apiaccess/` | The Postgres store: `migrations.go` (append-only migrations), one file per table or aggregate, `notify.go` (cache reload over LISTEN/NOTIFY) |
 | `gateway/` | `/v1` handler and reverse proxy, key resolver cache, usage meter, prober, daily summary text |
 | `billing/` | Plans from the catalog, store families from the game sites, Stripe client, checkout, webhook, reconcile, plan change, seed |
 | `portal/` | Customer and admin pages; `templates/` and `static/` are embedded |
@@ -142,9 +142,9 @@ trust their output; todo/refactor.md records the last measurement.
    handoff nonces and Stripe events are claimed with one
    `UPDATE … WHERE unused` or `INSERT … ON CONFLICT`. Never use
    SELECT-then-UPDATE.
-7. **Schema changes are appended.** Add an idempotent statement at the end
-   of `schemaStatements`. Never edit or reorder an existing one, because
-   it re-runs on every boot against production.
+7. **Schema changes are new migrations.** Append a numbered entry to
+   `migrations` in `apiaccess/migrations.go`. Never edit or reorder one
+   that has shipped: production has recorded it and will not rerun it.
 8. **Every portal POST is guarded.** Use `withSession` (session + CSRF) or
    `withAdmin`, or call `sameOrigin` first for the sessionless
    token-consuming posts. A new route goes into `Reserved` too, and its

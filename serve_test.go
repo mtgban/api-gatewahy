@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"log"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mtgban/api-gatewahy/apiaccess"
 	"github.com/mtgban/api-gatewahy/config"
 	"github.com/mtgban/api-gatewahy/mailer"
 	"github.com/mtgban/api-gatewahy/portal"
@@ -388,5 +392,92 @@ func TestGameSecretsFollowTheConfig(t *testing.T) {
 	got := gameSecrets(cfg)
 	if string(got["magic"]) != "m" || string(got["pokemon"]) != "p" || len(got) != 2 {
 		t.Errorf("%v", got)
+	}
+}
+
+var errDown = errors.New("down")
+
+// dailyFake answers the daily summary and records each prune's cutoff.
+type dailyFake struct {
+	cutoffs map[string]time.Time
+	fail    string
+}
+
+func (f *dailyFake) SummarizeUsage(context.Context, time.Time, time.Time, int64) ([]apiaccess.UsageRow, error) {
+	if f.fail == "summary" {
+		return nil, errDown
+	}
+	return nil, nil
+}
+
+func (f *dailyFake) KeysCreatedBetween(context.Context, time.Time, time.Time) ([]apiaccess.Key, error) {
+	return nil, nil
+}
+
+func (f *dailyFake) prune(table string, before time.Time, n int64) (int64, error) {
+	f.cutoffs[table] = before
+	if table == f.fail {
+		return 0, errDown
+	}
+	return n, nil
+}
+
+func (f *dailyFake) PruneUsage(_ context.Context, before time.Time) (int64, error) {
+	return f.prune("usage", before, 1)
+}
+
+func (f *dailyFake) PruneStripeEvents(_ context.Context, before time.Time) (int64, error) {
+	return f.prune("stripe_events", before, 2)
+}
+
+func (f *dailyFake) PruneInvites(_ context.Context, before time.Time) (int64, error) {
+	return f.prune("invites", before, 3)
+}
+
+func (f *dailyFake) PruneAdminActions(_ context.Context, before time.Time) (int64, error) {
+	return f.prune("admin_actions", before, 4)
+}
+
+func TestDailySummaryPrunesEveryTable(t *testing.T) {
+	var logs strings.Builder
+	prev := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	now := time.Date(2026, 10, 1, 0, 5, 0, 0, time.UTC)
+	cfg := &config.Config{UsageRetentionDays: 395, AuditRetentionDays: 90}
+	want := map[string]time.Time{
+		"usage":         now.AddDate(0, 0, -395),
+		"stripe_events": now.AddDate(0, 0, -30),
+		"invites":       now.AddDate(0, 0, -30),
+		"admin_actions": now.AddDate(0, 0, -90),
+	}
+
+	f := &dailyFake{cutoffs: map[string]time.Time{}}
+	alerts := 0
+	dailySummary(context.Background(), f, func(string) { alerts++ }, now, cfg, 0)
+	if !maps.EqualFunc(f.cutoffs, want, time.Time.Equal) || alerts != 1 {
+		t.Errorf("cutoffs %v, alerts %d; want %v and one alert", f.cutoffs, alerts, want)
+	}
+	for _, line := range []string{"pruned 1 usage rows", "pruned 2 stripe events", "pruned 3 invites", "pruned 4 admin actions"} {
+		if !strings.Contains(logs.String(), line) {
+			t.Errorf("log lacks %q: %s", line, logs.String())
+		}
+	}
+
+	// One failing prune is logged and the rest still run.
+	logs.Reset()
+	f = &dailyFake{cutoffs: map[string]time.Time{}, fail: "invites"}
+	dailySummary(context.Background(), f, func(string) {}, now, cfg, 0)
+	if len(f.cutoffs) != 4 || !strings.Contains(logs.String(), "prune invites: down") || !strings.Contains(logs.String(), "pruned 4 admin actions") {
+		t.Errorf("after a failed invite prune: cutoffs %v, log %s", f.cutoffs, logs.String())
+	}
+
+	// A failed summary posts nothing but still prunes.
+	logs.Reset()
+	alerts = 0
+	f = &dailyFake{cutoffs: map[string]time.Time{}, fail: "summary"}
+	dailySummary(context.Background(), f, func(string) { alerts++ }, now, cfg, 0)
+	if !maps.EqualFunc(f.cutoffs, want, time.Time.Equal) || alerts != 0 || !strings.Contains(logs.String(), "daily summary: down") {
+		t.Errorf("after a failed summary: cutoffs %v, alerts %d, log %s", f.cutoffs, alerts, logs.String())
 	}
 }

@@ -1,9 +1,49 @@
 package apiaccess
 
-import "database/sql"
+import (
+	"context"
+	"database/sql"
+	"fmt"
+)
 
-// schemaStatements are applied in order on every start. Each is idempotent.
-var schemaStatements = []string{
+// migration is one schema change, applied once and recorded in schema_migrations.
+type migration struct {
+	version    int
+	name       string
+	statements []string
+}
+
+// migrations run in version order. Append only: never edit one that has shipped.
+var migrations = []migration{
+	{1, "initial schema", initialSchema},
+	{2, "check statuses, sources, key kinds and email form", checkConstraints},
+}
+
+// migrationLockKey is the advisory lock that serializes concurrent boots.
+const migrationLockKey int64 = 0x6170696d696772 // "apimigr"
+
+// checkConstraints pins the columns to the typed constants. Each drops its
+// constraint first so a rerun is harmless; emails are normalized before the check.
+var checkConstraints = []string{
+	`UPDATE accounts SET email = lower(btrim(email)) WHERE email <> lower(btrim(email))`,
+	`ALTER TABLE accounts
+    DROP CONSTRAINT IF EXISTS accounts_status_check,
+    ADD CONSTRAINT accounts_status_check CHECK (status IN ('active', 'suspended')),
+    DROP CONSTRAINT IF EXISTS accounts_email_normalized,
+    ADD CONSTRAINT accounts_email_normalized CHECK (email = lower(btrim(email)))`,
+	`ALTER TABLE entitlements
+    DROP CONSTRAINT IF EXISTS entitlements_status_check,
+    ADD CONSTRAINT entitlements_status_check CHECK (status IN ('active', 'ended')),
+    DROP CONSTRAINT IF EXISTS entitlements_source_check,
+    ADD CONSTRAINT entitlements_source_check CHECK (source IN ('stripe', 'manual', 'trial'))`,
+	`ALTER TABLE api_keys
+    DROP CONSTRAINT IF EXISTS api_keys_kind_check,
+    ADD CONSTRAINT api_keys_kind_check CHECK (kind IN ('ban_live', 'ban_demo'))`,
+}
+
+// initialSchema is the schema from before migrations, when every boot reran it.
+// Its IF NOT EXISTS forms let a database that predates migrations record it.
+var initialSchema = []string{
 	`CREATE TABLE IF NOT EXISTS accounts (
     id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     email      text NOT NULL UNIQUE,
@@ -110,11 +150,81 @@ var schemaStatements = []string{
 	`ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'ban_live'`,
 }
 
-func ensureSchema(db *sql.DB) error {
-	for _, stmt := range schemaStatements {
-		if _, err := db.Exec(stmt); err != nil {
-			return err
+// migrate applies every migration the database has not recorded yet.
+func migrate(ctx context.Context, db *sql.DB) error {
+	return applyMigrations(ctx, db, migrations)
+}
+
+// applyMigrations runs the unapplied entries of list in one transaction under
+// the advisory lock, so a boot either applies all of them or none.
+func applyMigrations(ctx context.Context, db *sql.DB, list []migration) (err error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.ExecContext(ctx, `SET LOCAL lock_timeout = '5s'`); err != nil {
+		return fmt.Errorf("lock timeout: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, migrationLockKey); err != nil {
+		return fmt.Errorf("advisory lock: %w", err)
+	}
+	// CREATE ... IF NOT EXISTS checks the CREATE privilege first, so look before creating.
+	var exists bool
+	if err = tx.QueryRowContext(ctx, `SELECT to_regclass('schema_migrations') IS NOT NULL`).Scan(&exists); err != nil {
+		return fmt.Errorf("schema_migrations: %w", err)
+	}
+	if !exists {
+		if _, err = tx.ExecContext(ctx, `CREATE TABLE schema_migrations (
+    version    int PRIMARY KEY,
+    applied_at timestamptz NOT NULL DEFAULT now()
+)`); err != nil {
+			return fmt.Errorf("schema_migrations: %w", err)
 		}
 	}
+	applied, err := appliedVersions(ctx, tx)
+	if err != nil {
+		return err
+	}
+	for _, m := range list {
+		if applied[m.version] {
+			continue
+		}
+		for i, stmt := range m.statements {
+			if _, err = tx.ExecContext(ctx, stmt); err != nil {
+				return fmt.Errorf("migration %d (%s) statement %d: %w", m.version, m.name, i+1, err)
+			}
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations (version) VALUES ($1)`, m.version); err != nil {
+			return fmt.Errorf("migration %d (%s): record: %w", m.version, m.name, err)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
 	return nil
+}
+
+func appliedVersions(ctx context.Context, tx *sql.Tx) (map[int]bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT version FROM schema_migrations`)
+	if err != nil {
+		return nil, fmt.Errorf("read versions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	applied := map[int]bool{}
+	for rows.Next() {
+		var v int
+		if err := rows.Scan(&v); err != nil {
+			return nil, fmt.Errorf("read versions: %w", err)
+		}
+		applied[v] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read versions: %w", err)
+	}
+	return applied, nil
 }

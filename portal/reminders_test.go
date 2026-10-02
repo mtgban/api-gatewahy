@@ -17,7 +17,7 @@ func TestSendTrialRemindersOnce(t *testing.T) {
 	a, _ := ts.store.GetOrCreateAccount(ctx, "ann@example.com", "")
 	b, _ := ts.store.GetOrCreateAccount(ctx, "bob@example.com", "")
 	c, _ := ts.store.GetOrCreateAccount(ctx, "carl@example.com", "")
-	_ = ts.store.SetAccountStatus(ctx, c.ID, "suspended")
+	_ = ts.store.SetAccountStatus(ctx, c.ID, apiaccess.AccountSuspended)
 	_, _ = ts.store.CreateTrial(ctx, "ann@example.com", ts.now.Add(2*24*time.Hour), ts.now.Add(-trialCooldown), trialFor(a.ID, "ALL_ACCESS"))
 	_, _ = ts.store.CreateTrial(ctx, "bob@example.com", ts.now.Add(10*24*time.Hour), ts.now.Add(-trialCooldown), trialFor(b.ID, "ALL_ACCESS"))
 	_, _ = ts.store.CreateTrial(ctx, "carl@example.com", ts.now.Add(2*24*time.Hour), ts.now.Add(-trialCooldown), trialFor(c.ID, "ALL_ACCESS"))

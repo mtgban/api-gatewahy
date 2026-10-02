@@ -70,3 +70,8 @@ func (c *Client) ReleaseInvite(ctx context.Context, token string) error {
 	_, err := c.db.ExecContext(ctx, `UPDATE invites SET used_at = NULL WHERE token_hash = $1`, HashKey(token))
 	return err
 }
+
+// PruneInvites deletes invites that expired before the cutoff, used or not, and returns how many.
+func (c *Client) PruneInvites(ctx context.Context, before time.Time) (int64, error) {
+	return c.deleteCount(ctx, `DELETE FROM invites WHERE expires_at < $1`, before)
+}
