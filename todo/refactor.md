@@ -177,7 +177,7 @@ fails before the fix.
   - the schema note lists 4 of 11 tables
   - the `-games` default is `magic` but not forced
   - an abandoned session's invite stays spent
-- [ ] Code comments that describe history: schema.go's "Phase 2"/"Phase 3"
+- [x] Code comments that describe history: schema.go's "Phase 2"/"Phase 3"
   and "Appended so…"; `reconcile.go`'s "the spec's table"; the
   `AddEntitlement` comment that overclaims (#5); trial.go's "15-day";
   `name := name` loop copies, dead since Go 1.22. Issue [#60](https://github.com/mtgban/api-gatewahy/issues/60)

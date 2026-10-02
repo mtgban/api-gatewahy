@@ -95,8 +95,8 @@ func (s *Server) trialConfirm(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "trial_confirm.html", p)
 }
 
-// trial grants a 15-day all-access trial to a Patreon supporter and signs
-// them in. requireSameOrigin guards this route.
+// trial grants an all-access trial of trial_days to a Patreon supporter and
+// signs them in. requireSameOrigin guards this route.
 func (s *Server) trial(w http.ResponseWriter, r *http.Request) {
 	claims, ok := s.handoffClaims(r, apihandoff.PurposeTrial)
 	if !ok {

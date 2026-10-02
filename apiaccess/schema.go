@@ -53,9 +53,9 @@ var schemaStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage (ts)`,
 	`CREATE INDEX IF NOT EXISTS idx_usage_account_ts ON usage (account_id, ts)`,
 	`CREATE INDEX IF NOT EXISTS idx_usage_key_ts ON usage (key_id, ts)`,
-	// Appended so an existing database picks it up on the next start.
+	// Only one live (non-revoked) key may use a given prefix.
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_live_prefix ON api_keys (prefix) WHERE revoked_at IS NULL`,
-	// Phase 2: Stripe.
+	// Stripe: customer linkage, invite codes, and webhook event log.
 	`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stripe_customer_id text UNIQUE`,
 	`CREATE TABLE IF NOT EXISTS invites (
     token_hash   text PRIMARY KEY,
@@ -72,7 +72,7 @@ var schemaStatements = []string{
     received_at  timestamptz NOT NULL DEFAULT now(),
     processed_at timestamptz
 )`,
-	// Phase 3: portal.
+	// Portal: magic-link sign-in, trials, admin audit log, and session epoch.
 	`CREATE TABLE IF NOT EXISTS magic_links (
     token_hash  text PRIMARY KEY,
     account_id  bigint NOT NULL REFERENCES accounts(id),
@@ -106,7 +106,7 @@ var schemaStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_magic_links_expires ON magic_links (expires_at)`,
 	`CREATE INDEX IF NOT EXISTS idx_handoff_nonces_expires ON handoff_nonces (expires_at)`,
 	`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS session_epoch bigint NOT NULL DEFAULT 0`,
-	// Keys minted before this column existed were all live.
+	// A key without a kind is live.
 	`ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'ban_live'`,
 }
 

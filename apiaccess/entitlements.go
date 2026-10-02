@@ -184,8 +184,8 @@ func prepareEntitlement(e Entitlement) (Entitlement, sql.NullTime, sql.NullStrin
 	return e, until, ext, nil
 }
 
-// AddEntitlement canonicalizes and validates e, then inserts it. Every writer
-// goes through canonicalStoreScope, which rejects a preset anywhere but alone.
+// AddEntitlement canonicalizes e's scope and modes, validates their
+// syntax (a preset is refused anywhere but alone), then inserts it.
 func (c *Client) AddEntitlement(ctx context.Context, e Entitlement) (Entitlement, error) {
 	e, until, ext, err := prepareEntitlement(e)
 	if err != nil {
