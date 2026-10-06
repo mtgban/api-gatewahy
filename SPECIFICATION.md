@@ -261,7 +261,7 @@ flip or a new row does.
 
 | File | Responsibility |
 |---|---|
-| `route.go` | `ParseRoute`: only `/v1/{game}/mtgban/{sub}`; kinds search, meta (sets/stores), retail/buylist/all/sealed; rejects `..`; `NeedsModes` |
+| `route.go` | `ParseRoute`: only `/v1/{game}/{sub}` (to `/api/mtgban/{sub}`); kinds search, meta (sets/stores), retail/buylist/all/sealed; `Rest` is the backend path under `/api/`; rejects `..`; `NeedsModes` |
 | `access.go` | `Resolve(ents, game, now) (Access, bool)`: union of active rows naming the game; ALL > BASE > explicit union |
 | `resolver.go` | `Resolver`: key hash → `apiaccess.Lookup` cache with TTL, negative caching, stale-on-error, 10,000-entry bound plus 1,000 for unknown keys |
 | `handler.go` | `Handler.ServeHTTP`, one `httputil.ReverseProxy` + `http.Transport` per game, `ClientIP`, `statusWriter` |

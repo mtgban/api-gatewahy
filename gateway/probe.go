@@ -66,7 +66,7 @@ func (p *Prober) Check(ctx context.Context) map[string]error {
 // probeRoute is the canonical stores-list route every game serves, the same
 // one live traffic uses, so its BackendPath can't drift from the probe's.
 func probeRoute(game string) (Route, error) {
-	return ParseRoute("/v1/" + game + "/mtgban/stores.json")
+	return ParseRoute("/v1/" + game + "/stores.json")
 }
 
 func (p *Prober) probe(ctx context.Context, game string, up Upstream) error {

@@ -13,12 +13,14 @@ var ErrNoRoute = errors.New("no such route")
 type Route struct {
 	Game string
 	Kind string
+	// Rest is the path under the backend's /api/.
 	Rest string
 }
 
 var gameName = regexp.MustCompile(`^[a-z0-9]+$`)
 
-// ParseRoute splits /v1/{game}/mtgban/... into its parts.
+// ParseRoute splits /v1/{game}/... into its parts, forwarded to the
+// backend's /api/mtgban/.
 func ParseRoute(path string) (Route, error) {
 	rest, ok := strings.CutPrefix(path, "/v1/")
 	if !ok {
@@ -30,15 +32,11 @@ func ParseRoute(path string) (Route, error) {
 			return Route{}, ErrNoRoute
 		}
 	}
-	game, rest, ok := strings.Cut(rest, "/")
-	if !ok || !gameName.MatchString(game) {
+	game, sub, ok := strings.Cut(rest, "/")
+	if !ok || !gameName.MatchString(game) || sub == "" {
 		return Route{}, ErrNoRoute
 	}
-	sub, ok := strings.CutPrefix(rest, "mtgban/")
-	if !ok || sub == "" {
-		return Route{}, ErrNoRoute
-	}
-	r := Route{Game: game, Rest: rest}
+	r := Route{Game: game, Rest: "mtgban/" + sub}
 	switch {
 	case strings.HasPrefix(sub, "search/"):
 		r.Kind = "search"
