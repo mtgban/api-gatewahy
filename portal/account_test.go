@@ -239,7 +239,7 @@ func TestNewKeyPageExplainsUse(t *testing.T) {
 	_, ck, csrf := ts.signIn(t, "ann@example.com")
 	rec := ts.do("POST", "/account/keys", "csrf="+csrf+"&label=laptop", ck)
 	body := rec.Body.String()
-	for _, want := range []string{"Using your key", "curl -H", "https://api.test/v1/magic/mtgban/retail/ZEN.json", `href="https://mtgban.com/guide#api-getting-started"`} {
+	for _, want := range []string{"Using your key", "curl -H", "https://api.test/v1/magic/retail/ZEN.json", `href="https://mtgban.com/guide#api-getting-started"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("new key page lacks %q", want)
 		}

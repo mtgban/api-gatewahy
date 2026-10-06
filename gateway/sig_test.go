@@ -68,7 +68,7 @@ func TestMintSigMatchesHandlerAndProber(t *testing.T) {
 		Now:             fixedNow,
 	}, NewResolver(src, time.Minute, nil), &recordingMeter{})
 
-	hRec, _ := do(h, "GET", "/v1/magic/mtgban/stores.json", goodKey)
+	hRec, _ := do(h, "GET", "/v1/magic/stores.json", goodKey)
 	if hRec.Code != 200 {
 		t.Fatalf("handler request status %d", hRec.Code)
 	}

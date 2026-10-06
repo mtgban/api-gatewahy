@@ -387,7 +387,7 @@ website checkout:
 
    ```bash
    go run . serve -config config.json &
-   curl -s -H "Authorization: Bearer <key>" localhost:8080/v1/magic/mtgban/stores.json
+   curl -s -H "Authorization: Bearer <key>" localhost:8080/v1/magic/stores.json
    ```
 
 ## Docker

@@ -132,7 +132,7 @@ func TestMuxGamesAndHealth(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/magic/mtgban/retail.json", nil))
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/magic/retail.json", nil))
 	if rec.Code != 299 {
 		t.Errorf("gateway not reached: %d", rec.Code)
 	}
@@ -242,7 +242,7 @@ func TestMuxRecoversPanic(t *testing.T) {
 		gateway: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { panic("boom") }),
 	})
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/magic/mtgban/retail.json", nil))
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/magic/retail.json", nil))
 	if rec.Code != 500 || rec.Header().Get("Content-Type") != "application/json" || rec.Body.String() != `{"error": "internal error"}` {
 		t.Fatalf("status %d headers %v body %q", rec.Code, rec.Header(), rec.Body.String())
 	}
@@ -258,7 +258,7 @@ func TestMuxPropagatesAbortHandler(t *testing.T) {
 			t.Errorf("recovered %v, want http.ErrAbortHandler", p)
 		}
 	}()
-	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/v1/magic/mtgban/retail.json", nil))
+	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/v1/magic/retail.json", nil))
 	t.Error("the panic did not propagate")
 }
 

@@ -192,7 +192,7 @@ func TestHandlerHappyPath(t *testing.T) {
 	defer be.Close()
 	h, meter := testHandler(t, be, "s3cret")
 
-	rec, body := do(h, "GET", "/v1/magic/mtgban/retail/NEO.json?id=tcg&sig=stale&key=whatever", goodKey)
+	rec, body := do(h, "GET", "/v1/magic/retail/NEO.json?id=tcg&sig=stale&key=whatever", goodKey)
 	if rec.Code != 200 {
 		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
 	}
@@ -214,7 +214,7 @@ func TestHandlerKeyInQuery(t *testing.T) {
 	be := fakeBackend(t, "s3cret")
 	defer be.Close()
 	h, _ := testHandler(t, be, "s3cret")
-	rec, _ := do(h, "GET", "/v1/pokemon/mtgban/retail.json?key="+goodKey, "")
+	rec, _ := do(h, "GET", "/v1/pokemon/retail.json?key="+goodKey, "")
 	if rec.Code != 200 {
 		t.Errorf("status %d body %s", rec.Code, rec.Body.String())
 	}
@@ -224,7 +224,7 @@ func TestHandlerIgnoresInboundForwardedFor(t *testing.T) {
 	be := fakeBackend(t, "s3cret")
 	defer be.Close()
 	h, meter := testHandler(t, be, "s3cret")
-	req := httptest.NewRequest("GET", "/v1/magic/mtgban/retail.json", nil)
+	req := httptest.NewRequest("GET", "/v1/magic/retail.json", nil)
 	req.RemoteAddr = "198.51.100.9:1234"
 	req.Header.Set("Authorization", "Bearer "+goodKey)
 	req.Header.Set("X-Forwarded-For", "203.0.113.7, 10.0.0.1")
@@ -244,7 +244,7 @@ func TestHandlerHonorsClientIPHeader(t *testing.T) {
 	be := fakeBackend(t, "s3cret")
 	defer be.Close()
 	h, meter := testHandler(t, be, "s3cret")
-	req := httptest.NewRequest("GET", "/v1/magic/mtgban/retail.json", nil)
+	req := httptest.NewRequest("GET", "/v1/magic/retail.json", nil)
 	req.RemoteAddr = "198.51.100.9:1234"
 	req.Header.Set("Authorization", "Bearer "+goodKey)
 	req.Header.Set(testClientIPHeader, "203.0.113.7")
@@ -267,7 +267,7 @@ func TestHandlerRejectsUnparseableClientIP(t *testing.T) {
 	be := fakeBackend(t, "s3cret")
 	defer be.Close()
 	h, meter := testHandler(t, be, "s3cret")
-	req := httptest.NewRequest("GET", "/v1/magic/mtgban/retail.json", nil)
+	req := httptest.NewRequest("GET", "/v1/magic/retail.json", nil)
 	req.RemoteAddr = "198.51.100.9:1234"
 	req.Header.Set("Authorization", "Bearer "+goodKey)
 	req.Header.Set(testClientIPHeader, "potato")
@@ -287,7 +287,7 @@ func TestHandlerRejectsZonedClientIP(t *testing.T) {
 	be := fakeBackend(t, "s3cret")
 	defer be.Close()
 	h, meter := testHandler(t, be, "s3cret")
-	req := httptest.NewRequest("GET", "/v1/magic/mtgban/retail.json", nil)
+	req := httptest.NewRequest("GET", "/v1/magic/retail.json", nil)
 	req.RemoteAddr = "198.51.100.9:1234"
 	req.Header.Set("Authorization", "Bearer "+goodKey)
 	req.Header.Set(testClientIPHeader, "fe80::1%eth0")
@@ -307,7 +307,7 @@ func TestHandlerDevAccessScope(t *testing.T) {
 	be := fakeBackend(t, "s3cret")
 	defer be.Close()
 	h, meter := testHandler(t, be, "s3cret")
-	rec, body := do(h, "GET", "/v1/magic/mtgban/retail.json", devKey)
+	rec, body := do(h, "GET", "/v1/magic/retail.json", devKey)
 	if rec.Code != 403 || body["error"] != "plan has no store scope" || body["game"] != "magic" {
 		t.Errorf("status %d body %v", rec.Code, body)
 	}
@@ -326,17 +326,17 @@ func TestHandlerRejections(t *testing.T) {
 		status                    int
 		errContains, game         string
 	}{
-		{"post", "POST", "/v1/magic/mtgban/retail.json", goodKey, 405, "method", ""},
+		{"post", "POST", "/v1/magic/retail.json", goodKey, 405, "method", ""},
 		{"bad path", "GET", "/v1/magic/nope.json", goodKey, 404, "not found", ""},
-		{"unknown game", "GET", "/v1/lorcana/mtgban/retail.json", goodKey, 404, "unknown game", "lorcana"},
-		{"no key", "GET", "/v1/magic/mtgban/retail.json", "", 401, "missing API key", ""},
-		{"malformed key", "GET", "/v1/magic/mtgban/retail.json", "abc", 401, "malformed API key", ""},
-		{"unknown key", "GET", "/v1/magic/mtgban/retail.json", unknownKey, 401, "unknown API key", ""},
-		{"revoked", "GET", "/v1/magic/mtgban/retail.json", revokedKey, 401, "revoked", ""},
-		{"suspended", "GET", "/v1/magic/mtgban/retail.json", suspKey, 401, "suspended", ""},
-		{"pokemon lacks sealed", "GET", "/v1/pokemon/mtgban/sealed.json", goodKey, 403, "plan does not include mode sealed", "pokemon"},
-		{"mode not in plan", "GET", "/v1/magic/mtgban/sealed.json", goodKey, 403, "plan does not include mode sealed", "magic"},
-		{"all needs both", "GET", "/v1/pokemon/mtgban/all.json", goodKey, 403, "buylist", "pokemon"},
+		{"unknown game", "GET", "/v1/lorcana/retail.json", goodKey, 404, "unknown game", "lorcana"},
+		{"no key", "GET", "/v1/magic/retail.json", "", 401, "missing API key", ""},
+		{"malformed key", "GET", "/v1/magic/retail.json", "abc", 401, "malformed API key", ""},
+		{"unknown key", "GET", "/v1/magic/retail.json", unknownKey, 401, "unknown API key", ""},
+		{"revoked", "GET", "/v1/magic/retail.json", revokedKey, 401, "revoked", ""},
+		{"suspended", "GET", "/v1/magic/retail.json", suspKey, 401, "suspended", ""},
+		{"pokemon lacks sealed", "GET", "/v1/pokemon/sealed.json", goodKey, 403, "plan does not include mode sealed", "pokemon"},
+		{"mode not in plan", "GET", "/v1/magic/sealed.json", goodKey, 403, "plan does not include mode sealed", "magic"},
+		{"all needs both", "GET", "/v1/pokemon/all.json", goodKey, 403, "buylist", "pokemon"},
 	}
 	for _, c := range cases {
 		rec, body := do(h, c.method, c.target, c.key)
@@ -367,7 +367,7 @@ func TestHandlerNoEntitlementForGame(t *testing.T) {
 	u, _ := url.Parse(be.URL)
 	h.games["lorcana"] = Upstream{URL: u, Secret: []byte("s3cret")}
 	h.proxies["lorcana"] = h.newProxy("lorcana", h.games["lorcana"])
-	rec, body := do(h, "GET", "/v1/lorcana/mtgban/sets.json", goodKey)
+	rec, body := do(h, "GET", "/v1/lorcana/sets.json", goodKey)
 	if rec.Code != 403 || body["error"] != "plan does not include game" || body["game"] != "lorcana" {
 		t.Errorf("status %d body %v", rec.Code, body)
 	}
@@ -380,7 +380,7 @@ func TestHandlerUnavailable(t *testing.T) {
 	src := &fakeSource{err: context.DeadlineExceeded}
 	h := mustNew(t, Options{Games: map[string]Upstream{"magic": {URL: u, Secret: []byte("s")}}, GatewayEmail: "g@x", Link: apisig.DefaultLink,
 		PerKeyRate: 10, PerKeyBurst: 5, UpstreamTimeout: time.Second, SigTTL: time.Minute}, NewResolver(src, time.Minute, nil), &recordingMeter{})
-	rec, body := do(h, "GET", "/v1/magic/mtgban/retail.json", goodKey)
+	rec, body := do(h, "GET", "/v1/magic/retail.json", goodKey)
 	if rec.Code != 503 || rec.Header().Get("Retry-After") != "30" || body["error"] == nil {
 		t.Errorf("status %d headers %v body %v", rec.Code, rec.Header(), body)
 	}
@@ -392,7 +392,7 @@ func TestHandlerUpstreamFailures(t *testing.T) {
 
 	t.Run("wrong secret becomes 502", func(t *testing.T) {
 		h, meter := testHandler(t, be, "wrong-secret")
-		rec, body := do(h, "GET", "/v1/magic/mtgban/retail.json", goodKey)
+		rec, body := do(h, "GET", "/v1/magic/retail.json", goodKey)
 		if rec.Code != 502 || !strings.Contains(body["error"].(string), "rejected gateway signature") {
 			t.Errorf("status %d body %v", rec.Code, body)
 		}
@@ -402,35 +402,35 @@ func TestHandlerUpstreamFailures(t *testing.T) {
 	})
 	t.Run("upstream 500 becomes 502", func(t *testing.T) {
 		h, _ := testHandler(t, be, "s3cret")
-		rec, body := do(h, "GET", "/v1/magic/mtgban/retail/boom.json", goodKey)
+		rec, body := do(h, "GET", "/v1/magic/retail/boom.json", goodKey)
 		if rec.Code != 502 || !strings.Contains(body["error"].(string), "500") {
 			t.Errorf("status %d body %v", rec.Code, body)
 		}
 	})
 	t.Run("upstream 302 becomes 502", func(t *testing.T) {
 		h, _ := testHandler(t, be, "s3cret")
-		rec, body := do(h, "GET", "/v1/magic/mtgban/retail/redirect.json", goodKey)
+		rec, body := do(h, "GET", "/v1/magic/retail/redirect.json", goodKey)
 		if rec.Code != 502 || !strings.Contains(body["error"].(string), "302") {
 			t.Errorf("status %d body %v", rec.Code, body)
 		}
 	})
 	t.Run("upstream 429 passes through", func(t *testing.T) {
 		h, _ := testHandler(t, be, "s3cret")
-		rec, _ := do(h, "GET", "/v1/magic/mtgban/retail/ratelimited.json", goodKey)
+		rec, _ := do(h, "GET", "/v1/magic/retail/ratelimited.json", goodKey)
 		if rec.Code != 429 {
 			t.Errorf("status %d", rec.Code)
 		}
 	})
 	t.Run("upstream 304 passes through", func(t *testing.T) {
 		h, _ := testHandler(t, be, "s3cret")
-		rec, _ := do(h, "GET", "/v1/magic/mtgban/retail/notmodified.json", goodKey)
+		rec, _ := do(h, "GET", "/v1/magic/retail/notmodified.json", goodKey)
 		if rec.Code != 304 {
 			t.Errorf("status %d", rec.Code)
 		}
 	})
 	t.Run("timeout becomes 504", func(t *testing.T) {
 		h, _ := testHandler(t, be, "s3cret")
-		rec, body := do(h, "GET", "/v1/magic/mtgban/retail/slow.json", goodKey)
+		rec, body := do(h, "GET", "/v1/magic/retail/slow.json", goodKey)
 		if rec.Code != 504 || !strings.Contains(body["error"].(string), "timed out") {
 			t.Errorf("status %d body %v", rec.Code, body)
 		}
@@ -439,7 +439,7 @@ func TestHandlerUpstreamFailures(t *testing.T) {
 		dead := httptest.NewServer(http.NotFoundHandler())
 		dead.Close()
 		h, _ := testHandler(t, dead, "s3cret")
-		rec, body := do(h, "GET", "/v1/magic/mtgban/retail.json", goodKey)
+		rec, body := do(h, "GET", "/v1/magic/retail.json", goodKey)
 		if rec.Code != 502 || !strings.Contains(body["error"].(string), "unavailable") {
 			t.Errorf("status %d body %v", rec.Code, body)
 		}
@@ -451,8 +451,8 @@ func TestHandlerRateLimit(t *testing.T) {
 	defer be.Close()
 	h, _ := testHandler(t, be, "s3cret")
 	h.limiter = newLimiter(1, 1)
-	do(h, "GET", "/v1/magic/mtgban/retail.json", goodKey)
-	rec, _ := do(h, "GET", "/v1/magic/mtgban/retail.json", goodKey)
+	do(h, "GET", "/v1/magic/retail.json", goodKey)
+	rec, _ := do(h, "GET", "/v1/magic/retail.json", goodKey)
 	if rec.Code != 429 || rec.Header().Get("RateLimit-Limit") != "1" {
 		t.Errorf("status %d headers %v", rec.Code, rec.Header())
 	}
@@ -465,9 +465,9 @@ func TestHandlerRateLimitSharedByAccount(t *testing.T) {
 	// A token takes 100 seconds to refill, so a slow run cannot let the third request through.
 	h.limiter = newLimiter(0.01, 2)
 	// goodKey and goodKey2 sit on the same account, so their burst is shared.
-	do(h, "GET", "/v1/magic/mtgban/retail.json", goodKey)
-	do(h, "GET", "/v1/magic/mtgban/retail.json", goodKey2)
-	rec, _ := do(h, "GET", "/v1/magic/mtgban/retail.json", goodKey)
+	do(h, "GET", "/v1/magic/retail.json", goodKey)
+	do(h, "GET", "/v1/magic/retail.json", goodKey2)
+	rec, _ := do(h, "GET", "/v1/magic/retail.json", goodKey)
 	if rec.Code != 429 {
 		t.Errorf("third request across two keys on one account: status %d", rec.Code)
 	}
@@ -498,7 +498,7 @@ func TestHandlerMetersAbortedResponse(t *testing.T) {
 	h, meter := testHandler(t, be, "s3cret")
 	h.proxies["magic"].Transport = abortTransport{}
 
-	req := httptest.NewRequest("GET", "/v1/magic/mtgban/retail.json", nil)
+	req := httptest.NewRequest("GET", "/v1/magic/retail.json", nil)
 	req.RemoteAddr = "198.51.100.9:1234"
 	req.Header.Set("Authorization", "Bearer "+goodKey)
 	// ReverseProxy only panics when it believes an http.Server will recover.
@@ -527,7 +527,7 @@ func TestHandlerMissingProxyIsNotMetered(t *testing.T) {
 	// A game configured without a proxy must not nil-deref.
 	u, _ := url.Parse(be.URL)
 	h.games["lorcana"] = Upstream{URL: u, Secret: []byte("s3cret")}
-	rec, body := do(h, "GET", "/v1/lorcana/mtgban/retail.json", goodKey)
+	rec, body := do(h, "GET", "/v1/lorcana/retail.json", goodKey)
 	if rec.Code != 404 || body["error"] != "unknown game" || body["game"] != "lorcana" {
 		t.Errorf("status %d body %v", rec.Code, body)
 	}
@@ -570,7 +570,7 @@ func TestErrorTextInsideDataPassesThrough(t *testing.T) {
 	backend := fakeBackend(t, "secret")
 	defer backend.Close()
 	h, _ := testHandler(t, backend, "secret")
-	rec, body := do(h, "GET", "/v1/magic/mtgban/retail/errortext.json", goodKey)
+	rec, body := do(h, "GET", "/v1/magic/retail/errortext.json", goodKey)
 	if rec.Code != 200 || body["retail"] == nil {
 		t.Fatalf("legitimate body treated as a signature rejection: %d %s", rec.Code, rec.Body.String())
 	}
@@ -593,11 +593,11 @@ func TestPerIPLimitRunsBeforeAnyLookup(t *testing.T) {
 	}, NewResolver(src, time.Minute, nil), &recordingMeter{})
 	for i := 0; i < 3; i++ {
 		fake := "mtgban_live_" + strings.Repeat(string(rune('a'+i)), 32)
-		if rec, _ := do(h, "GET", "/v1/magic/mtgban/retail.json", fake); rec.Code != 401 {
+		if rec, _ := do(h, "GET", "/v1/magic/retail.json", fake); rec.Code != 401 {
 			t.Fatalf("forged key %d: %d", i, rec.Code)
 		}
 	}
-	rec, _ := do(h, "GET", "/v1/magic/mtgban/retail.json", "mtgban_live_"+strings.Repeat("z", 32))
+	rec, _ := do(h, "GET", "/v1/magic/retail.json", "mtgban_live_"+strings.Repeat("z", 32))
 	if rec.Code != 429 || rec.Header().Get("Retry-After") == "" {
 		t.Fatalf("fourth forged key from one address: %d", rec.Code)
 	}
@@ -605,7 +605,7 @@ func TestPerIPLimitRunsBeforeAnyLookup(t *testing.T) {
 		t.Errorf("lookups %d, want 3: the limiter must run before the database", src.calls)
 	}
 	// Another address is unaffected.
-	req := httptest.NewRequest("GET", "/v1/magic/mtgban/retail.json", nil)
+	req := httptest.NewRequest("GET", "/v1/magic/retail.json", nil)
 	req.RemoteAddr = "203.0.113.7:1234"
 	req.Header.Set("Authorization", "Bearer mtgban_live_"+strings.Repeat("q", 32))
 	other := httptest.NewRecorder()
@@ -648,7 +648,7 @@ func TestHandlerClientDisconnectWritesNothing(t *testing.T) {
 	defer log.SetOutput(prev)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	req := httptest.NewRequest("GET", "/v1/magic/mtgban/retail.json", nil).WithContext(ctx)
+	req := httptest.NewRequest("GET", "/v1/magic/retail.json", nil).WithContext(ctx)
 	req.RemoteAddr = "198.51.100.9:1234"
 	req.Header.Set("Authorization", "Bearer "+goodKey)
 	time.AfterFunc(20*time.Millisecond, cancel)
@@ -706,7 +706,7 @@ func TestModifyResponseDropsUpstreamRateLimit(t *testing.T) {
 	be := fakeBackend(t, "s3cret")
 	defer be.Close()
 	h, _ := testHandler(t, be, "s3cret")
-	rec, _ := do(h, "GET", "/v1/magic/mtgban/retail.json", goodKey)
+	rec, _ := do(h, "GET", "/v1/magic/retail.json", goodKey)
 	if rec.Code != 200 {
 		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
 	}
