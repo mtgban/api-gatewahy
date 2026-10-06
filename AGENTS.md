@@ -106,7 +106,7 @@ trust their output; todo/refactor.md records the last measurement.
 | `billing_cmd.go` | `catalog`, `checkout`, `invite`, `stripe`, `portal`, `plan` subcommands |
 | `config/` | Load (file or b2://), defaults, validation |
 | `apiaccess/` | The Postgres store: `migrations.go` (append-only migrations), one file per table or aggregate, `notify.go` (cache reload over LISTEN/NOTIFY) |
-| `gateway/` | `/v1` handler and reverse proxy, key resolver cache, usage meter, prober, daily summary text |
+| `gateway/` | `/v1` and `/v2` handler and reverse proxy, key resolver cache, usage meter, prober, daily summary text |
 | `billing/` | Plans from the catalog, store families from the game sites, Stripe client, checkout, webhook, reconcile, plan change, seed |
 | `portal/` | Customer and admin pages; `templates/` and `static/` are embedded |
 | `session/` | Signed session and pending-checkout cookies, CSRF tokens |

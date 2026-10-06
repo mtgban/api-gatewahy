@@ -20,7 +20,10 @@ entitlement changes take effect without a restart.
 
 Base URL: `https://api.mtgban.com/v1/{game}/`, forwarding to that game's
 `/api/mtgban/...` paths (retail, buylist, all, sealed, sets, stores,
-search). Only `GET` is accepted; any other method under `/v1/` is 405.
+search). `https://api.mtgban.com/v2/{game}/` forwards the same paths but
+search to the game's `/api/v2/...`, the price API keyed by finish and
+condition. Only `GET` is accepted; any other method under `/v1/` or `/v2/`
+is 405.
 
 Authenticate with either:
 
@@ -47,7 +50,7 @@ A request with neither returns 401. Errors are JSON:
 | 401 | Missing, malformed, revoked, or unknown key, or the account is suspended. |
 | 403 | Key valid, but the plan lacks the game, has no store scope, or lacks the mode. Body names which. |
 | 404 | Unknown game or path. |
-| 405 | A method other than `GET` under `/v1/`. |
+| 405 | A method other than `GET` under `/v1/` or `/v2/`. |
 | 429 | Three sources: per-IP before the key is read (`Retry-After: 1`), per-account once it resolves (carries `RateLimit-Limit`), or an upstream 429 passed straight through, which, like 304, is not JSON. |
 | 502 | Upstream unreachable or misconfigured, rejected the gateway's signature, or returned any status outside 2xx except 304 and 429 (redirects included). |
 | 503 | Database unavailable or the lookup timed out, and the key was not in cache. |

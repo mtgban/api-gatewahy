@@ -408,6 +408,7 @@ func newMux(d muxDeps) http.Handler {
 		mux.HandleFunc(d.cancelPath, plainPage("Checkout cancelled. Nothing was charged. You can close this page."))
 	}
 	mux.Handle("/v1/", d.gateway)
+	mux.Handle("/v2/", d.gateway)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "not found")
 	})

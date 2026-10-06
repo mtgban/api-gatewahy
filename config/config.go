@@ -265,7 +265,7 @@ func (c *Config) Validate() error {
 		if strings.ContainsAny(sp.path, "{}") {
 			return fmt.Errorf("stripe.%s must not contain braces", sp.name)
 		}
-		if sp.path == "/" || sp.path == "/healthz" || sp.path == "/stripe/webhook" || strings.HasPrefix(sp.path, "/v1/") {
+		if sp.path == "/" || sp.path == "/healthz" || sp.path == "/stripe/webhook" || strings.HasPrefix(sp.path, "/v1/") || strings.HasPrefix(sp.path, "/v2/") {
 			return fmt.Errorf("stripe.%s must not use a reserved path", sp.name)
 		}
 	}

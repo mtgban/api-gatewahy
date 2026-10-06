@@ -132,7 +132,7 @@ func (s *Server) wrap(rt route) http.HandlerFunc {
 // nonPortalReservedExact and nonPortalReservedPrefixes are fixed outside the
 // portal's table: health checks, the Stripe webhook, static assets, and the API.
 var nonPortalReservedExact = []string{"/healthz", "/stripe/webhook"}
-var nonPortalReservedPrefixes = []string{"/static/", "/v1/"}
+var nonPortalReservedPrefixes = []string{"/static/", "/v1/", "/v2/"}
 
 // Reserved reports whether path is a portal route or under one; SuccessPath
 // and CancelPath are excluded, since those are checked against this.
