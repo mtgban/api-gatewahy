@@ -60,7 +60,8 @@ Meta endpoints, unauthenticated: `/healthz` (liveness only: 200 whenever the
 process is serving and at least one game is configured, with no database
 check, so a DB blip cannot get the container restarted and its resolver
 cache wiped; the background prober reports database health as a Discord
-alert instead) and `/v1/games.json` (the configured game names).
+alert instead) and `/v1/games.json` (the configured game names), also served
+as `/v2/games.json` so a v2 client needs nothing from v1.
 
 ## Customer pages
 
