@@ -131,10 +131,12 @@ func TestMuxGamesAndHealth(t *testing.T) {
 		t.Errorf("healthz %d", rec.Code)
 	}
 
-	rec = httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/magic/retail.json", nil))
-	if rec.Code != 299 {
-		t.Errorf("gateway not reached: %d", rec.Code)
+	for _, path := range []string{"/v1/magic/retail.json", "/v2/magic/retail.json"} {
+		rec = httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		if rec.Code != 299 {
+			t.Errorf("%s: gateway not reached: %d", path, rec.Code)
+		}
 	}
 
 	rec = httptest.NewRecorder()

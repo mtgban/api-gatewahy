@@ -14,10 +14,10 @@ One Go binary (`go 1.26.0`, `toolchain go1.26.8`, module
 `github.com/mtgban/api-gatewahy`) that sells and serves API access to the
 per-game MTGBAN price backends:
 
-- **Gateway** (`/v1/{game}/...`): authenticates a customer's bearer key,
-  checks the account's entitlements for that game and mode, mints a
-  short-lived backend signature, and reverse-proxies to the game's own
-  `/api/mtgban/...` host.
+- **Gateway** (`/v1/{game}/...` and `/v2/{game}/...`): authenticates a
+  customer's bearer key, checks the account's entitlements for that game
+  and mode, mints a short-lived backend signature, and reverse-proxies to
+  the game's own `/api/mtgban/...` (v1) or `/api/v2/...` (v2) host.
 - **Billing**: Stripe Checkout, webhooks and a nightly reconcile write the
   entitlements a paid plan buys.
 - **Portal**: server-rendered customer pages (magic-link sign-in, keys,
@@ -35,7 +35,7 @@ and rate limiters.
 ```
 main (main.go, serve.go, admin.go, billing_cmd.go)
  ├── config      JSON config: load (file or b2://), defaults, validation
- ├── gateway     /v1 handler, key resolver cache, usage meter, prober
+ ├── gateway     /v1 and /v2 handler, key resolver cache, usage meter, prober
  │    └── apiaccess
  ├── billing     catalog plans, store families, Stripe, checkout, webhook, reconcile
  │    └── apiaccess
@@ -141,7 +141,7 @@ job.
 | `/v1/games.json` | configured game names, GET only |
 | `/stripe/webhook` | `billing.Webhook` (billing on) |
 | portal routes | `portal.Server.Register` (portal on); else plain-text success/cancel pages when billing is on |
-| `/v1/` | `gateway.Handler` |
+| `/v1/`, `/v2/` | `gateway.Handler` |
 | `/` | JSON 404 |
 
 The whole mux is wrapped in `recoverPanics`: a panic becomes a JSON 500 if
@@ -163,7 +163,7 @@ then `Validate` returns the first error (games in name order).
   and `pricing_url` absolute; game names `^[a-z0-9]+$` (the router's
   pattern), each with a secret and an absolute upstream; Stripe landing
   paths start with `/`, differ, contain no braces and avoid `/`,
-  `/healthz`, `/stripe/webhook` and `/v1/`. `serve` additionally checks
+  `/healthz`, `/stripe/webhook`, `/v1/` and `/v2/`. `serve` additionally checks
   them against portal routes (`checkReservedPaths` → `portal.Reserved`).
 - Unknown keys are ignored (no `DisallowUnknownFields`), so a misspelt key
   silently takes its default.
@@ -261,7 +261,7 @@ flip or a new row does.
 
 | File | Responsibility |
 |---|---|
-| `route.go` | `ParseRoute`: only `/v1/{game}/{sub}` (to `/api/mtgban/{sub}`); kinds search, meta (sets/stores), retail/buylist/all/sealed; `Rest` is the backend path under `/api/`; rejects `..`; `NeedsModes` |
+| `route.go` | `ParseRoute`: only `/v1/{game}/{sub}` (to `/api/mtgban/{sub}`) and `/v2/{game}/{sub}` (to `/api/v2/{sub}`); kinds search (v1 only), meta (sets/stores), retail/buylist/all/sealed; `Rest` is the backend path under `/api/` (`mtgban/...` or `v2/...`); rejects `..`; `NeedsModes` |
 | `access.go` | `Resolve(ents, game, now) (Access, bool)`: union of active rows naming the game; ALL > BASE > explicit union |
 | `resolver.go` | `Resolver`: key hash → `apiaccess.Lookup` cache with TTL, negative caching, stale-on-error, 10,000-entry bound plus 1,000 for unknown keys |
 | `handler.go` | `Handler.ServeHTTP`, one `httputil.ReverseProxy` + `http.Transport` per game, `ClientIP`, `statusWriter` |

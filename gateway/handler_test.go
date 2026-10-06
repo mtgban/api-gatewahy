@@ -210,6 +210,56 @@ func TestHandlerHappyPath(t *testing.T) {
 	}
 }
 
+// TestHandlerV2 forwards a v2 path to the backend's /api/v2/, gated and
+// metered as v1 is.
+func TestHandlerV2(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, meter := testHandler(t, be, "s3cret")
+
+	rec, body := do(h, "GET", "/v2/magic/retail/NEO.json?id=tcg", goodKey)
+	if rec.Code != 200 {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	if body["path"] != "/api/v2/retail/NEO.json" || body["query"] != "tcg" {
+		t.Errorf("backend saw %v", body)
+	}
+	if len(meter.rows) != 1 || meter.rows[0].Path != "/api/v2/retail/NEO.json" {
+		t.Errorf("meter %+v", meter.rows)
+	}
+
+	rec, _ = do(h, "GET", "/v2/magic/sealed.json", goodKey)
+	if rec.Code != 403 {
+		t.Errorf("sealed outside the plan: status %d", rec.Code)
+	}
+}
+
+// TestHandlerV2EveryEndpoint sends every v2 endpoint through the handler:
+// each reaches its /api/v2/ path, and sealed, outside the plan, is refused.
+func TestHandlerV2EveryEndpoint(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, _ := testHandler(t, be, "s3cret")
+
+	for _, sub := range []string{
+		"retail.json", "retail/NEO.json", "retail/NEO.csv", "retail/7da23b15-dfb8-4267-9b33-d7a4c035c434.json",
+		"buylist.json", "buylist/NEO.json", "buylist/NEO.csv",
+		"all.json", "all/NEO.json",
+		"sets.json", "sets.csv", "stores.json", "stores.csv",
+	} {
+		rec, body := do(h, "GET", "/v2/magic/"+sub, goodKey)
+		if rec.Code != 200 || body["path"] != "/api/v2/"+sub {
+			t.Errorf("%s: status %d, backend saw %v", sub, rec.Code, body["path"])
+		}
+	}
+	for _, sub := range []string{"sealed.json", "sealed/ROE.json"} {
+		rec, _ := do(h, "GET", "/v2/magic/"+sub, goodKey)
+		if rec.Code != 403 {
+			t.Errorf("%s outside the plan: status %d", sub, rec.Code)
+		}
+	}
+}
+
 func TestHandlerKeyInQuery(t *testing.T) {
 	be := fakeBackend(t, "s3cret")
 	defer be.Close()

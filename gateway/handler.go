@@ -49,7 +49,7 @@ type Options struct {
 	Now             func() time.Time
 }
 
-// Handler is the /v1/ gateway.
+// Handler is the /v1/ and /v2/ gateway.
 type Handler struct {
 	opts    Options
 	games   map[string]Upstream

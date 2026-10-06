@@ -191,6 +191,7 @@ func TestValidateRejectsStripeFields(t *testing.T) {
 		{"success is healthz", `"stripe": {"success_path": "/healthz"},`, "must not use a reserved path"},
 		{"success is webhook", `"stripe": {"success_path": "/stripe/webhook"},`, "must not use a reserved path"},
 		{"success is v1", `"stripe": {"success_path": "/v1/games.json"},`, "must not use a reserved path"},
+		{"success is v2", `"stripe": {"success_path": "/v2/done"},`, "must not use a reserved path"},
 	}
 	for _, c := range cases {
 		_, err := Parse(strings.NewReader(strings.Replace(goodJSON, `{`, `{`+c.extra, 1)))
