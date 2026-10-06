@@ -23,7 +23,7 @@ var gameName = regexp.MustCompile(`^[a-z0-9]+$`)
 // ParseRoute splits /v1/{game}/... and /v2/{game}/... into their parts,
 // forwarded to the backend's /api/mtgban/ and /api/v2/. v2 serves the
 // prices and the set and store lists, not search, which the backends answer
-// in v1 only.
+// in v1 only, and adds the finish list.
 func ParseRoute(path string) (Route, error) {
 	var rest string
 	var v2 bool
@@ -56,6 +56,8 @@ func ParseRoute(path string) (Route, error) {
 		}
 		r.Kind = "search"
 	case sub == "sets.json", sub == "sets.csv", sub == "stores.json", sub == "stores.csv":
+		r.Kind = "meta"
+	case v2 && (sub == "finishes.json" || sub == "finishes.csv"):
 		r.Kind = "meta"
 	default:
 		for _, kind := range []string{"retail", "buylist", "all", "sealed"} {

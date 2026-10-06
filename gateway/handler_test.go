@@ -245,7 +245,7 @@ func TestHandlerV2EveryEndpoint(t *testing.T) {
 		"retail.json", "retail/NEO.json", "retail/NEO.csv", "retail/7da23b15-dfb8-4267-9b33-d7a4c035c434.json",
 		"buylist.json", "buylist/NEO.json", "buylist/NEO.csv",
 		"all.json", "all/NEO.json",
-		"sets.json", "sets.csv", "stores.json", "stores.csv",
+		"sets.json", "sets.csv", "stores.json", "stores.csv", "finishes.json", "finishes.csv",
 	} {
 		rec, body := do(h, "GET", "/v2/magic/"+sub, goodKey)
 		if rec.Code != 200 || body["path"] != "/api/v2/"+sub {
