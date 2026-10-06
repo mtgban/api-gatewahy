@@ -120,6 +120,12 @@ func TestMuxGamesAndHealth(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/v2/games.json", nil))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"pokemon"`) {
+		t.Errorf("v2 games: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/games.json", nil))
 	if rec.Code != 405 || rec.Header().Get("Content-Type") != "application/json" || rec.Body.String() != `{"error": "method not allowed"}` {
 		t.Errorf("games post: %d %q %q", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())

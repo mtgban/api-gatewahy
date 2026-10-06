@@ -138,7 +138,7 @@ job.
 | Path | Handler |
 |---|---|
 | `/healthz` | 200 when `PingContext` succeeds within 2 s and ≥1 game is configured, else 503 |
-| `/v1/games.json` | configured game names, GET only |
+| `/v1/games.json`, `/v2/games.json` | configured game names, GET only |
 | `/stripe/webhook` | `billing.Webhook` (billing on) |
 | portal routes | `portal.Server.Register` (portal on); else plain-text success/cancel pages when billing is on |
 | `/v1/`, `/v2/` | `gateway.Handler` |

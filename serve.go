@@ -389,14 +389,16 @@ func newMux(d muxDeps) http.Handler {
 		}
 		_, _ = w.Write([]byte("ok"))
 	})
-	mux.HandleFunc("/v1/games.json", func(w http.ResponseWriter, r *http.Request) {
+	games := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(d.games)
-	})
+	}
+	mux.HandleFunc("/v1/games.json", games)
+	mux.HandleFunc("/v2/games.json", games)
 	if d.webhook != nil {
 		mux.Handle("/stripe/webhook", d.webhook)
 	}
