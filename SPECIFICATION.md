@@ -124,7 +124,7 @@ instance, so each job runs once:
 
 | Job | When | What |
 |---|---|---|
-| Prober | at start, then hourly | Mints a BASE_ACCESS retail signature per game, GETs `/api/mtgban/stores.json`, alerts Discord on a state change (failing ↔ recovered) |
+| Prober | at start, then hourly | Mints a BASE_ACCESS retail signature per game, GETs `/api/mtgban/stores.json` and `/api/v2/stores.json`, each of which must answer its version's stores list (an array on v1, an object with `sellers` and `vendors` on v2; a game fails on either, its error naming the version), alerts Discord on a state change (failing ↔ recovered) |
 | Daily summary | 00:05 UTC | Yesterday's usage by account and game, keys created, rows dropped by the meter → Discord; then `PruneUsage` older than `usage_retention_days`, `PruneStripeEvents` and `PruneInvites` (30 days, constants in `serve.go`), `PruneAdminActions` older than `admin_actions_retention_days` (skipped when 0) |
 | Stripe reconcile | 03:00 UTC (billing on) | `Reconciler.All`, summary → Discord |
 | Trial reminders | 09:00 UTC (portal on) | Mails trials ending within 3 days, marks each reminded |

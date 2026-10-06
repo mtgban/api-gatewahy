@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -63,14 +64,39 @@ func (p *Prober) Check(ctx context.Context) map[string]error {
 	return out
 }
 
-// probeRoute is the canonical stores-list route every game serves, the same
-// one live traffic uses, so its BackendPath can't drift from the probe's.
-func probeRoute(game string) (Route, error) {
-	return ParseRoute("/v1/" + game + "/stores.json")
+// probeVersions are the API versions every game serves, each probed on its
+// stores list.
+var probeVersions = []string{"v1", "v2"}
+
+// storesPath is the public path of a game's stores list in a version.
+func storesPath(version, game string) string {
+	return "/" + version + "/" + game + "/stores.json"
 }
 
+// probeBodyLimit bounds how much of a stores list the probe reads; a real
+// one is a few KB.
+const probeBodyLimit = 1 << 20
+
+// probeRoute is the canonical stores-list route every game serves in a
+// version, the same one live traffic uses, so its BackendPath can't drift
+// from the probe's.
+func probeRoute(version, game string) (Route, error) {
+	return ParseRoute(storesPath(version, game))
+}
+
+// probe checks every version of a game, and fails naming the first that does.
 func (p *Prober) probe(ctx context.Context, game string, up Upstream) error {
-	route, err := probeRoute(game)
+	for _, version := range probeVersions {
+		err := p.probeVersion(ctx, version, game, up)
+		if err != nil {
+			return fmt.Errorf("%s: %w", version, err)
+		}
+	}
+	return nil
+}
+
+func (p *Prober) probeVersion(ctx context.Context, version, game string, up Upstream) error {
+	route, err := probeRoute(version, game)
 	if err != nil {
 		return err
 	}
@@ -96,15 +122,30 @@ func (p *Prober) probe(ctx context.Context, game string, up Upstream) error {
 		return fmt.Errorf("request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	head := make([]byte, 64)
-	n, _ := io.ReadFull(resp.Body, head)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, probeBodyLimit))
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("status %d", resp.StatusCode)
 	}
-	if n == 0 || head[0] != '[' {
-		return fmt.Errorf("unexpected body %q", string(head[:n]))
+	if !isStoresList(version, body) {
+		return fmt.Errorf("unexpected body %q", body[:min(len(body), 64)])
 	}
 	return nil
+}
+
+// isStoresList reports whether body is a version's stores list: v1 sends an
+// array, v2 an object holding both a sellers and a vendors array.
+func isStoresList(version string, body []byte) bool {
+	if version == "v1" {
+		var list []json.RawMessage
+		err := json.Unmarshal(body, &list)
+		return err == nil && list != nil
+	}
+	var stores struct {
+		Sellers []json.RawMessage `json:"sellers"`
+		Vendors []json.RawMessage `json:"vendors"`
+	}
+	err := json.Unmarshal(body, &stores)
+	return err == nil && stores.Sellers != nil && stores.Vendors != nil
 }
 
 // tick runs one check and alerts on each game, or the database, whose state changed.
