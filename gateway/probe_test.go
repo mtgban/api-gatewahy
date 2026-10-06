@@ -21,7 +21,7 @@ func TestProberCheck(t *testing.T) {
 			_, _ = w.Write([]byte(`{"error": "invalid or expired signature"}`))
 			return
 		}
-		_, _ = w.Write([]byte(`["TCG","CK"]`))
+		_, _ = w.Write([]byte(storesBody(r.URL.Path)))
 	}))
 	defer good.Close()
 	gu, _ := url.Parse(good.URL)
@@ -39,12 +39,59 @@ func TestProberCheck(t *testing.T) {
 	}
 }
 
+// storesBody is a backend's stores list, in the shape of the version path
+// asks for.
+func storesBody(path string) string {
+	if strings.HasPrefix(path, "/api/v2/") {
+		return `{"sellers":[{"shorthand":"CK","name":"Card Kingdom"}],"vendors":[]}`
+	}
+	return `["TCG","CK"]`
+}
+
+// TestProberChecksV2 fails a game whose host answers v1 but not with a v2
+// stores list, as one that predates the v2 API would, and says which.
+func TestProberChecksV2(t *testing.T) {
+	cases := []struct {
+		name, v2 string
+		ok       bool
+	}{
+		{"stores list", storesBody("/api/v2/stores.json"), true},
+		{"no stores", `{"sellers":[],"vendors":[]}`, true},
+		{"not the API", `<html>not the API</html>`, false},
+		{"signature error", `{"error": "invalid or expired signature"}`, false},
+		{"v1 shape", `["CK"]`, false},
+		{"no vendors", `{"sellers":[]}`, false},
+		{"null", `null`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, "/api/v2/") {
+					_, _ = w.Write([]byte(c.v2))
+					return
+				}
+				_, _ = w.Write([]byte(storesBody(r.URL.Path)))
+			}))
+			defer srv.Close()
+			u, _ := url.Parse(srv.URL)
+			p := NewProber(map[string]Upstream{"magic": {URL: u, Secret: []byte("s")}}, "g@x", apisig.DefaultLink, 5*time.Minute, nil, srv.Client(), nil, nil)
+			err := p.Check(context.Background())["magic"]
+			if c.ok && err != nil {
+				t.Errorf("probe failed: %v", err)
+			}
+			if !c.ok && (err == nil || !strings.HasPrefix(err.Error(), "v2: ")) {
+				t.Errorf("probe of %s: %v", c.v2, err)
+			}
+		})
+	}
+}
+
 func TestProberAlertsOnTransition(t *testing.T) {
 	var healthy atomic.Bool
 	healthy.Store(true)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if healthy.Load() {
-			_, _ = w.Write([]byte(`[]`))
+			_, _ = w.Write([]byte(storesBody(r.URL.Path)))
 		} else {
 			w.WriteHeader(500)
 		}

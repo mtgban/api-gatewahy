@@ -30,7 +30,7 @@ func (s *sigRecorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.reqs = append(s.reqs, recordedRequest{path: r.URL.Path, sig: r.URL.Query().Get("sig")})
 	s.mu.Unlock()
-	_, _ = w.Write([]byte("[]"))
+	_, _ = w.Write([]byte(storesBody(r.URL.Path)))
 }
 
 // TestMintSigMatchesHandlerAndProber fails if the handler and the prober
@@ -68,9 +68,11 @@ func TestMintSigMatchesHandlerAndProber(t *testing.T) {
 		Now:             fixedNow,
 	}, NewResolver(src, time.Minute, nil), &recordingMeter{})
 
-	hRec, _ := do(h, "GET", "/v1/magic/stores.json", goodKey)
-	if hRec.Code != 200 {
-		t.Fatalf("handler request status %d", hRec.Code)
+	for _, version := range probeVersions {
+		hRec, _ := do(h, "GET", storesPath(version, "magic"), goodKey)
+		if hRec.Code != 200 {
+			t.Fatalf("handler %s request status %d", version, hRec.Code)
+		}
 	}
 
 	p := NewProber(map[string]Upstream{"magic": up}, "gateway@mtgban.com", apisig.DefaultLink, ttl, fixedNow, srv.Client(), nil, nil)
@@ -81,17 +83,20 @@ func TestMintSigMatchesHandlerAndProber(t *testing.T) {
 	rec.mu.Lock()
 	reqs := append([]recordedRequest(nil), rec.reqs...)
 	rec.mu.Unlock()
-	if len(reqs) != 2 {
-		t.Fatalf("recorded %d requests, want 2: %v", len(reqs), reqs)
+	n := len(probeVersions)
+	if len(reqs) != 2*n {
+		t.Fatalf("recorded %d requests, want %d: %v", len(reqs), 2*n, reqs)
 	}
-	handlerReq, proberReq := reqs[0], reqs[1]
 
 	// Same secret, link, scope, modes, and clock: the HMAC is deterministic,
 	// so an equal sig proves every claim matched; the path is checked apart.
-	if handlerReq.path != proberReq.path {
-		t.Errorf("path differs: handler %q prober %q", handlerReq.path, proberReq.path)
-	}
-	if handlerReq.sig != proberReq.sig {
-		t.Errorf("sig differs: handler %q prober %q", handlerReq.sig, proberReq.sig)
+	for i, version := range probeVersions {
+		handlerReq, proberReq := reqs[i], reqs[n+i]
+		if handlerReq.path != proberReq.path {
+			t.Errorf("%s path differs: handler %q prober %q", version, handlerReq.path, proberReq.path)
+		}
+		if handlerReq.sig != proberReq.sig {
+			t.Errorf("%s sig differs: handler %q prober %q", version, handlerReq.sig, proberReq.sig)
+		}
 	}
 }
