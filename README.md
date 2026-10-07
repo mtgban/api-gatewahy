@@ -20,9 +20,9 @@ entitlement changes take effect without a restart.
 
 Base URL: `https://api.mtgban.com/v1/{game}/`, forwarding to that game's
 `/api/mtgban/...` paths (retail, buylist, all, sealed, sets, stores,
-search). `https://api.mtgban.com/v2/{game}/` forwards the same paths but
-search to the game's `/api/v2/...`, the price API keyed by finish and
-condition, plus `finishes.json`, the finishes it keys by. Only `GET` is
+search). `https://api.mtgban.com/v2/{game}/` forwards the same paths to
+the game's `/api/v2/...`, the price API keyed by finish and condition,
+plus `finishes.json`, the finishes it keys by. Only `GET` is
 accepted; any other method under `/v1/` or `/v2/` is 405.
 
 Authenticate with either:
