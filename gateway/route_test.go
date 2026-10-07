@@ -34,7 +34,7 @@ func TestParseRoute(t *testing.T) {
 		{"/v2/magic/finishes.json", Route{"magic", "meta", "v2/finishes.json"}, nil, "/api/v2/finishes.json", false},
 		{"/v2/magic/finishes.csv", Route{"magic", "meta", "v2/finishes.csv"}, nil, "/api/v2/finishes.csv", false},
 		{"/v1/magic/finishes.json", Route{}, nil, "", true},
-		{"/v2/magic/search/x.json", Route{}, nil, "", true},
+		{"/v2/magic/search/x.json", Route{"magic", "search", "v2/search/x.json"}, nil, "/api/v2/search/x.json", false},
 		{"/v2/magic/mtgban/retail.json", Route{}, nil, "", true},
 		{"/v2/magic/retail/../../secrets.json", Route{}, nil, "", true},
 		{"/v3/magic/mtgban/retail.json", Route{}, nil, "", true},
