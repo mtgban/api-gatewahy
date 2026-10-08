@@ -9,7 +9,7 @@ require (
 	github.com/mtgban/mtgban-website v0.0.0-20260924120930-987f4c3bd492
 	github.com/mtgban/simplecloud v0.0.16
 	github.com/stripe/stripe-go/v84 v84.4.1
-	golang.org/x/sync v0.22.0
+	golang.org/x/sync v0.23.0
 	golang.org/x/time v0.16.0
 )
 
