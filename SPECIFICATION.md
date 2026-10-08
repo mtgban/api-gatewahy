@@ -10,7 +10,7 @@
 
 ## 1. Overview
 
-One Go binary (`go 1.26.0`, `toolchain go1.26.8`, module
+One Go binary (`go 1.26.0`, `toolchain go1.26.9`, module
 `github.com/mtgban/api-gatewahy`) that sells and serves API access to the
 per-game MTGBAN price backends:
 
