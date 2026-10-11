@@ -362,6 +362,30 @@ func TestPrefillMapsShorthandsBackToKeys(t *testing.T) {
 	}
 }
 
+// A history subscriber's change link opens the configurator on history.
+func TestHistoryChangeLinkOpensOnHistory(t *testing.T) {
+	ts := newTestServer(t)
+	ts.withStripe()
+	a, ck, _ := ts.signIn(t, "hist@example.com")
+	ctx := context.Background()
+	_, _ = ts.store.SetStripeCustomerID(ctx, a.ID, "cus_hist")
+	if _, err := ts.store.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: apiaccess.SourceStripe, Games: []string{"magic"}, Modes: []string{"history"}, LookbackDays: 365, Status: apiaccess.EntitlementActive, ExternalRef: "sub_hist"}); err != nil {
+		t.Fatal(err)
+	}
+	body := ts.do("GET", "/account", "", ck).Body.String()
+	changeURL := regexp.MustCompile(`href="([^"]+)">Change plan</a>`).FindStringSubmatch(body)
+	if changeURL == nil {
+		t.Fatalf("no change link in %s", body)
+	}
+	u, _ := url.Parse(strings.ReplaceAll(changeURL[1], "&amp;", "&"))
+	if u.Query().Get("package") != "history" || u.Query().Has("stores") || u.Query().Get("games") != "magic" || u.Query().Get("change") != "1" {
+		t.Errorf("change link %q", changeURL[1])
+	}
+	if !strings.Contains(body, "Price History") {
+		t.Error("history row does not name its package")
+	}
+}
+
 func TestPrefillKeepsTheStoresOutWhenASiteIsDown(t *testing.T) {
 	ts := newTestServer(t)
 	ts.stores.Down = map[string]bool{"pokemon": true}

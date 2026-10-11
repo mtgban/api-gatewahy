@@ -347,6 +347,75 @@ func TestCheckoutChangeConfirm(t *testing.T) {
 	}
 }
 
+// Switching between a price plan and history says what stops.
+func TestCheckoutChangeConfirmNamesTheSwitch(t *testing.T) {
+	ts := newTestServer(t)
+	ts.HistoryOnSale = true
+	_, ck, _ := ts.signIn(t, "ann@example.com")
+	f := ts.withStripe()
+	a, _ := ts.store.GetAccountByEmail(context.Background(), "ann@example.com")
+	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, apiaccess.SourceStripe, "BASE_ACCESS"))
+	f.AddSub(t, "sub_1", "cus_test", stripe.SubscriptionStatusActive,
+		billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID), ts.now.AddDate(0, 1, 0))
+	const changeQuery = "/checkout?change=1&package=history&games=magic&return_to=https%3A%2F%2Fmtgban.com%2Fapi-plans"
+	rec := ts.do("GET", changeQuery, "", ck)
+	body := rec.Body.String()
+	if rec.Code != 200 || !strings.Contains(body, "History replaces your price plan") {
+		t.Errorf("history change confirm lacks the switch note: %d\n%s", rec.Code, body)
+	}
+
+	// and the reverse, an account on history asking for all_stores
+	f.AddSub(t, "sub_1", "cus_test", stripe.SubscriptionStatusActive,
+		billing.Plan{Package: "history", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID), ts.now.AddDate(0, 1, 0))
+	const reverseQuery = "/checkout?change=1&package=all_stores&games=magic&return_to=https%3A%2F%2Fmtgban.com%2Fapi-plans"
+	rec = ts.do("GET", reverseQuery, "", ck)
+	body = rec.Body.String()
+	if rec.Code != 200 || !strings.Contains(body, "Your price plan replaces history") {
+		t.Errorf("price change confirm lacks the switch note: %d\n%s", rec.Code, body)
+	}
+}
+
+// With history off sale, neither the confirm page nor the POST sells it.
+func TestCheckoutRefusesHistoryOffSale(t *testing.T) {
+	ts := newTestServer(t)
+	f := ts.withStripe()
+	_, ck, csrf := ts.signIn(t, "ann@example.com")
+	rec := ts.do("GET", "/checkout?package=history&games=magic", "", ck)
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), historyOffSaleMsg) {
+		t.Errorf("get: %d %s", rec.Code, rec.Body.String())
+	}
+	if pc := cookieNamed(rec, session.PendingName); pc == nil || pc.MaxAge >= 0 {
+		t.Errorf("get did not clear the pending cookie: %+v", pc)
+	}
+	form := url.Values{"csrf": {csrf}, "package": {"history"}, "interval": {"monthly"}, "games": {"magic"}}
+	rec = ts.do("POST", "/checkout", form.Encode(), ck)
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), historyOffSaleMsg) {
+		t.Errorf("post: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = ts.do("POST", "/account/plan", form.Encode(), ck)
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), historyOffSaleMsg) {
+		t.Errorf("change: %d %s", rec.Code, rec.Body.String())
+	}
+	if f.Calls["CreateCheckoutSession"] != 0 || len(f.Sessions) != 0 {
+		t.Errorf("checkout sessions: %d calls, %d sessions", f.Calls["CreateCheckoutSession"], len(f.Sessions))
+	}
+}
+
+// With history on sale, its confirm page renders.
+func TestCheckoutSellsHistoryOnSale(t *testing.T) {
+	ts := newTestServer(t)
+	ts.HistoryOnSale = true
+	ts.withStripe()
+	_, ck, _ := ts.signIn(t, "ann@example.com")
+	rec := ts.do("GET", "/checkout?package=history&games=magic", "", ck)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Confirm your plan") {
+		t.Errorf("confirm: %d %s", rec.Code, rec.Body.String())
+	}
+	if cookieNamed(rec, session.PendingName) == nil {
+		t.Error("no pending cookie")
+	}
+}
+
 // startInviteCheckout signs in, creates a quarterly invite, and posts a checkout with it.
 func startInviteCheckout(t *testing.T, ts *testServer) (token string, ck, pending *http.Cookie) {
 	t.Helper()

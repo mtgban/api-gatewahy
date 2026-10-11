@@ -9,6 +9,7 @@
     <tr><th>Billing</th><td>{{.Interval}}{{if .Change}} (unchanged){{end}}</td></tr>
     <tr><th>Total</th><td class="total">{{.Total}} {{.Interval}}</td></tr>
   </table>
+  {{if .Switch}}<p class="msg msg-error">{{.Switch}}</p>{{end}}
   {{if .HasPlan}}
   <p class="msg msg-error">You already have a plan. Use <a href="/account">Change plan</a> on your account page to switch.</p>
   {{else}}

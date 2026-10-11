@@ -246,6 +246,7 @@ JSON, named by `-config` or `BAN_CONFIG_PATH` (a `b2://` path needs
 | `mail.from` | `MTGBAN <no-reply@mtgban.com>` |
 | `trial_days` | `15` |
 | `login_links_per_hour` | `5` |
+| `history_on_sale` | `false` |
 
 `cache_ttl_seconds` is how long a resolved key stays cached, and
 `stale_grace_seconds` is how much longer the gateway keeps serving that
