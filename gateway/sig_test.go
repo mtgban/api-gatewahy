@@ -100,3 +100,25 @@ func TestMintSigMatchesHandlerAndProber(t *testing.T) {
 		}
 	}
 }
+
+// A lookback is minted as APIlookback and nothing else changes.
+func TestMintSigLookback(t *testing.T) {
+	up := Upstream{Secret: []byte("s")}
+	exp := time.Unix(1800000000, 0)
+	plain := mintSig(up, apisig.DefaultLink, "g@x", "BASE_ACCESS", []string{"retail"}, 0, exp)
+	with := mintSig(up, apisig.DefaultLink, "g@x", "", []string{"history"}, 365, exp)
+	if plain == with {
+		t.Fatal("lookback did not change the signature")
+	}
+	v, err := apisig.Decode(with)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Get("APIlookback") != "365" || v.Get("APImode") != "history" {
+		t.Errorf("claims %v", v)
+	}
+	v0, _ := apisig.Decode(plain)
+	if v0.Has("APIlookback") {
+		t.Errorf("a zero lookback was minted: %v", v0)
+	}
+}
