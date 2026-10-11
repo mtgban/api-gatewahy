@@ -189,11 +189,41 @@ func TestAdminGrants(t *testing.T) {
 	if code, _, errb := admin(t, s, "grant", "add", "-email", "ck@example.com", "-games", "magic", "-stores", "TCG", "-modes", "all"); code != 1 || !strings.Contains(errb, "all") {
 		t.Errorf("mode all: %d %q", code, errb)
 	}
-	if code, out, _ := admin(t, s, "grant", "list", "-email", "ck@example.com"); code != 0 || !strings.Contains(out, "CK,TCG") {
+	if code, out, _ := admin(t, s, "grant", "list", "-email", "ck@example.com"); code != 0 || !strings.Contains(out, "CK,TCG") ||
+		!strings.Contains(out, "LOOKBACK") || strings.Contains(out, "0d") {
 		t.Errorf("list: %d %q", code, out)
 	}
 	if code, _, _ := admin(t, s, "grant", "end", "-id", strconv.FormatInt(e.ID, 10)); code != 0 || entsOf(t, s, "ck@example.com")[0].Status != apiaccess.EntitlementEnded {
 		t.Errorf("end: %d %+v", code, entsOf(t, s, "ck@example.com"))
+	}
+}
+
+func TestAdminGrantHistory(t *testing.T) {
+	s := apiaccesstest.New()
+	admin(t, s, "account", "add", "-email", "hist@example.com")
+	code, out, errb := admin(t, s, "grant", "add", "-email", "hist@example.com", "-games", "magic", "-modes", "history", "-lookback", "365")
+	if code != 0 {
+		t.Fatalf("add: %d %q %q", code, out, errb)
+	}
+	if !strings.Contains(out, "365d") {
+		t.Errorf("success line missing lookback: %q", out)
+	}
+	e := entsOf(t, s, "hist@example.com")[0]
+	if !e.IsHistory() || e.LookbackDays != 365 || e.StoreScope != "" {
+		t.Errorf("grant %+v", e)
+	}
+	if code, _, errb := admin(t, s, "grant", "add", "-email", "hist@example.com", "-games", "magic", "-modes", "history", "-stores", "CK"); code != 1 || !strings.Contains(errb, "history takes no stores") {
+		t.Errorf("history with stores: %d %q", code, errb)
+	}
+	if code, _, errb := admin(t, s, "grant", "add", "-email", "hist@example.com", "-games", "magic", "-modes", "retail"); code != 2 || !strings.Contains(errb, "is required") {
+		t.Errorf("retail without stores: %d %q", code, errb)
+	}
+	if code, out, errb := admin(t, s, "grant", "add", "-email", "hist@example.com", "-games", "magic", "-modes", "History", "-lookback", "30"); code != 0 {
+		t.Errorf("History in capitals: %d %q %q", code, out, errb)
+	}
+	code, out, _ = admin(t, s, "grant", "list", "-email", "hist@example.com")
+	if code != 0 || !strings.Contains(out, "LOOKBACK") || !strings.Contains(out, "365d") || !strings.Contains(out, "30d") {
+		t.Errorf("list: %d %q", code, out)
 	}
 }
 
