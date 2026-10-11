@@ -332,3 +332,24 @@ func TestCanonicalStoreScopeKeepsCase(t *testing.T) {
 		t.Errorf("preset %q", got)
 	}
 }
+
+// A history row inserts scope-less with its lookback and reads back the same.
+func TestHistoryEntitlementRoundTrip(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	a, _ := c.CreateAccount(ctx, "h@example.com", "")
+	e, err := c.AddEntitlement(ctx, Entitlement{AccountID: a.ID, Source: SourceManual, Games: []string{"magic"}, Modes: []string{"history"}, LookbackDays: 365})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.StoreScope != "" || !slices.Equal(e.Modes, []string{"history"}) || e.LookbackDays != 365 {
+		t.Errorf("added %+v", e)
+	}
+	list, _ := c.ListEntitlements(ctx, a.ID)
+	if len(list) != 1 || list[0].LookbackDays != 365 || list[0].StoreScope != "" {
+		t.Errorf("list %+v", list)
+	}
+	if _, err := c.AddEntitlement(ctx, Entitlement{AccountID: a.ID, Source: SourceManual, Games: []string{"magic"}, StoreScope: "CK", Modes: []string{"retail", "history"}, LookbackDays: 30}); err == nil {
+		t.Error("history beside retail was stored")
+	}
+}

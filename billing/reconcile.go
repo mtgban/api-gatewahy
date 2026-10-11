@@ -225,6 +225,7 @@ func (r *Reconciler) apply(ctx context.Context, sub *stripe.Subscription, pass b
 		grace = 0
 	}
 	status, until := MapStatus(sub.Status, start, subEndedAt(sub), grace, now)
+	pkg, _ := r.Catalog.Package(plan.Package)
 	resolved, err := plan.Resolve(ctx, r.Catalog, r.Stores)
 	if err != nil {
 		// Without keys there is nothing to stand in for the scope, so the row cannot be written.
@@ -233,20 +234,20 @@ func (r *Reconciler) apply(ctx context.Context, sub *stripe.Subscription, pass b
 		}
 		r.alertf("subscription %s: %v", sub.ID, err)
 		// An ended row grants nothing, so the keys stand in for the scope and access still ends.
-		pkg, _ := r.Catalog.Package(plan.Package)
 		resolved = ResolvedPlan{Plan: plan, Scope: strings.Join(plan.Stores, ","), Modes: pkg.Modes}
 	}
 	e := apiaccess.Entitlement{
-		AccountID:   account.ID,
-		Source:      apiaccess.SourceStripe,
-		Games:       plan.Games,
-		StoreScope:  resolved.Scope,
-		Modes:       resolved.Modes,
-		Addons:      plan.Addons(r.Catalog),
-		Status:      status,
-		ValidUntil:  until,
-		ExternalRef: sub.ID,
-		Note:        plan.Describe(r.Catalog),
+		AccountID:    account.ID,
+		Source:       apiaccess.SourceStripe,
+		Games:        plan.Games,
+		StoreScope:   resolved.Scope,
+		Modes:        resolved.Modes,
+		Addons:       plan.Addons(r.Catalog),
+		Status:       status,
+		ValidUntil:   until,
+		ExternalRef:  sub.ID,
+		Note:         plan.Describe(r.Catalog),
+		LookbackDays: pkg.LookbackDays,
 	}
 	if _, err := r.Store.UpsertStripeEntitlement(ctx, e); err != nil {
 		return fmt.Errorf("billing: upsert %s: %w", sub.ID, err)

@@ -3,6 +3,7 @@ package apiaccess
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -164,6 +165,90 @@ func TestSplitList(t *testing.T) {
 				t.Errorf("%q: got %v, want %v", c.in, got, c.want)
 				break
 			}
+		}
+	}
+}
+
+// A history grant stands alone, takes no stores and needs a lookback; a
+// price grant takes no lookback.
+func TestManualGrantHistory(t *testing.T) {
+	games := []string{"magic"}
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name  string
+		in    ManualGrantInput
+		field string
+		msg   string
+	}{
+		{"history alone", ManualGrantInput{AccountID: 1, Games: games, Modes: []string{"history"}, Lookback: 365}, "", ""},
+		{"history with stores", ManualGrantInput{AccountID: 1, Games: games, Stores: "CK", Modes: []string{"history"}, Lookback: 365}, "stores", "history takes no stores"},
+		{"history without lookback", ManualGrantInput{AccountID: 1, Games: games, Modes: []string{"history"}}, "lookback", "lookback must be at least 1"},
+		{"history past ten years", ManualGrantInput{AccountID: 1, Games: games, Modes: []string{"history"}, Lookback: 3651}, "lookback", "lookback must be at most 3650 days"},
+		{"history beside retail", ManualGrantInput{AccountID: 1, Games: games, Stores: "CK", Modes: []string{"retail", "history"}, Lookback: 30}, "modes", "history is a mode of its own"},
+		{"price with lookback", ManualGrantInput{AccountID: 1, Games: games, Stores: "CK", Modes: []string{"retail"}, Lookback: 30}, "lookback", "lookback applies to a history grant only"},
+		{"price without stores", ManualGrantInput{AccountID: 1, Games: games, Modes: []string{"retail"}}, "stores", "store scope is empty"},
+	}
+	for _, c := range cases {
+		e, err := ManualGrant(c.in, games, now)
+		if c.field == "" {
+			if err != nil {
+				t.Errorf("%s: %v", c.name, err)
+				continue
+			}
+			if !e.IsHistory() || e.StoreScope != "" || e.LookbackDays != 365 {
+				t.Errorf("%s: %+v", c.name, e)
+			}
+			continue
+		}
+		var ge *GrantError
+		if !errors.As(err, &ge) || ge.Field != c.field || !strings.Contains(ge.Msg, c.msg) {
+			t.Errorf("%s: err %v, want field %q containing %q", c.name, err, c.field, c.msg)
+		}
+	}
+}
+
+// GrantDetail names the lookback on a history row so the audit log says what was granted.
+func TestGrantDetailHistory(t *testing.T) {
+	e := Entitlement{Games: []string{"magic"}, Modes: []string{"history"}, LookbackDays: 365}
+	if got := GrantDetail(e); got != "magic  history 365d" {
+		t.Errorf("GrantDetail = %q", got)
+	}
+}
+
+// CanonicalEntitlement is the one rule set the client and the memstore share.
+func TestCanonicalEntitlementHistory(t *testing.T) {
+	base := Entitlement{AccountID: 1, Source: SourceManual, Games: []string{"magic"}}
+	h := base
+	h.Modes = []string{"history"}
+	h.LookbackDays = 90
+	got, err := CanonicalEntitlement(h)
+	if err != nil || got.StoreScope != "" || got.LookbackDays != 90 || !got.IsHistory() {
+		t.Errorf("history row: %+v %v", got, err)
+	}
+	h.LookbackDays = MaxLookbackDays
+	if got, err := CanonicalEntitlement(h); err != nil || got.LookbackDays != 3650 {
+		t.Errorf("ten-year row: %+v %v", got, err)
+	}
+	for _, c := range []struct {
+		name string
+		e    func() Entitlement
+		want string
+	}{
+		{"history with scope", func() Entitlement { x := h; x.StoreScope = "CK"; return x }, "takes no store scope"},
+		{"history without lookback", func() Entitlement { x := h; x.LookbackDays = 0; return x }, "lookback_days must be at least 1"},
+		{"history past ten years", func() Entitlement { x := h; x.LookbackDays = 3651; return x }, "lookback_days must be at most 3650"},
+		{"history beside sealed", func() Entitlement { x := h; x.Modes = []string{"sealed", "history"}; x.StoreScope = "CK"; return x }, "history is a mode of its own"},
+		{"price with lookback", func() Entitlement {
+			x := base
+			x.Modes = []string{"retail"}
+			x.StoreScope = "CK"
+			x.LookbackDays = 30
+			return x
+		}, "lookback_days applies to a history row only"},
+		{"price without scope", func() Entitlement { x := base; x.Modes = []string{"retail"}; return x }, "store scope is empty"},
+	} {
+		if _, err := CanonicalEntitlement(c.e()); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err %v, want containing %q", c.name, err, c.want)
 		}
 	}
 }
