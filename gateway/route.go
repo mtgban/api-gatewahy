@@ -55,7 +55,7 @@ func ParseRoute(path string) (Route, error) {
 		r.Kind = "meta"
 	case v2 && (sub == "finishes.json" || sub == "finishes.csv"):
 		r.Kind = "meta"
-	case v2 && (sub == "history.json" || sub == "history.csv" || strings.HasPrefix(sub, "history/")):
+	case v2 && strings.HasPrefix(sub, "history/"):
 		r.Kind = "history"
 	default:
 		for _, kind := range []string{"retail", "buylist", "all", "sealed"} {

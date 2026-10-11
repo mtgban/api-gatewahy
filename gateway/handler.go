@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -41,6 +42,9 @@ type Options struct {
 	// PerKeyRate and PerKeyBurst throttle per account, so extra keys on one account share the allowance.
 	PerKeyRate  float64
 	PerKeyBurst int
+	// PerKeyHistoryRate and PerKeyHistoryBurst throttle history routes per account, apart from prices.
+	PerKeyHistoryRate  float64
+	PerKeyHistoryBurst int
 	// PerIPRate and PerIPBurst throttle by client address before any key is looked up.
 	PerIPRate       float64
 	PerIPBurst      int
@@ -57,19 +61,22 @@ type Handler struct {
 	res     *Resolver
 	meter   Meter
 	limiter *accountLimiter
+	// historyLimiter throttles history routes apart from prices, on the same account key.
+	historyLimiter *accountLimiter
 	// ipLimiter runs first, so forged keys cannot drive the database.
 	ipLimiter *ratelimit.Limiter
 	now       func() time.Time
 }
 
-// accountLimiter throttles per account and remembers its rate for the response header.
+// accountLimiter throttles per account and remembers its rate, rounded up to
+// a whole request, for the response header.
 type accountLimiter struct {
 	*ratelimit.Limiter
 	perSec int
 }
 
 func newLimiter(perSec float64, burst int) *accountLimiter {
-	return &accountLimiter{Limiter: ratelimit.NewLimiter(rate.Limit(perSec), burst), perSec: int(perSec)}
+	return &accountLimiter{Limiter: ratelimit.NewLimiter(rate.Limit(perSec), burst), perSec: int(math.Ceil(perSec))}
 }
 
 // New builds a handler with one reverse proxy per game. Config owns every
@@ -82,14 +89,15 @@ func New(opts Options, res *Resolver, meter Meter) (*Handler, error) {
 		return nil, err
 	}
 	h := &Handler{
-		opts:      opts,
-		games:     opts.Games,
-		proxies:   map[string]*httputil.ReverseProxy{},
-		res:       res,
-		meter:     meter,
-		limiter:   newLimiter(opts.PerKeyRate, opts.PerKeyBurst),
-		ipLimiter: ratelimit.NewLimiter(rate.Limit(opts.PerIPRate), opts.PerIPBurst),
-		now:       opts.Now,
+		opts:           opts,
+		games:          opts.Games,
+		proxies:        map[string]*httputil.ReverseProxy{},
+		res:            res,
+		meter:          meter,
+		limiter:        newLimiter(opts.PerKeyRate, opts.PerKeyBurst),
+		historyLimiter: newLimiter(opts.PerKeyHistoryRate, opts.PerKeyHistoryBurst),
+		ipLimiter:      ratelimit.NewLimiter(rate.Limit(opts.PerIPRate), opts.PerIPBurst),
+		now:            opts.Now,
 	}
 	for name, up := range opts.Games {
 		h.proxies[name] = h.newProxy(name, up)
@@ -108,6 +116,10 @@ func (o Options) validate() error {
 		return errors.New("PerKeyRate (per_key_requests_per_sec) must be positive")
 	case o.PerKeyBurst <= 0:
 		return errors.New("PerKeyBurst (per_key_burst) must be positive")
+	case o.PerKeyHistoryRate <= 0:
+		return errors.New("PerKeyHistoryRate (per_key_history_requests_per_sec) must be positive")
+	case o.PerKeyHistoryBurst <= 0:
+		return errors.New("PerKeyHistoryBurst (per_key_history_burst) must be positive")
 	case o.PerIPRate <= 0:
 		return errors.New("PerIPRate (per_ip_requests_per_sec) must be positive")
 	case o.PerIPBurst <= 0:
@@ -134,6 +146,14 @@ type proxyParams struct {
 	path     string
 	clientIP string
 	game     string
+	// kind is the route's kind, which decides what the response may carry.
+	kind string
+}
+
+// passStatus reports whether the backend's own 4xx and 503 reach the
+// client, as a history route answers with a body of its own.
+func (p proxyParams) passStatus() bool {
+	return p.kind == "history"
 }
 
 // paramsFrom returns the proxyParams ServeHTTP stored in ctx, or the zero
@@ -184,7 +204,15 @@ func (h *Handler) newProxy(_ string, up Upstream) *httputil.ReverseProxy {
 		ModifyResponse: func(resp *http.Response) error {
 			// Only the gateway's own RateLimit-Limit reaches the client.
 			resp.Header.Del("RateLimit-Limit")
+			p := paramsFrom(resp.Request.Context())
+			// A pass-through answer is one key's paid read, so no shared cache may keep it.
+			if p.passStatus() {
+				resp.Header.Set("Cache-Control", privateCacheControl(strings.Join(resp.Header.Values("Cache-Control"), ",")))
+			}
 			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusNotModified {
+				return nil
+			}
+			if p.passStatus() && (resp.StatusCode >= 400 && resp.StatusCode < 500 || resp.StatusCode == http.StatusServiceUnavailable) {
 				return nil
 			}
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -229,6 +257,22 @@ func (h *Handler) newProxy(_ string, up Upstream) *httputil.ReverseProxy {
 			}
 		},
 	}
+}
+
+// privateCacheControl makes a Cache-Control value private: public and
+// s-maxage go, and every other directive stays, so max-age and no-store
+// still bound the client's own cache.
+func privateCacheControl(v string) string {
+	out := []string{"private"}
+	for _, d := range strings.Split(v, ",") {
+		d = strings.TrimSpace(d)
+		name, _, _ := strings.Cut(strings.ToLower(d), "=")
+		if d == "" || name == "public" || name == "private" || name == "s-maxage" {
+			continue
+		}
+		out = append(out, d)
+	}
+	return strings.Join(out, ", ")
 }
 
 // sigRejected reports whether a 200 body is the backends' signature error.
@@ -346,8 +390,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "plan does not include game", route.Game)
 		return
 	}
-	// DEV_ACCESS is never issued, so a plan carrying it must not mint a signature.
-	if access.StoreScope == "" || access.StoreScope == "DEV_ACCESS" {
+	history := route.Kind == "history"
+	// DEV_ACCESS is never issued, so a plan carrying it must not mint a signature;
+	// a history route needs no scope, every other route does.
+	if access.StoreScope == "DEV_ACCESS" || (!history && access.StoreScope == "") {
 		writeError(w, http.StatusForbidden, "plan has no store scope", route.Game)
 		return
 	}
@@ -357,16 +403,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if history && access.LookbackDays <= 0 {
+		writeError(w, http.StatusForbidden, "plan has no history lookback", route.Game)
+		return
+	}
 
-	w.Header().Set("RateLimit-Limit", strconv.Itoa(h.limiter.perSec))
-	if !h.limiter.Allow("account:" + strconv.FormatInt(lk.Account.ID, 10)) {
+	limiter := h.limiter
+	if history {
+		limiter = h.historyLimiter
+	}
+	w.Header().Set("RateLimit-Limit", strconv.Itoa(limiter.perSec))
+	if !limiter.Allow("account:" + strconv.FormatInt(lk.Account.ID, 10)) {
 		writeError(w, http.StatusTooManyRequests, "too many requests", "")
 		return
 	}
 
-	sig := mintSig(up, h.opts.Link, h.opts.GatewayEmail, access.StoreScope, access.Modes, now.Add(h.opts.SigTTL))
+	sig := mintSig(up, h.opts.Link, h.opts.GatewayEmail, access.StoreScope, access.Modes, access.LookbackDays, now.Add(h.opts.SigTTL))
 
-	params := proxyParams{sig: sig, path: route.BackendPath(), clientIP: ip, game: route.Game}
+	params := proxyParams{sig: sig, path: route.BackendPath(), clientIP: ip, game: route.Game, kind: route.Kind}
 	ctx, cancel := context.WithTimeout(context.WithValue(r.Context(), ctxKey{}, params), h.opts.UpstreamTimeout)
 	defer cancel()
 

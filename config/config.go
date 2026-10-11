@@ -55,25 +55,27 @@ type Config struct {
 	Games          map[string]Game       `json:"games"`
 	// RetiredKnownStores accepts and ignores an old config's known_stores,
 	// so the strict decoder below doesn't break one still carrying it.
-	RetiredKnownStores     []string     `json:"known_stores"`
-	CacheTTLSeconds        int          `json:"cache_ttl_seconds"`
-	StaleGraceSeconds      int          `json:"stale_grace_seconds"`
-	LookupTimeoutSeconds   int          `json:"lookup_timeout_seconds"`
-	PerKeyRequestsPerSec   float64      `json:"per_key_requests_per_sec"`
-	PerKeyBurst            int          `json:"per_key_burst"`
-	PerIPRequestsPerSec    float64      `json:"per_ip_requests_per_sec"`
-	PerIPBurst             int          `json:"per_ip_burst"`
-	UpstreamTimeoutSeconds int          `json:"upstream_timeout_seconds"`
-	SigTTLSeconds          int          `json:"sig_ttl_seconds"`
-	ShutdownGraceSeconds   int          `json:"shutdown_grace_seconds"`
-	UsageRetentionDays     int          `json:"usage_retention_days"`
-	AuditRetentionDays     int          `json:"admin_actions_retention_days"`
-	Stripe                 StripeConfig `json:"stripe"`
-	PricingURL             string       `json:"pricing_url"`
-	AdminEmails            []string     `json:"admin_emails"`
-	Mail                   MailConfig   `json:"mail"`
-	TrialDays              int          `json:"trial_days"`
-	LoginLinksPerHour      int          `json:"login_links_per_hour"`
+	RetiredKnownStores          []string     `json:"known_stores"`
+	CacheTTLSeconds             int          `json:"cache_ttl_seconds"`
+	StaleGraceSeconds           int          `json:"stale_grace_seconds"`
+	LookupTimeoutSeconds        int          `json:"lookup_timeout_seconds"`
+	PerKeyRequestsPerSec        float64      `json:"per_key_requests_per_sec"`
+	PerKeyBurst                 int          `json:"per_key_burst"`
+	PerKeyHistoryRequestsPerSec float64      `json:"per_key_history_requests_per_sec"`
+	PerKeyHistoryBurst          int          `json:"per_key_history_burst"`
+	PerIPRequestsPerSec         float64      `json:"per_ip_requests_per_sec"`
+	PerIPBurst                  int          `json:"per_ip_burst"`
+	UpstreamTimeoutSeconds      int          `json:"upstream_timeout_seconds"`
+	SigTTLSeconds               int          `json:"sig_ttl_seconds"`
+	ShutdownGraceSeconds        int          `json:"shutdown_grace_seconds"`
+	UsageRetentionDays          int          `json:"usage_retention_days"`
+	AuditRetentionDays          int          `json:"admin_actions_retention_days"`
+	Stripe                      StripeConfig `json:"stripe"`
+	PricingURL                  string       `json:"pricing_url"`
+	AdminEmails                 []string     `json:"admin_emails"`
+	Mail                        MailConfig   `json:"mail"`
+	TrialDays                   int          `json:"trial_days"`
+	LoginLinksPerHour           int          `json:"login_links_per_hour"`
 }
 
 // DefaultClientIPHeader is the header DigitalOcean App Platform's ingress
@@ -162,6 +164,12 @@ func (c *Config) applyDefaults(defaultClientIPHeader, defaultAuditRetention, def
 	}
 	if c.PerKeyBurst <= 0 {
 		c.PerKeyBurst = 5
+	}
+	if c.PerKeyHistoryRequestsPerSec <= 0 {
+		c.PerKeyHistoryRequestsPerSec = 1
+	}
+	if c.PerKeyHistoryBurst <= 0 {
+		c.PerKeyHistoryBurst = 5
 	}
 	if c.PerIPRequestsPerSec <= 0 {
 		c.PerIPRequestsPerSec = 50

@@ -209,16 +209,18 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 	meter := gateway.NewUsageMeter(store, events, cfg.InstanceName, 5*time.Second, 200)
 	sigTTL := time.Duration(cfg.SigTTLSeconds) * time.Second
 	handler, err := gateway.New(gateway.Options{
-		Games:           games,
-		GatewayEmail:    cfg.GatewayEmail,
-		Link:            cfg.Link,
-		ClientIPHeader:  cfg.ClientIPHeader,
-		PerKeyRate:      cfg.PerKeyRequestsPerSec,
-		PerKeyBurst:     cfg.PerKeyBurst,
-		PerIPRate:       cfg.PerIPRequestsPerSec,
-		PerIPBurst:      cfg.PerIPBurst,
-		UpstreamTimeout: time.Duration(cfg.UpstreamTimeoutSeconds) * time.Second,
-		SigTTL:          sigTTL,
+		Games:              games,
+		GatewayEmail:       cfg.GatewayEmail,
+		Link:               cfg.Link,
+		ClientIPHeader:     cfg.ClientIPHeader,
+		PerKeyRate:         cfg.PerKeyRequestsPerSec,
+		PerKeyBurst:        cfg.PerKeyBurst,
+		PerKeyHistoryRate:  cfg.PerKeyHistoryRequestsPerSec,
+		PerKeyHistoryBurst: cfg.PerKeyHistoryBurst,
+		PerIPRate:          cfg.PerIPRequestsPerSec,
+		PerIPBurst:         cfg.PerIPBurst,
+		UpstreamTimeout:    time.Duration(cfg.UpstreamTimeoutSeconds) * time.Second,
+		SigTTL:             sigTTL,
 	}, resolver, meter)
 	if err != nil {
 		_ = meter.Close()

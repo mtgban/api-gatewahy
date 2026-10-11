@@ -13,6 +13,8 @@ import (
 type Access struct {
 	StoreScope string
 	Modes      []string
+	// LookbackDays is the widest history window among the account's history rows, 0 without one.
+	LookbackDays int
 }
 
 // HasMode reports whether m is allowed.
@@ -28,6 +30,7 @@ func Resolve(ents []apiaccess.Entitlement, game string, now time.Time) (Access, 
 		sawBase  bool
 		stores   []string
 		modeSeen = map[string]bool{}
+		lookback int
 	)
 	for _, e := range ents {
 		if !e.ActiveAt(now) || !slices.Contains(e.Games, game) {
@@ -39,6 +42,8 @@ func Resolve(ents []apiaccess.Entitlement, game string, now time.Time) (Access, 
 			sawAll = true
 		case apiaccess.ScopeBase:
 			sawBase = true
+		case "":
+			// A history row carries no store scope.
 		default:
 			for _, s := range strings.Split(e.StoreScope, ",") {
 				if s != "" && !slices.Contains(stores, s) {
@@ -48,6 +53,9 @@ func Resolve(ents []apiaccess.Entitlement, game string, now time.Time) (Access, 
 		}
 		for _, m := range e.Modes {
 			modeSeen[m] = true
+		}
+		if e.IsHistory() && e.LookbackDays > lookback {
+			lookback = e.LookbackDays
 		}
 	}
 	if !found {
@@ -68,5 +76,6 @@ func Resolve(ents []apiaccess.Entitlement, game string, now time.Time) (Access, 
 			a.Modes = append(a.Modes, m)
 		}
 	}
+	a.LookbackDays = lookback
 	return a, true
 }
