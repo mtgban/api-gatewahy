@@ -3,6 +3,7 @@ package billing_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/mtgban/api-gatewahy/billing"
@@ -32,7 +33,11 @@ func TestSeedCreatesEverythingOnce(t *testing.T) {
 		t.Errorf("starter_quarterly %+v", p)
 	}
 	a := f.PriceByKey("extra_game_monthly")
-	if a == nil || a.UnitAmount != 15000 || a.Metadata["kind"] != "addon" || a.Metadata["addon"] != "extra_game" || a.Metadata["applies_to"] != "starter,all_stores,all_data" {
+	addon, ok := testCatalog.Addon("extra_game")
+	if !ok {
+		t.Fatal("no extra_game addon in testCatalog")
+	}
+	if a == nil || a.UnitAmount != 15000 || a.Metadata["kind"] != "addon" || a.Metadata["addon"] != "extra_game" || a.Metadata["applies_to"] != strings.Join(addon.AppliesTo, ",") {
 		t.Errorf("extra_game_monthly %+v", a)
 	}
 	if prod := f.Products[billing.ProductID("all_data")]; prod == nil || prod.Name != "All Access" || prod.Metadata["kind"] != "package" {

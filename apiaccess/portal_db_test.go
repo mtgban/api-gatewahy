@@ -105,9 +105,10 @@ func TestRevokeKeyIsScopedToAccount(t *testing.T) {
 	}
 }
 
-// trialEnt is a minimal valid trial entitlement for a.
+// trialEnt is a minimal valid trial entitlement for a. A trial grants every
+// price mode but not history, a plan of its own.
 func trialEnt(a Account) Entitlement {
-	return Entitlement{AccountID: a.ID, Source: "trial", Games: []string{"magic"}, StoreScope: ScopeAll, Modes: ValidModes}
+	return Entitlement{AccountID: a.ID, Source: "trial", Games: []string{"magic"}, StoreScope: ScopeAll, Modes: []string{"retail", "buylist", "sealed"}}
 }
 
 // TestCreateTrialRejectsBadScopeWithNoTrialRow checks validation runs before

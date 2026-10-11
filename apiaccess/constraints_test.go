@@ -22,6 +22,8 @@ func TestSchemaRejectsUnknownValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	const ent = `INSERT INTO entitlements (account_id, source, games, store_scope, modes, status) VALUES ($1, $2, '{magic}', 'ALL_ACCESS', '{retail}', $3)`
+	// look writes a row CanonicalEntitlement never would, so the check alone refuses it.
+	const look = `INSERT INTO entitlements (account_id, source, games, store_scope, modes, lookback_days) VALUES ($1, 'manual', '{magic}', $2, $3, $4)`
 	cases := []struct {
 		name, constraint, query string
 		args                    []any
@@ -32,6 +34,10 @@ func TestSchemaRejectsUnknownValues(t *testing.T) {
 		{"entitlement status", "entitlements_status_check", ent, []any{a.ID, "manual", "paused"}},
 		{"entitlement source", "entitlements_source_check", ent, []any{a.ID, "paypal", "active"}},
 		{"key kind", "api_keys_kind_check", `INSERT INTO api_keys (account_id, key_hash, prefix, kind) VALUES ($1, 'hash-bad-kind', 'ban_test_x', 'ban_test')`, []any{a.ID}},
+		{"history without lookback", "entitlements_lookback_check", look, []any{a.ID, "", pq.Array([]string{"history"}), 0}},
+		{"history past the archive", "entitlements_lookback_check", look, []any{a.ID, "", pq.Array([]string{"history"}), MaxLookbackDays + 1}},
+		{"price row with lookback", "entitlements_lookback_check", look, []any{a.ID, "ALL_ACCESS", pq.Array([]string{"retail"}), 30}},
+		{"history beside prices", "entitlements_lookback_check", look, []any{a.ID, "ALL_ACCESS", pq.Array([]string{"retail", "history"}), 30}},
 	}
 	for _, tc := range cases {
 		if _, err := c.db.ExecContext(ctx, tc.query, tc.args...); !checkViolation(err, tc.constraint) {
@@ -71,6 +77,13 @@ func TestSchemaAcceptsKnownValues(t *testing.T) {
 	for _, kind := range []KeyKind{KeyLive, KeyDemo} {
 		if _, _, err := c.CreateKey(ctx, a.ID, "", kind); err != nil {
 			t.Fatalf("%s: %v", kind, err)
+		}
+	}
+	// Both edges of a history lookback pass the check.
+	for _, days := range []int{1, MaxLookbackDays} {
+		e := Entitlement{AccountID: a.ID, Source: SourceManual, Games: []string{"magic"}, Modes: []string{"history"}, LookbackDays: days}
+		if _, err := c.AddEntitlement(ctx, e); err != nil {
+			t.Fatalf("history %d days: %v", days, err)
 		}
 	}
 }
