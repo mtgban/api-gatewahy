@@ -3,6 +3,7 @@ package apiaccess
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -13,6 +14,7 @@ type ManualGrantInput struct {
 	Games     []string
 	Stores    string
 	Modes     []string
+	Lookback  int
 	Until     string
 	Note      string
 }
@@ -37,15 +39,31 @@ func ManualGrant(in ManualGrantInput, games []string, now time.Time) (Entitlemen
 			return Entitlement{}, &GrantError{Field: "games", Value: g, Msg: fmt.Sprintf("unknown game %q, configured games are %s", g, strings.Join(games, ","))}
 		}
 	}
-	scope, err := ValidateStoreScope(in.Stores)
-	if err != nil {
-		return Entitlement{}, &GrantError{Field: "stores", Msg: err.Error()}
-	}
 	modes, err := ValidateModes(in.Modes)
 	if err != nil {
 		return Entitlement{}, &GrantError{Field: "modes", Msg: err.Error()}
 	}
-	e := Entitlement{AccountID: in.AccountID, Source: SourceManual, Games: in.Games, StoreScope: scope, Modes: modes, Note: in.Note}
+	history := slices.Contains(modes, ModeHistory)
+	switch {
+	case history && len(modes) != 1:
+		return Entitlement{}, &GrantError{Field: "modes", Msg: "history is a mode of its own"}
+	case history && strings.TrimSpace(in.Stores) != "":
+		return Entitlement{}, &GrantError{Field: "stores", Msg: "history takes no stores"}
+	case history && in.Lookback < 1:
+		return Entitlement{}, &GrantError{Field: "lookback", Msg: "lookback must be at least 1 day"}
+	case history && in.Lookback > MaxLookbackDays:
+		return Entitlement{}, &GrantError{Field: "lookback", Msg: fmt.Sprintf("lookback must be at most %d days", MaxLookbackDays)}
+	case !history && in.Lookback != 0:
+		return Entitlement{}, &GrantError{Field: "lookback", Msg: "lookback applies to a history grant only"}
+	}
+	scope := ""
+	if !history {
+		scope, err = ValidateStoreScope(in.Stores)
+		if err != nil {
+			return Entitlement{}, &GrantError{Field: "stores", Msg: err.Error()}
+		}
+	}
+	e := Entitlement{AccountID: in.AccountID, Source: SourceManual, Games: in.Games, StoreScope: scope, Modes: modes, LookbackDays: in.Lookback, Note: in.Note}
 	if in.Until != "" {
 		t, err := time.Parse("2006-01-02", in.Until)
 		if err != nil {
@@ -61,7 +79,11 @@ func ManualGrant(in ManualGrantInput, games []string, now time.Time) (Entitlemen
 
 // GrantDetail is the audit-log string both admins record for a grant.
 func GrantDetail(e Entitlement) string {
-	return strings.Join(e.Games, ",") + " " + e.StoreScope + " " + strings.Join(e.Modes, ",")
+	s := strings.Join(e.Games, ",") + " " + e.StoreScope + " " + strings.Join(e.Modes, ",")
+	if e.LookbackDays > 0 {
+		s += " " + strconv.Itoa(e.LookbackDays) + "d"
+	}
+	return s
 }
 
 // KeyKindFor is live when ents include an active Stripe entitlement, else demo.

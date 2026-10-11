@@ -81,6 +81,8 @@ var contractScenarios = []struct {
 	{"accounts round trip", contractAccounts},
 	{"keys round trip", contractKeys},
 	{"entitlements round trip", contractEntitlements},
+	{"history row stands alone", contractHistoryEntitlement},
+	{"history upsert follows the lookback", contractHistoryUpsert},
 	{"invites round trip", contractInvites},
 	{"magic links round trip", contractMagicLinks},
 	{"stripe events round trip", contractStripeEvents},
@@ -637,6 +639,46 @@ func contractEntitlements(t *testing.T, s store) {
 	ents, _ := s.ListEntitlements(ctx, a.ID)
 	if len(ents) != 1 || ents[0].Status != apiaccess.EntitlementEnded || ents[0].ValidUntil == nil || !ents[0].ValidUntil.Equal(at) {
 		t.Errorf("ended %+v", ents)
+	}
+}
+
+// contractHistoryEntitlement proves the memstore mirrors the history rule:
+// a history row stands alone, carries no store scope, and keeps its lookback.
+func contractHistoryEntitlement(t *testing.T, s store) {
+	a := mustAccount(t, s, "history@example.com")
+	e, err := s.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: apiaccess.SourceManual, Games: []string{"magic"}, Modes: []string{"history"}, LookbackDays: 365})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.StoreScope != "" || !slices.Equal(e.Modes, []string{"history"}) || e.LookbackDays != 365 {
+		t.Errorf("added %+v", e)
+	}
+	ents, err := s.ListEntitlements(ctx, a.ID)
+	if err != nil || len(ents) != 1 || ents[0].LookbackDays != 365 || ents[0].StoreScope != "" {
+		t.Errorf("list %+v %v", ents, err)
+	}
+	mixed := grant(a.ID, apiaccess.SourceManual, "CK", "retail", "history")
+	mixed.LookbackDays = 30
+	if _, err := s.AddEntitlement(ctx, mixed); err == nil {
+		t.Error("history beside retail was stored")
+	}
+}
+
+// contractHistoryUpsert proves an upsert's update branch rewrites the
+// lookback, as the SQL's DO UPDATE does.
+func contractHistoryUpsert(t *testing.T, s store) {
+	a := mustAccount(t, s, "history-upsert@example.com")
+	up, err := s.UpsertStripeEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: apiaccess.SourceStripe, Games: []string{"magic"}, Modes: []string{"history"}, LookbackDays: 30, ExternalRef: "sub_h"})
+	if err != nil || up.LookbackDays != 30 {
+		t.Fatalf("upsert %+v %v", up, err)
+	}
+	up.LookbackDays = 60
+	again, err := s.UpsertStripeEntitlement(ctx, up)
+	if err != nil || again.ID != up.ID || again.LookbackDays != 60 {
+		t.Fatalf("upsert update %+v %v", again, err)
+	}
+	if ents, err := s.ListEntitlements(ctx, a.ID); err != nil || len(ents) != 1 || ents[0].LookbackDays != 60 {
+		t.Errorf("rows %+v %v", ents, err)
 	}
 }
 

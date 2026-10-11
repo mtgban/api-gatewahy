@@ -19,8 +19,14 @@ const (
 	ScopeBase = "BASE_ACCESS"
 )
 
+// ModeHistory is the price-history mode; a row granting it grants nothing else.
+const ModeHistory = "history"
+
+// MaxLookbackDays caps a history lookback at ten years, the archive's depth.
+const MaxLookbackDays = 3650
+
 // ValidModes in canonical order.
-var ValidModes = []string{"retail", "buylist", "sealed"}
+var ValidModes = []string{"retail", "buylist", "sealed", ModeHistory}
 
 // EntitlementStatus says whether a row can still grant access.
 type EntitlementStatus string
@@ -43,19 +49,21 @@ const (
 
 // Entitlement is one grant of access. An account's access is the union of its active rows.
 type Entitlement struct {
-	ID          int64
-	AccountID   int64
-	Source      Source
-	Games       []string
-	StoreScope  string
-	Modes       []string
-	Addons      []string
-	Status      EntitlementStatus
-	ValidFrom   time.Time
-	ValidUntil  *time.Time
-	ExternalRef string
-	Note        string
-	CreatedAt   time.Time
+	ID         int64
+	AccountID  int64
+	Source     Source
+	Games      []string
+	StoreScope string
+	Modes      []string
+	Addons     []string
+	// LookbackDays is how far back a history row reads; 0 on every other row.
+	LookbackDays int
+	Status       EntitlementStatus
+	ValidFrom    time.Time
+	ValidUntil   *time.Time
+	ExternalRef  string
+	Note         string
+	CreatedAt    time.Time
 }
 
 // ActiveAt reports whether the row grants access at now.
@@ -64,6 +72,11 @@ func (e Entitlement) ActiveAt(now time.Time) bool {
 		return false
 	}
 	return e.ValidUntil == nil || now.Before(*e.ValidUntil)
+}
+
+// IsHistory reports whether the row grants the history mode.
+func (e Entitlement) IsHistory() bool {
+	return slices.Contains(e.Modes, ModeHistory)
 }
 
 // IsActiveStripePlan reports whether e's Stripe subscription is still live,
@@ -144,14 +157,14 @@ func ValidateModes(modes []string) ([]string, error) {
 	return out, nil
 }
 
-const entitlementCols = "id, account_id, source, games, store_scope, modes, addons, status, valid_from, valid_until, external_ref, note, created_at"
+const entitlementCols = "id, account_id, source, games, store_scope, modes, addons, status, valid_from, valid_until, external_ref, note, created_at, lookback_days"
 
 func scanEntitlement(row scanner) (Entitlement, error) {
 	var e Entitlement
 	var until sql.NullTime
 	var ext sql.NullString
 	err := row.Scan(&e.ID, &e.AccountID, &e.Source, pq.Array(&e.Games), &e.StoreScope, pq.Array(&e.Modes),
-		pq.Array(&e.Addons), &e.Status, &e.ValidFrom, &until, &ext, &e.Note, &e.CreatedAt)
+		pq.Array(&e.Addons), &e.Status, &e.ValidFrom, &until, &ext, &e.Note, &e.CreatedAt, &e.LookbackDays)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Entitlement{}, ErrNotFound
 	}
@@ -171,18 +184,49 @@ type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// prepareEntitlement canonicalizes and validates e and returns the nullable columns.
-func prepareEntitlement(e Entitlement) (Entitlement, sql.NullTime, sql.NullString, error) {
-	scope, err := canonicalStoreScope(e.StoreScope)
-	if err != nil {
-		return Entitlement{}, sql.NullTime{}, sql.NullString{}, err
-	}
-	e.StoreScope = scope
+// CanonicalEntitlement canonicalizes e's scope and modes and applies the
+// history rule: a history row stands alone, carries no store scope and a
+// lookback of one day to MaxLookbackDays; every other row keeps a scope and
+// no lookback.
+func CanonicalEntitlement(e Entitlement) (Entitlement, error) {
 	modes, err := ValidateModes(e.Modes)
 	if err != nil {
-		return Entitlement{}, sql.NullTime{}, sql.NullString{}, err
+		return Entitlement{}, err
 	}
 	e.Modes = modes
+	if e.IsHistory() {
+		if len(modes) != 1 {
+			return Entitlement{}, errors.New("history is a mode of its own, not one beside prices")
+		}
+		if strings.TrimSpace(e.StoreScope) != "" {
+			return Entitlement{}, errors.New("a history row takes no store scope")
+		}
+		if e.LookbackDays < 1 {
+			return Entitlement{}, errors.New("lookback_days must be at least 1 on a history row")
+		}
+		if e.LookbackDays > MaxLookbackDays {
+			return Entitlement{}, fmt.Errorf("lookback_days must be at most %d", MaxLookbackDays)
+		}
+		e.StoreScope = ""
+		return e, nil
+	}
+	if e.LookbackDays != 0 {
+		return Entitlement{}, errors.New("lookback_days applies to a history row only")
+	}
+	scope, err := canonicalStoreScope(e.StoreScope)
+	if err != nil {
+		return Entitlement{}, err
+	}
+	e.StoreScope = scope
+	return e, nil
+}
+
+// prepareEntitlement canonicalizes and validates e and returns the nullable columns.
+func prepareEntitlement(e Entitlement) (Entitlement, sql.NullTime, sql.NullString, error) {
+	e, err := CanonicalEntitlement(e)
+	if err != nil {
+		return Entitlement{}, sql.NullTime{}, sql.NullString{}, err
+	}
 	if e.Status == "" {
 		e.Status = EntitlementActive
 	}
@@ -217,10 +261,10 @@ func (c *Client) AddEntitlement(ctx context.Context, e Entitlement) (Entitlement
 // *sql.Tx, so CreateTrial can add it inside its own transaction.
 func insertEntitlement(ctx context.Context, q querier, e Entitlement, until sql.NullTime, ext sql.NullString) (Entitlement, error) {
 	return scanEntitlement(q.QueryRowContext(ctx,
-		`INSERT INTO entitlements (account_id, source, games, store_scope, modes, addons, status, valid_from, valid_until, external_ref, note)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING `+entitlementCols,
+		`INSERT INTO entitlements (account_id, source, games, store_scope, modes, addons, status, valid_from, valid_until, external_ref, note, lookback_days)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING `+entitlementCols,
 		e.AccountID, e.Source, pq.Array(e.Games), e.StoreScope, pq.Array(e.Modes), pq.Array(e.Addons),
-		e.Status, e.ValidFrom, until, ext, e.Note))
+		e.Status, e.ValidFrom, until, ext, e.Note, e.LookbackDays))
 }
 
 // UpsertStripeEntitlement inserts or updates the one row for e.ExternalRef.
@@ -234,15 +278,16 @@ func (c *Client) UpsertStripeEntitlement(ctx context.Context, e Entitlement) (En
 		return Entitlement{}, err
 	}
 	return scanEntitlement(c.db.QueryRowContext(ctx,
-		`INSERT INTO entitlements (account_id, source, games, store_scope, modes, addons, status, valid_from, valid_until, external_ref, note)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		`INSERT INTO entitlements (account_id, source, games, store_scope, modes, addons, status, valid_from, valid_until, external_ref, note, lookback_days)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		 ON CONFLICT (external_ref) WHERE external_ref IS NOT NULL DO UPDATE SET
 		   account_id = EXCLUDED.account_id, source = EXCLUDED.source, games = EXCLUDED.games,
 		   store_scope = EXCLUDED.store_scope, modes = EXCLUDED.modes, addons = EXCLUDED.addons,
-		   status = EXCLUDED.status, valid_until = EXCLUDED.valid_until, note = EXCLUDED.note
+		   status = EXCLUDED.status, valid_until = EXCLUDED.valid_until, note = EXCLUDED.note,
+		   lookback_days = EXCLUDED.lookback_days
 		 RETURNING `+entitlementCols,
 		e.AccountID, e.Source, pq.Array(e.Games), e.StoreScope, pq.Array(e.Modes), pq.Array(e.Addons),
-		e.Status, e.ValidFrom, until, ext, e.Note))
+		e.Status, e.ValidFrom, until, ext, e.Note, e.LookbackDays))
 }
 
 // StripeRef is one active stripe row: the account and its subscription id.
