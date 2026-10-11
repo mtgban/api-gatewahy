@@ -286,7 +286,8 @@ func grantAdd(ctx context.Context, d adminDeps, args []string, stdout, stderr io
 	email := fs.String("email", "", "account email")
 	games := fs.String("games", "", "comma-separated game names")
 	stores := fs.String("stores", "", "ALL_ACCESS, BASE_ACCESS, or comma-separated backend shorthands, typed exactly")
-	modes := fs.String("modes", "", "comma-separated subset of retail,buylist,sealed")
+	modes := fs.String("modes", "", "comma-separated subset of retail,buylist,sealed, or history alone")
+	lookback := fs.Int("lookback", 0, "history grants only: how many days back the key reads")
 	until := fs.String("until", "", "end date YYYY-MM-DD, exclusive")
 	note := fs.String("note", "", "free-text note")
 	if err := fs.Parse(args); err != nil {
@@ -296,11 +297,14 @@ func grantAdd(ctx context.Context, d adminDeps, args []string, stdout, stderr io
 	if !ok {
 		return exitFor(*email)
 	}
-	if !need(stderr, "games", *games) || !need(stderr, "stores", *stores) || !need(stderr, "modes", *modes) {
+	if !need(stderr, "games", *games) || !need(stderr, "modes", *modes) {
+		return 2
+	}
+	if !strings.EqualFold(strings.TrimSpace(*modes), apiaccess.ModeHistory) && !need(stderr, "stores", *stores) {
 		return 2
 	}
 	in := apiaccess.ManualGrantInput{AccountID: a.ID, Games: apiaccess.SplitList(*games), Stores: *stores,
-		Modes: strings.Split(*modes, ","), Until: *until, Note: *note}
+		Modes: strings.Split(*modes, ","), Lookback: *lookback, Until: *until, Note: *note}
 	e, err := apiaccess.ManualGrant(in, d.games, time.Now())
 	if err != nil {
 		return fail(stderr, err)
@@ -310,8 +314,12 @@ func grantAdd(ctx context.Context, d adminDeps, args []string, stdout, stderr io
 		return fail(stderr, err)
 	}
 	recordChange(ctx, d.store, stderr, "grant", a.ID, "entitlement "+strconv.FormatInt(e.ID, 10), apiaccess.GrantDetail(e))
-	fmt.Fprintf(stdout, "entitlement %d added for %s: games %s, stores %s, modes %s\n", e.ID, a.Email,
+	fmt.Fprintf(stdout, "entitlement %d added for %s: games %s, stores %s, modes %s", e.ID, a.Email,
 		strings.Join(e.Games, ","), e.StoreScope, strings.Join(e.Modes, ","))
+	if e.LookbackDays > 0 {
+		fmt.Fprintf(stdout, ", lookback %dd", e.LookbackDays)
+	}
+	fmt.Fprintln(stdout)
 	return 0
 }
 
@@ -349,10 +357,14 @@ func grantList(ctx context.Context, d adminDeps, args []string, stdout, stderr i
 		return fail(stderr, err)
 	}
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tSOURCE\tSTATUS\tGAMES\tSTORES\tMODES\tFROM\tUNTIL\tNOTE")
+	fmt.Fprintln(tw, "ID\tSOURCE\tSTATUS\tGAMES\tSTORES\tMODES\tLOOKBACK\tFROM\tUNTIL\tNOTE")
 	for _, e := range ents {
-		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", e.ID, e.Source, e.Status, strings.Join(e.Games, ","),
-			e.StoreScope, strings.Join(e.Modes, ","), e.ValidFrom.Format("2006-01-02"), fmtTime(e.ValidUntil), e.Note)
+		lookback := ""
+		if e.LookbackDays > 0 {
+			lookback = strconv.Itoa(e.LookbackDays) + "d"
+		}
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", e.ID, e.Source, e.Status, strings.Join(e.Games, ","),
+			e.StoreScope, strings.Join(e.Modes, ","), lookback, e.ValidFrom.Format("2006-01-02"), fmtTime(e.ValidUntil), e.Note)
 	}
 	return flushTab(tw)
 }
