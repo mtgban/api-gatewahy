@@ -313,6 +313,7 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 			CancelPath:        cfg.Stripe.CancelPath,
 			AdminEmails:       cfg.AdminEmails,
 			TrialDays:         cfg.TrialDays,
+			HistoryOnSale:     cfg.HistoryOnSale,
 			GameSecrets:       gameSecrets(cfg),
 			LoginLinksPerHour: cfg.LoginLinksPerHour,
 			ClientIPHeader:    cfg.ClientIPHeader,

@@ -201,3 +201,14 @@ func TestValidateRejectsStripeFields(t *testing.T) {
 		}
 	}
 }
+
+func TestParseHistoryOnSale(t *testing.T) {
+	c, err := Parse(strings.NewReader(goodJSON))
+	if err != nil || c.HistoryOnSale {
+		t.Errorf("default: %v %v, want off", c.HistoryOnSale, err)
+	}
+	c, err = Parse(strings.NewReader(strings.Replace(goodJSON, `{`, `{"history_on_sale": true,`, 1)))
+	if err != nil || !c.HistoryOnSale {
+		t.Errorf("set: %v %v, want on", c != nil && c.HistoryOnSale, err)
+	}
+}

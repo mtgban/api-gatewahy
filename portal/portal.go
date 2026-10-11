@@ -83,6 +83,8 @@ type Server struct {
 	CancelPath   string
 	AdminEmails  []string
 	TrialDays    int
+	// HistoryOnSale lets checkout sell the history package.
+	HistoryOnSale bool
 	// GameSecrets are the per-game secrets the gateway calls the sites with; a
 	// handoff token is verified with the secret of the game that minted it.
 	GameSecrets       map[string][]byte

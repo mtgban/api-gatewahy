@@ -238,6 +238,9 @@ func (s *Server) changePlan(w http.ResponseWriter, r *http.Request, sess session
 		s.fail(w, r, http.StatusServiceUnavailable, billingOffMsg)
 		return
 	}
+	if s.refuseHistoryOffSale(w, r, planFromValues(r.PostForm)) {
+		return
+	}
 	plan, err := planFromValues(r.PostForm).Validate(s.Catalog, s.Games, true)
 	if err != nil {
 		s.fail(w, r, http.StatusBadRequest, checkoutError(err))

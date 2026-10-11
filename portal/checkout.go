@@ -18,6 +18,7 @@ const billingOffMsg = "Billing is not available right now. Try again later or co
 const alreadyHasPlanMsg = "You already have a plan. Use Change plan on your account page to switch."
 const manySubscriptionsMsg = "Your account has more than one subscription. Contact administrator@mtgban.com and we will sort it out."
 const storesUnavailableMsg = "The store list could not be loaded. Try again in a minute."
+const historyOffSaleMsg = "That plan is not for sale yet."
 const noSubscriptionMsg = "You have no active subscription to change. Start a new plan from the pricing page instead."
 
 // confirmData is confirm.html's payload: the plan in words and the POST fields.
@@ -34,6 +35,8 @@ type confirmData struct {
 	Fields     url.Values
 	BillingOff bool
 	HasPlan    bool
+	// Switch says what a change between a price plan and history stops.
+	Switch string
 }
 
 type successData struct {
@@ -61,6 +64,9 @@ func (s *Server) checkoutGet(w http.ResponseWriter, r *http.Request) {
 	invite := q.Get("invite")
 	change := q.Get("change") == "1"
 	plan := planFromValues(q)
+	if s.refuseHistoryOffSale(w, r, plan) {
+		return
+	}
 	if pkg, ok := s.Catalog.Package(plan.Package); ok && pkg.StoreScope != apiproductlist.StoreScopeExplicit {
 		plan.Stores = nil
 	}
@@ -109,16 +115,17 @@ func (s *Server) checkoutGet(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var currentPackage string
 	if change {
 		var status int
 		var msg string
-		resolved.Plan, status, msg = s.currentIntervalFor(r, sess, plan)
+		resolved.Plan, currentPackage, status, msg = s.currentIntervalFor(r, sess, plan)
 		if msg != "" {
 			s.fail(w, r, status, msg)
 			return
 		}
 	}
-	s.renderConfirm(w, r, sess, confirmOptions{Status: http.StatusOK, Resolved: resolved, Invite: invite, ReturnTo: returnTo, Change: change, HasPlan: hasPlan})
+	s.renderConfirm(w, r, sess, confirmOptions{Status: http.StatusOK, Resolved: resolved, Invite: invite, ReturnTo: returnTo, Change: change, HasPlan: hasPlan, CurrentPackage: currentPackage})
 }
 
 // hasActiveStripePlan reports whether the account holds a live Stripe plan, past_due included.
@@ -149,33 +156,34 @@ func (s *Server) subscriptionFor(ctx context.Context, accountID int64, email str
 }
 
 // currentIntervalFor pins a plan change to the subscription's own interval,
-// returning the status and message to show on failure.
-func (s *Server) currentIntervalFor(r *http.Request, sess session.Session, plan billing.Plan) (billing.Plan, int, string) {
+// returning the current plan's package, and the status and message to show
+// on failure.
+func (s *Server) currentIntervalFor(r *http.Request, sess session.Session, plan billing.Plan) (billing.Plan, string, int, string) {
 	if s.Stripe == nil {
-		return plan, http.StatusServiceUnavailable, billingOffMsg
+		return plan, "", http.StatusServiceUnavailable, billingOffMsg
 	}
 	subID, status, msg := s.subscriptionFor(r.Context(), sess.AccountID, sess.Email)
 	if msg != "" {
-		return plan, status, msg
+		return plan, "", status, msg
 	}
 	sub, err := s.Stripe.GetSubscription(r.Context(), subID)
 	if err != nil {
 		s.logf("current interval %s: stripe: %v", sess.Email, err)
-		return plan, http.StatusBadGateway, tryAgainMsg
+		return plan, "", http.StatusBadGateway, tryAgainMsg
 	}
 	current, _, err := billing.PlanFromMetadata(sub.Metadata)
 	if err != nil {
 		// Metadata we wrote ourselves at checkout being unreadable is our bug, not Stripe's.
 		s.logf("current interval %s: metadata: %v", sess.Email, err)
-		return plan, http.StatusInternalServerError, tryAgainMsg
+		return plan, "", http.StatusInternalServerError, tryAgainMsg
 	}
 	plan.Interval = current.Interval
 	// The interval was authorized when the subscription began, so an invite is not needed again.
 	plan, err = plan.Validate(s.Catalog, s.Games, true)
 	if err != nil {
-		return plan, http.StatusBadRequest, checkoutError(err)
+		return plan, current.Package, http.StatusBadRequest, checkoutError(err)
 	}
-	return plan, 0, ""
+	return plan, current.Package, 0, ""
 }
 
 // confirmOptions is renderConfirm's payload, beside the request and session.
@@ -187,6 +195,8 @@ type confirmOptions struct {
 	Change   bool
 	ErrMsg   string
 	HasPlan  bool
+	// CurrentPackage is the subscription's package before the change, when known.
+	CurrentPackage string
 }
 
 // renderConfirm draws the plan in words with the POST button.
@@ -214,6 +224,15 @@ func (s *Server) renderConfirm(w http.ResponseWriter, r *http.Request, sess sess
 	}
 	if opt.Change {
 		d.Action = "/account/plan"
+	}
+	if opt.Change && opt.CurrentPackage != "" {
+		cur, _ := s.Catalog.Package(opt.CurrentPackage)
+		switch {
+		case pkg.IsHistory() && !cur.IsHistory():
+			d.Switch = "History replaces your price plan: retail, buylist and sealed stop at the change."
+		case !pkg.IsHistory() && cur.IsHistory():
+			d.Switch = "Your price plan replaces history, which stops at the change."
+		}
 	}
 	d.Fields = planValues(plan)
 	d.Fields.Set("return_to", opt.ReturnTo)
@@ -250,6 +269,9 @@ func (s *Server) checkoutPost(w http.ResponseWriter, r *http.Request, sess sessi
 	}
 	invite := r.FormValue("invite")
 	returnTo := validReturnTo(r.FormValue("return_to"), s.PricingURL)
+	if s.refuseHistoryOffSale(w, r, planFromValues(r.PostForm)) {
+		return
+	}
 	plan, err := planFromValues(r.PostForm).Validate(s.Catalog, s.Games, invite != "")
 	var resolved billing.ResolvedPlan
 	if err == nil {
@@ -280,6 +302,16 @@ func (s *Server) checkoutPost(w http.ResponseWriter, r *http.Request, sess sessi
 	}
 	s.Sessions.SetPending(w, pending, pendingTTL)
 	http.Redirect(w, r, cs.URL, http.StatusSeeOther)
+}
+
+// refuseHistoryOffSale answers a history plan with 404 while history is off sale.
+func (s *Server) refuseHistoryOffSale(w http.ResponseWriter, r *http.Request, plan billing.Plan) bool {
+	if pkg, ok := s.Catalog.Package(plan.Package); !ok || !pkg.IsHistory() || s.HistoryOnSale {
+		return false
+	}
+	s.Sessions.ClearPending(w)
+	s.fail(w, r, http.StatusNotFound, historyOffSaleMsg)
+	return true
 }
 
 // checkoutError turns billing errors into sentences for the page.

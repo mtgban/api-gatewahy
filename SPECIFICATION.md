@@ -323,6 +323,11 @@ and `extra_game`; intervals `monthly` (public) and `quarterly` (invite
 only). Amounts are monthly cents; an interval's amount is monthly × months.
 Stripe lookup keys are `<item>_<interval>`.
 
+The portal sells `history` only with `history_on_sale` on (off by
+default): with it off, checkout and plan change answer a history plan
+404 "That plan is not for sale yet." before validating it. Admin grants
+are unaffected.
+
 `Plan{Package, Interval, Games, Stores}`:
 - `Normalize` → `Validate` (games configured; non-public interval needs an
   invite) → `Resolve` (store families → `ResolvedPlan{Scope, Modes, …}`).

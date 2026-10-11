@@ -76,6 +76,8 @@ type Config struct {
 	Mail                        MailConfig   `json:"mail"`
 	TrialDays                   int          `json:"trial_days"`
 	LoginLinksPerHour           int          `json:"login_links_per_hour"`
+	// HistoryOnSale lets the portal sell the history package; off until the maintainers release it.
+	HistoryOnSale bool `json:"history_on_sale"`
 }
 
 // DefaultClientIPHeader is the header DigitalOcean App Platform's ingress
