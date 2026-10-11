@@ -59,21 +59,20 @@ func (s *Server) describeEntitlement(sites *siteLookup, e apiaccess.Entitlement)
 		v.Source = "Arranged with MTGBAN"
 	}
 	scope := e.StoreScope
-	switch scope {
-	case apiaccess.ScopeAll:
+	switch {
+	case e.IsHistory():
+		v.Stores = "history, " + itoa(int64(e.LookbackDays)) + " days"
+	case scope == apiaccess.ScopeAll:
 		v.Stores = "every store"
-	case apiaccess.ScopeBase:
+	case scope == apiaccess.ScopeBase:
 		v.Stores = "every EU and US store"
 	default:
 		implied, selectable, _ := sites.families(e.Games)
 		v.Stores = storeNames(append(implied, selectable...), strings.Split(scope, ","))
 		scope = apiproductlist.StoreScopeExplicit
 	}
-	for _, p := range s.Catalog.Packages {
-		if p.StoreScope == scope {
-			v.Package = p.Name
-			break
-		}
+	if p, ok := s.packageFor(e, scope); ok {
+		v.Package = p.Name
 	}
 	if e.ValidUntil != nil {
 		v.Until = e.ValidUntil.Format("January 2, 2006")
@@ -86,7 +85,7 @@ func (s *Server) describeEntitlement(sites *siteLookup, e apiaccess.Entitlement)
 func (s *Server) prefillQuery(sites *siteLookup, e apiaccess.Entitlement) url.Values {
 	q := url.Values{"change": {"1"}, "games": {strings.Join(e.Games, ",")}}
 	scope := e.StoreScope
-	if scope != apiaccess.ScopeAll && scope != apiaccess.ScopeBase {
+	if !e.IsHistory() && scope != apiaccess.ScopeAll && scope != apiaccess.ScopeBase {
 		have := strings.Split(scope, ",")
 		// A shorthand no current family owns is dropped.
 		var keys []string
@@ -103,13 +102,24 @@ func (s *Server) prefillQuery(sites *siteLookup, e apiaccess.Entitlement) url.Va
 		}
 		scope = apiproductlist.StoreScopeExplicit
 	}
-	for _, p := range s.Catalog.Packages {
-		if p.StoreScope == scope {
-			q.Set("package", p.Key)
-			break
-		}
+	if p, ok := s.packageFor(e, scope); ok {
+		q.Set("package", p.Key)
 	}
 	return q
+}
+
+// packageFor finds the catalog package e was sold as: the history package for
+// a history row, else the price package whose store scope is scope.
+func (s *Server) packageFor(e apiaccess.Entitlement, scope string) (apiproductlist.Package, bool) {
+	for _, p := range s.Catalog.Packages {
+		if p.IsHistory() != e.IsHistory() {
+			continue
+		}
+		if p.IsHistory() || p.StoreScope == scope {
+			return p, true
+		}
+	}
+	return apiproductlist.Package{}, false
 }
 
 // siteLookup reads each game's store list at most once for one page render.

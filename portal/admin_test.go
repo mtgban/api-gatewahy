@@ -3,6 +3,8 @@ package portal
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -277,6 +279,47 @@ func TestAdminGrantRejectsUnknownGame(t *testing.T) {
 	}
 	if ents, _ := ts.store.ListEntitlements(ctx, cust.ID); len(ents) != 0 {
 		t.Error("entitlement with an unknown game was still added")
+	}
+}
+
+func TestAdminGrantHistory(t *testing.T) {
+	ts := newTestServer(t)
+	ctx := context.Background()
+	_, ck, csrf := ts.signIn(t, "admin@example.com")
+	cust, _ := ts.store.GetOrCreateAccount(ctx, "cust8@example.com", "")
+	id := itoa(cust.ID)
+
+	form := url.Values{"csrf": {csrf}, "games": {"magic"}, "modes": {"history"}, "lookback": {"365"}}
+	rec := ts.do("POST", "/admin/accounts/"+id+"/entitlements", form.Encode(), ck)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	ents, _ := ts.store.ListEntitlements(ctx, cust.ID)
+	if len(ents) != 1 || !ents[0].IsHistory() || ents[0].LookbackDays != 365 || ents[0].StoreScope != "" {
+		t.Errorf("ents %+v", ents)
+	}
+
+	form.Set("stores", "CK")
+	rec = ts.do("POST", "/admin/accounts/"+id+"/entitlements", form.Encode(), ck)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "history takes no stores") {
+		t.Errorf("history with stores: %d %s", rec.Code, rec.Body.String())
+	}
+
+	form.Del("stores")
+	form.Set("modes", "retail")
+	rec = ts.do("POST", "/admin/accounts/"+id+"/entitlements", form.Encode(), ck)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "lookback applies to a history grant only") {
+		t.Errorf("retail with lookback: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// The form no longer marks stores required, so the rule refuses it.
+	form.Del("lookback")
+	rec = ts.do("POST", "/admin/accounts/"+id+"/entitlements", form.Encode(), ck)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "store scope is empty") {
+		t.Errorf("retail without stores: %d %s", rec.Code, rec.Body.String())
+	}
+	if ents, _ := ts.store.ListEntitlements(ctx, cust.ID); len(ents) != 1 {
+		t.Errorf("a refused grant was stored: %+v", ents)
 	}
 }
 

@@ -256,8 +256,17 @@ func (s *Server) adminAddEntitlement(w http.ResponseWriter, r *http.Request, ses
 		return
 	}
 	bad := func(msg string) { s.renderAdminAccount(w, r, sess, a, http.StatusBadRequest, "", msg, "") }
+	var lookback int
+	if raw := strings.TrimSpace(r.FormValue("lookback")); raw != "" {
+		var err error
+		lookback, err = strconv.Atoi(raw)
+		if err != nil {
+			bad("Lookback must be a number of days.")
+			return
+		}
+	}
 	in := apiaccess.ManualGrantInput{AccountID: a.ID, Games: listValues(r.PostForm, "games"), Stores: r.FormValue("stores"),
-		Modes: listValues(r.PostForm, "modes"), Until: r.FormValue("until"), Note: strings.TrimSpace(r.FormValue("note"))}
+		Modes: listValues(r.PostForm, "modes"), Lookback: lookback, Until: r.FormValue("until"), Note: strings.TrimSpace(r.FormValue("note"))}
 	e, err := apiaccess.ManualGrant(in, s.Games, s.now())
 	if err != nil {
 		var ge *apiaccess.GrantError
@@ -276,6 +285,8 @@ func (s *Server) adminAddEntitlement(w http.ResponseWriter, r *http.Request, ses
 			bad("Stores: " + ge.Msg)
 		case "modes":
 			bad("Modes: " + ge.Msg)
+		case "lookback":
+			bad("Lookback: " + ge.Msg)
 		case "until":
 			if ge.Msg == "until must be in the future" {
 				bad("Until must be in the future.")
