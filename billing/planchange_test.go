@@ -263,3 +263,39 @@ func TestChangePlanReportsPendingAccess(t *testing.T) {
 		t.Errorf("update failure: %v", err)
 	}
 }
+
+// TestChangePlanCarriesTheModeAddon starts the new plan from the metadata,
+// as plan change does: the add-on's item stays, and dropping the add-on
+// deletes its item and clears the metadata key.
+func TestChangePlanCarriesTheModeAddon(t *testing.T) {
+	f := seededFake(t)
+	ctx := context.Background()
+	current, _ := billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}, ModeAddons: []string{"newspaper"}}.Normalize(testCatalog)
+	f.AddSub(t, "sub_1", "cus_7", stripe.SubscriptionStatusActive, current.Metadata(testAccount.ID), periodEnd,
+		billingtest.Item{Key: "all_stores_monthly", Qty: 1}, billingtest.Item{Key: "newspaper_monthly", Qty: 1})
+	next, _, err := billing.PlanFromMetadata(f.Subs["sub_1"].Metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next.Package = "all_data"
+	rc := &recorder{}
+	got, err := billing.ChangePlan(ctx, f, testCatalog, billingtest.NewFakeStores(), testGames, testAccount, "sub_1", next, rc.reconcile)
+	if err != nil || !slices.Equal(got.ModeAddons, []string{"newspaper"}) || !slices.Equal(got.Modes, []string{"retail", "buylist", "sealed", "newspaper"}) {
+		t.Fatalf("change %+v %v", got, err)
+	}
+	up := f.Updates["sub_1"][0]
+	want := []itemChange{{id: "si_sub_1_0", deleted: true}, {price: f.PriceByKey("all_data_monthly").ID, qty: 1}}
+	if !slices.Equal(changes(up), want) || up.Metadata["addons"] != "newspaper" {
+		t.Errorf("items %+v want %+v, metadata %v", changes(up), want, up.Metadata)
+	}
+
+	next.ModeAddons = nil
+	if _, err := billing.ChangePlan(ctx, f, testCatalog, billingtest.NewFakeStores(), testGames, testAccount, "sub_1", next, rc.reconcile); err != nil {
+		t.Fatal(err)
+	}
+	up = f.Updates["sub_1"][1]
+	want = []itemChange{{id: "si_sub_1_1", deleted: true}}
+	if !slices.Equal(changes(up), want) || up.Metadata["addons"] != "" {
+		t.Errorf("drop: items %+v want %+v, metadata %v", changes(up), want, up.Metadata)
+	}
+}

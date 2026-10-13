@@ -517,3 +517,26 @@ func TestCheckoutExpiresTheCustomersOtherSessions(t *testing.T) {
 		t.Errorf("sessions %d", len(f.Sessions))
 	}
 }
+
+// A mode add-on is one more line item and rides the subscription metadata.
+func TestCheckoutBillsTheModeAddon(t *testing.T) {
+	f := seededFake(t)
+	co := newTestCheckout(f, newStore(t))
+	plan := billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}, ModeAddons: []string{"newspaper"}}
+	if _, err := co.Create(context.Background(), billing.Request{Account: testAccount, Plan: plan}); err != nil {
+		t.Fatal(err)
+	}
+	p := f.Sessions[0]
+	want := map[string]int64{f.PriceByKey("all_data_monthly").ID: 1, f.PriceByKey("newspaper_monthly").ID: 1}
+	if len(p.LineItems) != 2 {
+		t.Fatalf("line items %d", len(p.LineItems))
+	}
+	for _, li := range p.LineItems {
+		if want[stripe.StringValue(li.Price)] != stripe.Int64Value(li.Quantity) {
+			t.Errorf("line item %s x%d", stripe.StringValue(li.Price), stripe.Int64Value(li.Quantity))
+		}
+	}
+	if md := p.SubscriptionData.Metadata; md["addons"] != "newspaper" {
+		t.Errorf("metadata %v", md)
+	}
+}

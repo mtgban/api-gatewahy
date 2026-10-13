@@ -297,3 +297,21 @@ func siteStoresEqual(a, b billing.SiteStores) bool {
 		slices.EqualFunc(a.Implied, b.Implied, storeFamilyEqual) &&
 		slices.EqualFunc(a.Stores, b.Stores, storeFamilyEqual)
 }
+
+// Resolve grants each mode add-on's mode beside the package's, in canonical order.
+func TestResolveGrantsModeAddons(t *testing.T) {
+	ctx := context.Background()
+	p, _ := billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}, ModeAddons: []string{"newspaper"}}.Normalize(testCatalog)
+	r, err := p.Resolve(ctx, testCatalog, billingtest.NewFakeStores())
+	if err != nil || r.Scope != "ALL_ACCESS" || !slices.Equal(r.Modes, []string{"retail", "buylist", "sealed", "newspaper"}) {
+		t.Errorf("all_data %+v %v", r, err)
+	}
+	p, _ = billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}, ModeAddons: []string{"newspaper"}}.Normalize(testCatalog)
+	r, err = p.Resolve(ctx, testCatalog, billingtest.NewFakeStores())
+	if err != nil || r.Scope == "" || !slices.Equal(r.Modes, []string{"retail", "buylist", "newspaper"}) {
+		t.Errorf("starter %+v %v", r, err)
+	}
+	if pkg, _ := testCatalog.Package("starter"); !slices.Equal(pkg.Modes, []string{"retail", "buylist"}) {
+		t.Errorf("Resolve wrote into the catalog: %v", pkg.Modes)
+	}
+}

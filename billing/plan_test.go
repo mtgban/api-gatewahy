@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mtgban/api-gatewahy/apiaccess"
 	"github.com/mtgban/api-gatewahy/billing"
 	"github.com/mtgban/mtgban-website/apiproductlist"
 )
@@ -117,7 +118,7 @@ func TestLineItemsAndTotal(t *testing.T) {
 func TestMetadataRoundTrip(t *testing.T) {
 	p, _ := billing.Plan{Package: "starter", Interval: "quarterly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom", "starcitygames"}}.Normalize(testCatalog)
 	m := p.Metadata(42)
-	want := map[string]string{"package": "starter", "interval": "quarterly", "games": "magic,pokemon", "stores": "cardkingdom,starcitygames", "account_id": "42"}
+	want := map[string]string{"package": "starter", "interval": "quarterly", "games": "magic,pokemon", "stores": "cardkingdom,starcitygames", "addons": "", "account_id": "42"}
 	if !maps.Equal(m, want) {
 		t.Errorf("metadata %v", m)
 	}
@@ -187,5 +188,126 @@ func TestDescribeAndDollars(t *testing.T) {
 
 func planEqual(a, b billing.Plan) bool {
 	return a.Package == b.Package && a.Interval == b.Interval &&
-		slices.Equal(a.Games, b.Games) && slices.Equal(a.Stores, b.Stores)
+		slices.Equal(a.Games, b.Games) && slices.Equal(a.Stores, b.Stores) && slices.Equal(a.ModeAddons, b.ModeAddons)
+}
+
+// newspaperMonthly is the newspaper add-on's monthly price in the catalog.
+func newspaperMonthly(t *testing.T) int64 {
+	t.Helper()
+	addon, ok := testCatalog.Addon("newspaper")
+	if !ok || addon.GrantsMode != "newspaper" {
+		t.Fatalf("catalog newspaper add-on %+v %v", addon, ok)
+	}
+	return addon.Monthly
+}
+
+// A mode add-on is bought once on any price package; Normalize lowercases,
+// sorts and dedupes the keys and refuses one the plan cannot carry.
+func TestNormalizeModeAddons(t *testing.T) {
+	for _, pkg := range []string{"starter", "all_stores", "all_data"} {
+		plan := billing.Plan{Package: pkg, Interval: "monthly", Games: []string{"magic"}, ModeAddons: []string{"Newspaper", " newspaper"}}
+		if pkg == "starter" {
+			plan.Stores = []string{"cardkingdom"}
+		}
+		p, err := plan.Normalize(testCatalog)
+		if err != nil || !slices.Equal(p.ModeAddons, []string{"newspaper"}) {
+			t.Errorf("%s: %+v %v", pkg, p, err)
+		}
+	}
+	none, err := billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
+	if err != nil || none.ModeAddons != nil {
+		t.Errorf("no add-ons: %+v %v", none, err)
+	}
+	cases := []struct {
+		name string
+		plan billing.Plan
+		want string
+	}{
+		{"unknown key", billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}, ModeAddons: []string{"gold"}}, `unknown add-on "gold"`},
+		{"counted key", billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}, ModeAddons: []string{"extra_game"}}, "add-on extra_game cannot be picked on its own"},
+		{"not on history", billing.Plan{Package: "history", Interval: "monthly", Games: []string{"magic"}, ModeAddons: []string{"newspaper"}}, "package history cannot add newspaper"},
+	}
+	for _, c := range cases {
+		_, err := c.plan.Normalize(testCatalog)
+		if !billing.IsValidation(err) || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want a validation error containing %q", c.name, err, c.want)
+		}
+	}
+}
+
+// The catalog's modes are the gateway's, in the same order, so a re-pin
+// that adds a mode fails here before a mode add-on can sell it.
+func TestCatalogModesMatchGateway(t *testing.T) {
+	if !slices.Equal(apiaccess.ValidModes, apiproductlist.Modes) {
+		t.Errorf("apiaccess.ValidModes %v, apiproductlist.Modes %v", apiaccess.ValidModes, apiproductlist.Modes)
+	}
+}
+
+// A mode add-on granting a mode the gateway lacks would bill and grant
+// nothing, so Normalize refuses it.
+func TestNormalizeRefusesUnservedMode(t *testing.T) {
+	cat := apiproductlist.MustLoad()
+	cat.Addons = append(cat.Addons, apiproductlist.Addon{Key: "gold", Name: "Gold", Monthly: 100, AppliesTo: []string{"all_data"}, GrantsMode: "gold"})
+	_, err := billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}, ModeAddons: []string{"gold"}}.Normalize(cat)
+	if !billing.IsValidation(err) || !strings.Contains(err.Error(), "add-on gold grants mode gold") {
+		t.Errorf("got %v, want a validation error naming gold", err)
+	}
+}
+
+// A mode add-on bills once, after the counted add-ons, at the plan's interval.
+func TestLineItemsWithModeAddon(t *testing.T) {
+	news := newspaperMonthly(t)
+	p, err := billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}, ModeAddons: []string{"newspaper"}}.Normalize(testCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []billing.LineItem{{"all_data", "all_data_monthly", 1, 80000}, {"newspaper", "newspaper_monthly", 1, news}}
+	if got := p.LineItems(testCatalog); !slices.Equal(got, want) {
+		t.Errorf("items %+v want %+v", got, want)
+	}
+	if got, err := p.Total(testCatalog); err != nil || got != 80000+news {
+		t.Errorf("total %d %v", got, err)
+	}
+	p, err = billing.Plan{Package: "starter", Interval: "quarterly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom", "starcitygames"}, ModeAddons: []string{"newspaper"}}.Normalize(testCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []billing.LineItem{{"starter", "starter_quarterly", 1, 20000}, {"extra_store", "extra_store_quarterly", 1, 15000}, {"extra_game", "extra_game_quarterly", 1, 15000}, {"newspaper", "newspaper_quarterly", 1, news}}
+	if got := p.LineItems(testCatalog); !slices.Equal(got, want) {
+		t.Errorf("starter items %+v want %+v", got, want)
+	}
+	if got, err := p.Total(testCatalog); err != nil || got != (50000+news)*3 {
+		t.Errorf("starter total %d %v", got, err)
+	}
+	if got := p.Addons(testCatalog); !slices.Equal(got, []string{"extra_store:1", "extra_game:1", "newspaper:1"}) {
+		t.Errorf("addons %v", got)
+	}
+}
+
+// Metadata carries the mode add-ons, and metadata written before them reads as none.
+func TestMetadataRoundTripModeAddons(t *testing.T) {
+	p, _ := billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}, ModeAddons: []string{"newspaper"}}.Normalize(testCatalog)
+	m := p.Metadata(7)
+	if m["addons"] != "newspaper" {
+		t.Errorf("metadata %v", m)
+	}
+	back, accountID, err := billing.PlanFromMetadata(m)
+	if err != nil || accountID != 7 || !planEqual(back, p) {
+		t.Errorf("round trip %+v %d %v", back, accountID, err)
+	}
+	old := map[string]string{"package": "all_data", "interval": "monthly", "games": "magic", "stores": "", "account_id": "7"}
+	if back, _, err := billing.PlanFromMetadata(old); err != nil || back.ModeAddons != nil {
+		t.Errorf("metadata without addons: %+v %v", back, err)
+	}
+}
+
+func TestDescribeNamesTheModeAddon(t *testing.T) {
+	p, _ := billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}, ModeAddons: []string{"newspaper"}}.Normalize(testCatalog)
+	if got := p.Describe(testCatalog); !strings.Contains(got, ", with newspaper reports, monthly") {
+		t.Errorf("describe %q", got)
+	}
+	p.ModeAddons = nil
+	if got := p.Describe(testCatalog); strings.Contains(got, "newspaper") {
+		t.Errorf("describe without the add-on %q", got)
+	}
 }
