@@ -222,6 +222,7 @@ func (c *SiteStoreClient) fetch(ctx context.Context, game string) (SiteStores, e
 type ResolvedPlan struct {
 	Plan
 	Scope string
+	// Modes are the package's modes and each mode add-on's, in apiaccess.ValidModes order.
 	Modes []string
 	// Implied are the implied family names; Names maps each picked key to its name.
 	Implied []string
@@ -245,7 +246,7 @@ func (p Plan) Resolve(ctx context.Context, cat *apiproductlist.ProductList, list
 	if !ok {
 		return ResolvedPlan{}, invalid("unknown package %q", p.Package)
 	}
-	r := ResolvedPlan{Plan: p, Scope: pkg.StoreScope, Modes: pkg.Modes}
+	r := ResolvedPlan{Plan: p, Scope: pkg.StoreScope, Modes: planModes(cat, pkg, p.ModeAddons)}
 	if pkg.StoreScope != apiproductlist.StoreScopeExplicit {
 		return r, nil
 	}
