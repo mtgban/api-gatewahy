@@ -269,7 +269,7 @@ flip or a new row does.
 | `route.go` | `ParseRoute`: only `/v1/{game}/{sub}` (to `/api/mtgban/{sub}`) and `/v2/{game}/{sub}` (to `/api/v2/{sub}`); kinds search, meta (sets/stores, and finishes in v2), retail/buylist/all/sealed, history (v2 only); `Rest` is the backend path under `/api/` (`mtgban/...` or `v2/...`); rejects `..`; `NeedsModes` |
 | `access.go` | `Resolve(ents, game, now) (Access, bool)`: union of active rows naming the game; ALL > BASE > explicit union; `LookbackDays` is the max over history rows; empty scopes contribute nothing |
 | `resolver.go` | `Resolver`: key hash → `apiaccess.Lookup` cache with TTL, negative caching, stale-on-error, 10,000-entry bound plus 1,000 for unknown keys |
-| `handler.go` | `Handler.ServeHTTP`, one `httputil.ReverseProxy` + `http.Transport` per game, `ClientIP`, `statusWriter`, history limiter; history routes pass the backend's 4xx and 503 through; `mintSig` adds `APIlookback` for a positive lookback |
+| `handler.go` | `Handler.ServeHTTP`, one `httputil.ReverseProxy` + `http.Transport` per game, `ClientIP`, `statusWriter`, history limiter; history routes pass the backend's 400, 404 and 503 through, never 401 or 403, and leave with a `private` Cache-Control (`privateCacheControl`); `mintSig` adds `APIlookback` for a positive lookback |
 | `meter.go` | `UsageMeter`: non-blocking `Record`, batched COPY every 5 s or 200 rows, 3 attempts, then drop and count |
 | `probe.go` | `Prober`: hourly signature health check per game |
 | `errors.go` | `writeError` JSON `{"error", "game"}` |
@@ -299,11 +299,18 @@ flip or a new row does.
 9. Proxy with `upstream_timeout_seconds` covering the whole exchange.
    `Rewrite` sets the backend path, replaces `sig`, drops `key`, strips
    Cookie/Authorization/forwarding headers, sets `X-Forwarded-For` to the
-   resolved IP. `ModifyResponse` passes 2xx, 304 and 429, and on history
-   routes the backend's 4xx and 503 too; every other status is an error;
-   a 200 JSON body's first 300 bytes are sniffed for the
-   backend's `"error": "invalid…` signature refusal (the backend answers a
-   bad signature with 200; see README "Backend contract").
+   resolved IP. `ModifyResponse` first makes a history answer's
+   `Cache-Control` `private` (`privateCacheControl` drops `public` and
+   `s-maxage`, keeping `max-age`, `no-store` and the validators), since
+   the body is one key's read while keys ride in `Authorization`, which a
+   shared cache may disregard; it then passes 2xx, 304 and 429, and on
+   history routes the backend's 400, 404 and 503 too, but never 401 or
+   403, so a signing or mode misconfiguration still surfaces as a logged
+   502 rather than reaching the customer as their own refusal; every
+   other status is an error; a 200 JSON body's first 300 bytes are
+   sniffed for the backend's `"error": "invalid…` signature refusal (the
+   backend answers a bad signature with 200; see README "Backend
+   contract").
    `ErrorHandler`: signature refused or upstream status → 502, timeout →
    504, anything else → 502. It logs the error's type only, never the
    error, because a transport error can carry the minted signature.
