@@ -22,11 +22,16 @@ Base URL: `https://api.mtgban.com/v1/{game}/`, forwarding to that game's
 `/api/mtgban/...` paths (retail, buylist, all, sealed, sets, stores,
 search). `https://api.mtgban.com/v2/{game}/` forwards the same paths to
 the game's `/api/v2/...`, the price API keyed by finish and condition,
-plus `finishes.json`, the finish list, and price history at `history...`,
-which needs the `history` mode. A history answer is one key's own read,
-so it leaves with `Cache-Control: private`, the site's `max-age` and
-`ETag` kept. Only `GET` is accepted; any other method under `/v1/` or
-`/v2/` is 405.
+plus `finishes.json`, the finish list, price history at `history...`,
+which needs the `history` mode, and the newspaper's reports at
+`newspaper/reports.json` and `newspaper/{report}.json` or `.csv`, which
+need the `newspaper` mode beside a store scope. A history or newspaper
+answer is one key's own read, so every response the site sends on those
+routes carries `Cache-Control: private` and a shared cache never serves
+one key's paid answer to another; its `max-age`, `ETag` and
+`Last-Modified` pass through, so a client still revalidates. The
+gateway's own refusals and errors there carry no `Cache-Control`.
+Only `GET` is accepted; any other method under `/v1/` or `/v2/` is 405.
 
 Authenticate with either:
 
@@ -55,8 +60,8 @@ A request with neither returns 401. Errors are JSON:
 | 404 | Unknown game or path. |
 | 405 | A method other than `GET` under `/v1/` or `/v2/`. |
 | 429 | Three sources: per-IP before the key is read (`Retry-After: 1`), per-account once it resolves (carries `RateLimit-Limit`), or an upstream 429 passed straight through, which, like 304, is not JSON. |
-| 400, 404 and 503 on `/v2/{game}/history...` | The history endpoint's own answer, passed through with its body and headers (`ETag`, `Retry-After`, and `Cache-Control` made `private`, as on every history answer). |
-| 502 | Upstream unreachable or misconfigured, rejected the gateway's signature, or returned any status outside 2xx except 304 and 429 (redirects included), except on history routes, whose 400, 404 and 503 pass through; 401 and 403 are never passed through, history routes included. |
+| 400, 404 and 503 on `/v2/{game}/history...` and `/v2/{game}/newspaper/...` | The endpoint's own answer, passed through with its body and headers (`ETag`, `Retry-After`, and `Cache-Control` made `private`, as on every history and newspaper answer). |
+| 502 | Upstream unreachable or misconfigured, rejected the gateway's signature, or returned any status outside 2xx except 304 and 429 (redirects included), except on history and newspaper routes, whose 400, 404 and 503 pass through; 401 and 403 are never passed through, history and newspaper routes included. |
 | 503 | Database unavailable or the lookup timed out, and the key was not in cache. |
 | 504 | Upstream exceeded the timeout. |
 
@@ -100,12 +105,12 @@ throughput.
 
 Sessions are a signed cookie (`ban_session`, 30 days, host-only); suspending
 an account ends its sessions on the next request. The trial lasts
-`trial_days` (15 by default) of every store and every mode but history, for
-every configured game, once per Patreon email every 180 days; a reminder
-mails three days before it ends. Rotating `GATEWAY_SESSION_SECRET` signs
-everyone out, which is the emergency logout. Cookies issued before
-purpose binding are rejected once, signing everyone out and dropping any
-saved checkout.
+`trial_days` (15 by default) of every store and every mode but history and
+newspaper, for every configured game, once per Patreon email every 180
+days; a reminder mails three days before it ends. Rotating
+`GATEWAY_SESSION_SECRET` signs everyone out, which is the emergency
+logout. Cookies issued before purpose binding are rejected once, signing
+everyone out and dropping any saved checkout.
 A Patreon handoff token names the game site that minted
 it and is verified with that game's `secret` from `games`, the same value
 the site keeps under `api_user_secrets["gateway@mtgban.com"]`, so the
@@ -145,7 +150,8 @@ may appear anywhere in the command line, before or after the verb:
   comma-separated game list, each name one of the games in the config,
   `-stores` is `ALL_ACCESS`, `BASE_ACCESS`, or a comma-separated list of
   backend store shorthands, `-modes` is a comma-separated subset of
-  `retail,buylist,sealed`, or `history` alone, which takes no `-stores`
+  `retail,buylist,sealed,newspaper` (`newspaper` needs `-stores` like any
+  price mode), or `history` alone, which takes no `-stores`
   and needs `-lookback <days>` (1 to 3650), `-until` is `YYYY-MM-DD`
   (open-ended if omitted) and must be in the future. Operators type
   shorthands exactly as the backend spells them, for example `TCGLow` or
@@ -176,7 +182,10 @@ the catalog changed; a changed amount creates a replacement Price and archives
 the old one. Run it in test mode and again in live mode. Run it with a
 catalog that lists the `history` package only after this version is
 deployed: a history subscription's webhook cannot reconcile before the
-gateway accepts scope-less history rows.
+gateway accepts scope-less history rows. The same holds for a catalog that
+lists the `newspaper` add-on: seed it only once the gateway that knows the
+`newspaper` mode is deployed, or a bought add-on reconciles into a mode the
+gateway refuses.
 
 `checkout link -email -package [-games] [-stores] [-interval] [-invite]`:
 prints a hosted Checkout URL for the account. `-games` defaults to `magic`
@@ -217,7 +226,9 @@ does not (`all_stores`, `all_data`) drops them even without `-stores`, and a
 given `-stores` always wins. `-sub` is only needed when the account has more
 than one active Stripe subscription. History is a plan of its own; an
 account holds one subscription, so choosing history replaces a price plan
-and the change confirmation says so.
+and the change confirmation says so. A bought mode add-on (`newspaper`)
+carries over from the subscription's metadata onto a package it applies
+to, and is dropped onto one it does not (`history`).
 
 `serve -config`: runs the gateway HTTP server.
 
@@ -297,6 +308,7 @@ before any key is read, so a stream of forged keys cannot turn into database
 lookups. The per account limit (`per_key_requests_per_sec`, `per_key_burst`)
 applies after the key resolves. History routes spend their own per-account
 limiter (`per_key_history_requests_per_sec`, `per_key_history_burst`);
+newspaper routes spend the per-account price limiter;
 `RateLimit-Limit` names the rate of the limiter applied, rounded up to a
 whole request. Usage rows are buffered and dropped rather than blocking a
 request when the buffer is full;
@@ -454,9 +466,9 @@ below.
 
 The website now answers a refused or expired gateway signature with HTTP 401
 (`invalid or expired signature`) and a key missing the required mode with
-403. The history pass-through excludes both, so a signing or mode
-misconfiguration surfaces as a logged gateway 502 rather than reaching the
-customer as their own refusal.
+403. The history and newspaper pass-through excludes both, so a signing or
+mode misconfiguration surfaces as a logged gateway 502 rather than reaching
+the customer as their own refusal.
 
 ## Stripe
 

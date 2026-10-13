@@ -240,11 +240,13 @@ status active and `valid_from ≤ now < valid_until`). Store scope is
 typed exactly as the backend spells them; `DEV_ACCESS` is refused.
 `canonicalStoreScope` checks syntax only, not existence: a typo grants
 nothing rather than failing. Modes are a subset of `retail, buylist,
-sealed, history` in that order; a row with `history` carries it alone, an
+sealed, newspaper, history` in that order (`ValidModes`, the website
+catalog's order); a row with `history` carries it alone, an
 empty store scope and `lookback_days` from 1 to `MaxLookbackDays` (3650);
-every other row has `lookback_days` 0 (`CanonicalEntitlement`, and
-migration 3's `entitlements_lookback_check` holds the same rule in the
-database). Every write goes through `prepare`
+every other row, `newspaper` included, has a store scope and
+`lookback_days` 0 (`CanonicalEntitlement`, and migration 3's
+`entitlements_lookback_check` holds the same rule in the database), so a
+newspaper-only row still needs a scope. Every write goes through `prepare`
 (`AddEntitlement`, `UpsertStripeEntitlement`), which canonicalizes scope
 and modes. `UpsertStripeEntitlement` keys on
 `external_ref`, keeps the first `valid_from`, and overwrites everything
@@ -266,10 +268,10 @@ flip or a new row does.
 
 | File | Responsibility |
 |---|---|
-| `route.go` | `ParseRoute`: only `/v1/{game}/{sub}` (to `/api/mtgban/{sub}`) and `/v2/{game}/{sub}` (to `/api/v2/{sub}`); kinds search, meta (sets/stores, and finishes in v2), retail/buylist/all/sealed, history (v2 only); `Rest` is the backend path under `/api/` (`mtgban/...` or `v2/...`); rejects `..`; `NeedsModes` |
+| `route.go` | `ParseRoute`: only `/v1/{game}/{sub}` (to `/api/mtgban/{sub}`) and `/v2/{game}/{sub}` (to `/api/v2/{sub}`); kinds search, meta (sets/stores, and finishes in v2), retail/buylist/all/sealed, history and newspaper (v2 only); `Rest` is the backend path under `/api/` (`mtgban/...` or `v2/...`); rejects `..`; `NeedsModes` |
 | `access.go` | `Resolve(ents, game, now) (Access, bool)`: union of active rows naming the game; ALL > BASE > explicit union; `LookbackDays` is the max over history rows; empty scopes contribute nothing |
 | `resolver.go` | `Resolver`: key hash → `apiaccess.Lookup` cache with TTL, negative caching, stale-on-error, 10,000-entry bound plus 1,000 for unknown keys |
-| `handler.go` | `Handler.ServeHTTP`, one `httputil.ReverseProxy` + `http.Transport` per game, `ClientIP`, `statusWriter`, history limiter; history routes pass the backend's 400, 404 and 503 through, never 401 or 403, and leave with a `private` Cache-Control (`privateCacheControl`); `mintSig` adds `APIlookback` for a positive lookback |
+| `handler.go` | `Handler.ServeHTTP`, one `httputil.ReverseProxy` + `http.Transport` per game, `ClientIP`, `statusWriter`, history limiter; history and newspaper routes (`passStatus`) pass the backend's 400, 404 and 503 through, never 401 or 403, and leave with a `private` Cache-Control (`privateCacheControl`); `mintSig` adds `APIlookback` for a positive lookback |
 | `meter.go` | `UsageMeter`: non-blocking `Record`, batched COPY every 5 s or 200 rows, 3 attempts, then drop and count |
 | `probe.go` | `Prober`: hourly signature health check per game |
 | `errors.go` | `writeError` JSON `{"error", "game"}` |
@@ -288,32 +290,37 @@ flip or a new row does.
 5. Revoked key or non-active account → 401.
 6. `Resolve(entitlements, game, now)`: no row for the game → 403;
    `DEV_ACCESS` scope → 403 on every route; an empty scope → 403 on every
-   route but history; each mode the route needs and the plan lacks → 403
-   naming it; a history route additionally needs `LookbackDays` > 0 → 403.
+   route but history (a newspaper route needs a scope like a price route);
+   each mode the route needs and the plan lacks → 403 naming it; a history
+   route additionally needs `LookbackDays` > 0 → 403.
 7. Per-account limiter (`account:<id>`) → 429: history routes spend
-   `historyLimiter`, every other route `limiter`. `RateLimit-Limit` names
-   the rate of the one applied, rounded up to a whole request.
+   `historyLimiter`, every other route, newspaper included, `limiter`.
+   `RateLimit-Limit` names the rate of the one applied, rounded up to a
+   whole request.
 8. `apisig.Mint(game secret, link, {API: scope, mode: modes, email:
    gateway_email, APIlookback: lookback days}, now + 5 m)`;
    `APIlookback` is minted only for a positive lookback.
 9. Proxy with `upstream_timeout_seconds` covering the whole exchange.
    `Rewrite` sets the backend path, replaces `sig`, drops `key`, strips
    Cookie/Authorization/forwarding headers, sets `X-Forwarded-For` to the
-   resolved IP. `ModifyResponse` first makes a history answer's
-   `Cache-Control` `private` (`privateCacheControl` drops `public` and
-   `s-maxage`, keeping `max-age`, `no-store` and the validators), since
+   resolved IP. `ModifyResponse` first makes a history or newspaper
+   answer's `Cache-Control` `private` (`privateCacheControl` drops
+   `public` and `s-maxage`, keeping `max-age`, `no-store` and the
+   validators) on every site response it forwards, 304s included, since
    the body is one key's read while keys ride in `Authorization`, which a
    shared cache may disregard; it then passes 2xx, 304 and 429, and on
-   history routes the backend's 400, 404 and 503 too, but never 401 or
-   403, so a signing or mode misconfiguration still surfaces as a logged
-   502 rather than reaching the customer as their own refusal; every
-   other status is an error; a 200 JSON body's first 300 bytes are
-   sniffed for the backend's `"error": "invalid…` signature refusal (the
-   backend answers a bad signature with 200; see README "Backend
-   contract").
+   history and newspaper routes (`proxyParams.passStatus`) the backend's
+   400, 404 and 503 too, but never 401 or 403, so a signing or mode
+   misconfiguration still surfaces as a logged 502 rather than reaching
+   the customer as their own refusal; every other status is an error; a
+   200 JSON body's first 300 bytes are sniffed for the backend's
+   `"error": "invalid…` signature refusal (the backend answers a bad
+   signature with 200; see README "Backend contract").
    `ErrorHandler`: signature refused or upstream status → 502, timeout →
    504, anything else → 502. It logs the error's type only, never the
-   error, because a transport error can carry the minted signature.
+   error, because a transport error can carry the minted signature. Its
+   answers, like the gateway's own refusals, carry no `Cache-Control`, on
+   history and newspaper routes too.
 10. The deferred `meter.Record` writes one usage row (status 0 → 499).
     Requests refused in steps 1–7 are not metered.
 
@@ -336,17 +343,25 @@ flip or a new row does.
 The catalog is `apiproductlist.MustLoad()` from the website module:
 packages `starter` (explicit stores, one included), `all_stores`
 (BASE_ACCESS), `all_data` (ALL_ACCESS), `history` (scope-less,
-`lookback_days`); add-ons `extra_store` (starter only) and `extra_game`;
+`lookback_days`); add-ons `extra_store` (starter only) and `extra_game`,
+counted from the plan, and `newspaper`, bought once on a price package,
+which grants the `newspaper` mode (`Addon.GrantsMode`);
 intervals `monthly` (public) and `quarterly` (invite only). Amounts are
 monthly cents; an interval's amount is monthly × months. Stripe lookup
 keys are `<item>_<interval>`.
 
-`Plan{Package, Interval, Games, Stores}`:
+`Plan{Package, Interval, Games, Stores, ModeAddons}`:
 - `Normalize` → `Validate` (games configured; non-public interval needs an
   invite) → `Resolve` (store families → `ResolvedPlan{Scope, Modes, …}`).
 - `LineItems`/`Total` price it; `Metadata`/`PlanFromMetadata` round-trip it
   through the Stripe subscription's metadata, **which is the source of
   truth** for what a subscription grants.
+- `ModeAddons` are the add-ons bought once. `Normalize` sorts them and
+  refuses a key the catalog lacks, a counted one, or one that does not
+  apply to the package; `LineItems` bills each once; `Metadata` writes them
+  as `addons` (absent reads as none); `Resolve` adds each one's mode to the
+  package's in `ValidModes` order, so reconcile writes it with no branch of
+  its own and `Addons` lists it as `newspaper:1`.
 - `ValidationError` carries customer-safe text (`IsValidation`); sentinels
   `ErrInviteRequired`, `ErrPriceNotSeeded`, `ErrStoresUnavailable`,
   `ErrNoCustomer`, `ErrNoAccount`, `ErrManySubscriptions`.
@@ -460,9 +475,9 @@ https.
   A new key's plaintext is rendered once, never redirected.
 - **Trial / session handoff**: game sites mint an `apihandoff` token signed
   with that game's `secret`; GET shows a confirm page, POST burns the nonce.
-  `/trial` grants `trial_days` of ALL_ACCESS with every mode but history,
-  on every game, once per Patreon email per 180 days (`CreateTrial`, then
-  `AddEntitlement`, compensating with `DeleteTrial`).
+  `/trial` grants `trial_days` of ALL_ACCESS with every mode but history
+  and newspaper, on every game, once per Patreon email per 180 days
+  (`CreateTrial`, then `AddEntitlement`, compensating with `DeleteTrial`).
 - **Admin**: account list/search, demo access, recent actions, per-account
   page (status, note, keys, entitlements, manual grant, invites, activity,
   per-key usage), usage page, "reconcile now". Every mutation calls
