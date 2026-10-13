@@ -253,8 +253,8 @@ func TestDescribeEntitlement(t *testing.T) {
 }
 
 func TestPlanValuesRoundTrip(t *testing.T) {
-	v := planValues(planFromValues(map[string][]string{"package": {"starter"}, "interval": {"monthly"}, "games": {"magic,pokemon"}, "stores": {"cardkingdom", "starcitygames"}}))
-	if v.Get("package") != "starter" || v.Get("interval") != "monthly" || v.Get("games") != "magic,pokemon" || v.Get("stores") != "cardkingdom,starcitygames" {
+	v := planValues(planFromValues(map[string][]string{"package": {"starter"}, "interval": {"monthly"}, "games": {"magic,pokemon"}, "stores": {"cardkingdom", "starcitygames"}, "addons": {"newspaper"}}))
+	if v.Get("package") != "starter" || v.Get("interval") != "monthly" || v.Get("games") != "magic,pokemon" || v.Get("stores") != "cardkingdom,starcitygames" || v.Get("addons") != "newspaper" {
 		t.Errorf("%v", v)
 	}
 }
