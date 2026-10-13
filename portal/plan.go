@@ -22,7 +22,8 @@ func listValues(v url.Values, key string) []string {
 
 // planFromValues reads the configurator's fields, or the pending cookie's copy of them.
 func planFromValues(v url.Values) billing.Plan {
-	return billing.Plan{Package: v.Get("package"), Interval: v.Get("interval"), Games: listValues(v, "games"), Stores: listValues(v, "stores")}
+	return billing.Plan{Package: v.Get("package"), Interval: v.Get("interval"), Games: listValues(v, "games"), Stores: listValues(v, "stores"),
+		ModeAddons: listValues(v, "addons")}
 }
 
 // planValues is the inverse, for hidden fields and the pending cookie.
@@ -32,6 +33,7 @@ func planValues(p billing.Plan) url.Values {
 	v.Set("interval", p.Interval)
 	v.Set("games", strings.Join(p.Games, ","))
 	v.Set("stores", strings.Join(p.Stores, ","))
+	v.Set("addons", strings.Join(p.ModeAddons, ","))
 	return v
 }
 
@@ -81,7 +83,7 @@ func (s *Server) describeEntitlement(sites *siteLookup, e apiaccess.Entitlement)
 }
 
 // prefillQuery rebuilds the configurator query for e so the pricing page can
-// open with the current plan selected.
+// open with the current plan selected, its mode add-ons included.
 func (s *Server) prefillQuery(sites *siteLookup, e apiaccess.Entitlement) url.Values {
 	q := url.Values{"change": {"1"}, "games": {strings.Join(e.Games, ",")}}
 	scope := e.StoreScope
@@ -105,7 +107,22 @@ func (s *Server) prefillQuery(sites *siteLookup, e apiaccess.Entitlement) url.Va
 	if p, ok := s.packageFor(e, scope); ok {
 		q.Set("package", p.Key)
 	}
+	if addons := s.modeAddonKeys(e); len(addons) > 0 {
+		q.Set("addons", strings.Join(addons, ","))
+	}
 	return q
+}
+
+// modeAddonKeys lists the mode add-ons in e's addons column, whose entries are key:qty.
+func (s *Server) modeAddonKeys(e apiaccess.Entitlement) []string {
+	var out []string
+	for _, entry := range e.Addons {
+		key, _, _ := strings.Cut(entry, ":")
+		if addon, ok := s.Catalog.Addon(key); ok && addon.GrantsMode != "" && !slices.Contains(out, key) {
+			out = append(out, key)
+		}
+	}
+	return out
 }
 
 // packageFor finds the catalog package e was sold as: the history package for
