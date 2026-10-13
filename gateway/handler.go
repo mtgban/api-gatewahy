@@ -150,8 +150,11 @@ type proxyParams struct {
 	kind string
 }
 
-// passStatus reports whether the backend's own 4xx and 503 reach the
-// client, as a history route answers with a body of its own.
+// passStatus reports whether the backend's own 400, 404 and 503 reach the
+// client, as a history route answers with a body of its own. 401 and 403
+// are excluded by the caller, so a signing or mode misconfiguration
+// surfaces as a logged 502 rather than reaching the customer as their own
+// refusal.
 func (p proxyParams) passStatus() bool {
 	return p.kind == "history"
 }
@@ -212,7 +215,8 @@ func (h *Handler) newProxy(_ string, up Upstream) *httputil.ReverseProxy {
 			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusNotModified {
 				return nil
 			}
-			if p.passStatus() && (resp.StatusCode >= 400 && resp.StatusCode < 500 || resp.StatusCode == http.StatusServiceUnavailable) {
+			if p.passStatus() && resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden &&
+				(resp.StatusCode >= 400 && resp.StatusCode < 500 || resp.StatusCode == http.StatusServiceUnavailable) {
 				return nil
 			}
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {

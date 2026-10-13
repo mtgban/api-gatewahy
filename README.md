@@ -55,8 +55,8 @@ A request with neither returns 401. Errors are JSON:
 | 404 | Unknown game or path. |
 | 405 | A method other than `GET` under `/v1/` or `/v2/`. |
 | 429 | Three sources: per-IP before the key is read (`Retry-After: 1`), per-account once it resolves (carries `RateLimit-Limit`), or an upstream 429 passed straight through, which, like 304, is not JSON. |
-| 400, 404, 503 on `/v2/{game}/history...` | The history endpoint's own answer, passed through with its body and headers (`Cache-Control`, `ETag`, `Retry-After`). |
-| 502 | Upstream unreachable or misconfigured, rejected the gateway's signature, or returned any status outside 2xx except 304 and 429 (redirects included), except on history routes, whose 4xx and 503 pass through. |
+| 400, 404 and 503 on `/v2/{game}/history...` | The history endpoint's own answer, passed through with its body and headers (`ETag`, `Retry-After`, and `Cache-Control` made `private`, as on every history answer). |
+| 502 | Upstream unreachable or misconfigured, rejected the gateway's signature, or returned any status outside 2xx except 304 and 429 (redirects included), except on history routes, whose 400, 404 and 503 pass through; 401 and 403 are never passed through, history routes included. |
 | 503 | Database unavailable or the lookup timed out, and the key was not in cache. |
 | 504 | Upstream exceeded the timeout. |
 
@@ -444,16 +444,19 @@ covers what the gateway imports from it, why, and which side deploys first.
 
 ### Backend contract
 
-A game backend answers a bad gateway signature with HTTP 200 and a JSON body
-of `{"error": "invalid signature"}` or
+A game backend can still answer a bad gateway signature with HTTP 200 and a
+JSON body of `{"error": "invalid signature"}` or
 `{"error": "invalid or expired signature"}`, so the gateway sniffs the first
 bytes of a 200 JSON response for `"error": "invalid` and turns that case into
 a 502 rather than passing a success status with an error body to the
-customer. The intended follow-up is a website-side change that returns a
-status code for a refused signature, after which the gateway can drop the
-sniffer and read the status. Once it does, the history pass-through must
-exclude 401 and 403, so that a signing misconfiguration still surfaces as
-a gateway 502 rather than reaching the customer as their own refusal.
+customer. That sniffer stays until every site deploys the status change
+below.
+
+The website now answers a refused or expired gateway signature with HTTP 401
+(`invalid or expired signature`) and a key missing the required mode with
+403. The history pass-through excludes both, so a signing or mode
+misconfiguration surfaces as a logged gateway 502 rather than reaching the
+customer as their own refusal.
 
 ## Stripe
 
