@@ -38,6 +38,39 @@ func fakeBackend(t *testing.T, secret string) *httptest.Server {
 		w.Header().Set("Content-Type", "application/json")
 		// Mimics a backend setting its own per-IP limit, which the gateway must drop.
 		w.Header().Set("RateLimit-Limit", "999")
+		if strings.HasPrefix(r.URL.Path, "/api/v2/newspaper/") {
+			// The site's caching headers on a report, which the gateway makes private.
+			w.Header().Set("Cache-Control", "public, max-age=60")
+			w.Header().Set("ETag", `"news1"`)
+			w.Header().Set("Last-Modified", "Tue, 13 Oct 2026 09:00:00 GMT")
+		}
+		if r.URL.Path == "/api/v2/newspaper/twolines.json" {
+			w.Header().Set("Cache-Control", "max-age=60")
+			w.Header().Add("Cache-Control", "no-store")
+		}
+		if code, ok := newspaperFailures[r.URL.Path]; ok {
+			w.Header().Set("Cache-Control", "no-store")
+			if code == 503 {
+				w.Header().Set("Retry-After", "300")
+			}
+			w.WriteHeader(code)
+			_, _ = w.Write([]byte(`{"error":"from the newspaper"}`))
+			return
+		}
+		if r.URL.Path == "/api/v2/newspaper/notmodified.json" {
+			w.WriteHeader(304)
+			return
+		}
+		if r.URL.Path == "/api/v2/newspaper/unauthorized.json" {
+			w.WriteHeader(401)
+			_, _ = w.Write([]byte(`{"error": "invalid or expired signature"}`))
+			return
+		}
+		if r.URL.Path == "/api/v2/newspaper/forbidden.json" {
+			w.WriteHeader(403)
+			_, _ = w.Write([]byte(`{"error": "plan does not include newspaper"}`))
+			return
+		}
 		if r.URL.Path == "/api/mtgban/retail/boom.json" {
 			w.WriteHeader(500)
 			return
@@ -149,6 +182,8 @@ const (
 	bothKey         = "mtgban_live_bothbothbothbothbothbothboth1234"
 	devHistKey      = "mtgban_live_devhistdevhistdevhistdevhist1234"
 	zeroLookbackKey = "mtgban_live_zerolookbackzerolookbackzerolo12"
+	newsKey         = "mtgban_live_newsnewsnewsnewsnewsnewsnewsnews"
+	newsNoScopeKey  = "mtgban_live_noscopenoscopenoscopenoscope1234"
 )
 
 // mustNew fills any zero of the eight validated fields with config's defaults,
@@ -248,6 +283,17 @@ func testHandler(t *testing.T, backend *httptest.Server, secret string) (*Handle
 			Entitlements: []apiaccess.Entitlement{
 				{Status: apiaccess.EntitlementActive, ValidFrom: past, Games: []string{"magic"}, Modes: []string{"history"}, LookbackDays: 0},
 			},
+		},
+		apiaccess.HashKey(newsKey): {
+			Key:          apiaccess.Key{ID: 16},
+			Account:      apiaccess.Account{ID: 10, Status: apiaccess.AccountActive},
+			Entitlements: []apiaccess.Entitlement{ent([]string{"magic"}, "CK,TCG", "retail", "buylist", "newspaper")},
+		},
+		// A newspaper row with no scope: apiaccess would refuse writing one.
+		apiaccess.HashKey(newsNoScopeKey): {
+			Key:          apiaccess.Key{ID: 17},
+			Account:      apiaccess.Account{ID: 11, Status: apiaccess.AccountActive},
+			Entitlements: []apiaccess.Entitlement{ent([]string{"magic"}, "", "newspaper")},
 		},
 	}}
 	meter := &recordingMeter{}
@@ -1050,21 +1096,6 @@ func TestHandlerHistoryIsPrivate(t *testing.T) {
 	}
 }
 
-func TestPrivateCacheControl(t *testing.T) {
-	for in, want := range map[string]string{
-		"":                                 "private",
-		"public, max-age=60":               "private, max-age=60",
-		"PUBLIC,max-age=5":                 "private, max-age=5",
-		"public, s-maxage=300, max-age=60": "private, max-age=60",
-		"no-store":                         "private, no-store",
-		"private, max-age=10":              "private, max-age=10",
-	} {
-		if got := privateCacheControl(in); got != want {
-			t.Errorf("%q: got %q want %q", in, got, want)
-		}
-	}
-}
-
 func TestHandlerV2PricesKeepTheirBytes(t *testing.T) {
 	be := fakeBackend(t, "s3cret")
 	defer be.Close()
@@ -1206,5 +1237,157 @@ func TestHandlerHistoryLimiterIsSeparate(t *testing.T) {
 	rec, _ = do(h, "GET", "/v2/magic/retail.json", bothKey)
 	if rec.Code != 200 || rec.Header().Get("RateLimit-Limit") != "1000" {
 		t.Errorf("price request after history 429: %d %q", rec.Code, rec.Header().Get("RateLimit-Limit"))
+	}
+}
+
+// newspaperFailures are the newspaper endpoint's own refusals, each with a
+// body, which a newspaper route passes through.
+var newspaperFailures = map[string]int{
+	"/api/v2/newspaper/bad.json":  400,
+	"/api/v2/newspaper/gone.json": 404,
+	"/api/v2/newspaper/busy.json": 503,
+}
+
+func TestHandlerNewspaperHappyPath(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, meter := testHandler(t, be, "s3cret")
+	rec, body := do(h, "GET", "/v2/magic/newspaper/sell_index.json?page=2", newsKey)
+	if rec.Code != 200 {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	if body["path"] != "/api/v2/newspaper/sell_index.json" || body["api"] != "CK,TCG" || body["mode"] != "retail,buylist,newspaper" || body["lookback"] != "" {
+		t.Errorf("backend saw %v", body)
+	}
+	if len(meter.rows) != 1 || meter.rows[0].Path != "/api/v2/newspaper/sell_index.json" || meter.rows[0].Status != 200 {
+		t.Errorf("meter %+v", meter.rows)
+	}
+}
+
+func TestHandlerNewspaperRefusals(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, meter := testHandler(t, be, "s3cret")
+	cases := []struct {
+		name, target, key string
+		status            int
+		errContains       string
+	}{
+		{"price key lacks newspaper", "/v2/magic/newspaper/reports.json", goodKey, 403, "plan does not include mode newspaper"},
+		{"history-only key has no scope", "/v2/magic/newspaper/reports.json", historyKey, 403, "plan has no store scope"},
+		{"newspaper row without a scope", "/v2/magic/newspaper/reports.json", newsNoScopeKey, 403, "plan has no store scope"},
+		{"newspaper on v1", "/v1/magic/newspaper/reports.json", newsKey, 404, "not found"},
+		{"newspaper key on another game", "/v2/pokemon/newspaper/reports.json", newsKey, 403, "plan does not include game"},
+	}
+	for _, c := range cases {
+		rec, body := do(h, "GET", c.target, c.key)
+		if rec.Code != c.status || !strings.Contains(bodyString(body, "error"), c.errContains) {
+			t.Errorf("%s: status %d body %v", c.name, rec.Code, body)
+		}
+	}
+	if len(meter.rows) != 0 {
+		t.Errorf("refusals were metered: %+v", meter.rows)
+	}
+	// The newspaper key still reads the prices its row carries.
+	if rec, body := do(h, "GET", "/v2/magic/retail.json", newsKey); rec.Code != 200 || body["mode"] != "retail,buylist,newspaper" {
+		t.Errorf("newspaper key on prices: %d %v", rec.Code, body)
+	}
+}
+
+func TestHandlerNewspaperPassesUpstreamStatuses(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, meter := testHandler(t, be, "s3cret")
+	// The site's 401 and 403 mean a gateway/site mismatch, so they become
+	// the gateway's own 502, which carries no Cache-Control.
+	for _, c := range []struct {
+		path   string
+		status int
+		header string
+		errMsg string
+		cache  string
+	}{
+		{"/v2/magic/newspaper/bad.json", 400, "", "from the newspaper", "private, no-store"},
+		{"/v2/magic/newspaper/gone.json", 404, "", "from the newspaper", "private, no-store"},
+		{"/v2/magic/newspaper/busy.json", 503, "Retry-After", "from the newspaper", "private, no-store"},
+		{"/v2/magic/newspaper/unauthorized.json", 502, "", "upstream returned 401", ""},
+		{"/v2/magic/newspaper/forbidden.json", 502, "", "upstream returned 403", ""},
+	} {
+		rec, body := do(h, "GET", c.path, newsKey)
+		if rec.Code != c.status || body["error"] != c.errMsg {
+			t.Errorf("%s: status %d body %s", c.path, rec.Code, rec.Body.String())
+		}
+		if c.header != "" && rec.Header().Get(c.header) == "" {
+			t.Errorf("%s: %s header dropped", c.path, c.header)
+		}
+		if got := rec.Header().Get("Cache-Control"); got != c.cache {
+			t.Errorf("%s: Cache-Control %q", c.path, got)
+		}
+	}
+	if len(meter.rows) != 5 || meter.rows[0].Status != 400 || meter.rows[2].Status != 503 ||
+		meter.rows[3].Status != 502 || meter.rows[4].Status != 502 {
+		t.Errorf("meter %+v", meter.rows)
+	}
+}
+
+func TestHandlerNewspaperIsPrivate(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, _ := testHandler(t, be, "s3cret")
+	rec, _ := do(h, "GET", "/v2/magic/newspaper/reports.json", newsKey)
+	if rec.Code != 200 || rec.Header().Get("Cache-Control") != "private, max-age=60" ||
+		rec.Header().Get("ETag") != `"news1"` || rec.Header().Get("Last-Modified") != "Tue, 13 Oct 2026 09:00:00 GMT" {
+		t.Errorf("200: %d %v", rec.Code, rec.Header())
+	}
+	rec, _ = do(h, "GET", "/v2/magic/newspaper/notmodified.json", newsKey)
+	if rec.Code != 304 || rec.Header().Get("Cache-Control") != "private, max-age=60" || rec.Header().Get("ETag") != `"news1"` {
+		t.Errorf("304: %d %v", rec.Code, rec.Header())
+	}
+	// History is private the same way, on a passed-through error too.
+	rec, _ = do(h, "GET", "/v2/magic/history/cached.json", historyKey)
+	if rec.Code != 200 || rec.Header().Get("Cache-Control") != "private, max-age=3600" || rec.Header().Get("ETag") != `"hist1"` {
+		t.Errorf("history: %d %v", rec.Code, rec.Header())
+	}
+	rec, _ = do(h, "GET", "/v2/magic/history/bad.json", historyKey)
+	if rec.Code != 400 || rec.Header().Get("Cache-Control") != "private, no-store" {
+		t.Errorf("history 400: %d %q", rec.Code, rec.Header().Get("Cache-Control"))
+	}
+	// Every Cache-Control line counts, not only the first.
+	rec, _ = do(h, "GET", "/v2/magic/newspaper/twolines.json", newsKey)
+	if got := rec.Header().Values("Cache-Control"); rec.Code != 200 || len(got) != 1 || got[0] != "private, max-age=60, no-store" {
+		t.Errorf("two lines: %d %q", rec.Code, got)
+	}
+	// A price route keeps the backend's header as sent.
+	rec, _ = do(h, "GET", "/v2/magic/retail/cached.json", newsKey)
+	if rec.Code != 200 || rec.Header().Get("Cache-Control") != "public, max-age=60" {
+		t.Errorf("price: %d %q", rec.Code, rec.Header().Get("Cache-Control"))
+	}
+}
+
+func TestHandlerNewspaperSpendsThePriceLimiter(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, _ := testHandler(t, be, "s3cret")
+	h.historyLimiter = newLimiter(0.01, 1)
+	for i := range 3 {
+		rec, _ := do(h, "GET", "/v2/magic/newspaper/reports.json", newsKey)
+		if rec.Code != 200 || rec.Header().Get("RateLimit-Limit") != "1000" {
+			t.Fatalf("request %d: %d %q", i, rec.Code, rec.Header().Get("RateLimit-Limit"))
+		}
+	}
+}
+
+func TestPrivateCacheControl(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                                 "private",
+		"public, max-age=60":               "private, max-age=60",
+		"PUBLIC,max-age=5":                 "private, max-age=5",
+		"public, s-maxage=300, max-age=60": "private, max-age=60",
+		"no-store":                         "private, no-store",
+		"private, max-age=10":              "private, max-age=10",
+	} {
+		if got := privateCacheControl(in); got != want {
+			t.Errorf("%q: got %q want %q", in, got, want)
+		}
 	}
 }

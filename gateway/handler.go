@@ -151,12 +151,12 @@ type proxyParams struct {
 }
 
 // passStatus reports whether the backend's own 400, 404 and 503 reach the
-// client, as a history route answers with a body of its own. 401 and 403
-// are excluded by the caller, so a signing or mode misconfiguration
-// surfaces as a logged 502 rather than reaching the customer as their own
-// refusal.
+// client, as history and newspaper routes answer with a body of their own.
+// 401 and 403 are excluded by the caller, so a signing or mode
+// misconfiguration surfaces as a logged 502 rather than reaching the
+// customer as their own refusal.
 func (p proxyParams) passStatus() bool {
-	return p.kind == "history"
+	return p.kind == "history" || p.kind == "newspaper"
 }
 
 // paramsFrom returns the proxyParams ServeHTTP stored in ctx, or the zero
