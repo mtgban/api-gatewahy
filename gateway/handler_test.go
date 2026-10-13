@@ -97,6 +97,16 @@ func fakeBackend(t *testing.T, secret string) *httptest.Server {
 			_, _ = w.Write([]byte(`{"error":"price history is busy"}`))
 			return
 		}
+		if r.URL.Path == "/api/v2/history/unauthorized.json" {
+			w.WriteHeader(401)
+			_, _ = w.Write([]byte(`{"error": "invalid or expired signature"}`))
+			return
+		}
+		if r.URL.Path == "/api/v2/history/forbidden.json" {
+			w.WriteHeader(403)
+			_, _ = w.Write([]byte(`{"error": "plan does not include mode history"}`))
+			return
+		}
 		if r.URL.Path == "/api/v2/retail/boom.json" {
 			w.WriteHeader(500)
 			return
@@ -1120,6 +1130,31 @@ func TestHandlerHistoryPassesUpstreamStatuses(t *testing.T) {
 	rec, body := do(h, "GET", "/v2/magic/retail/boom.json", goodKey)
 	if rec.Code != 502 || !strings.Contains(bodyString(body, "error"), "500") {
 		t.Errorf("v2 price 500: status %d body %v", rec.Code, body)
+	}
+}
+
+// TestHandlerHistoryExcludes401And403FromPassThrough proves a refused
+// signature or a missing mode on a history route never reaches the client
+// as the backend's own 401 or 403: both take the upstream-error path and
+// surface as a logged 502 instead.
+func TestHandlerHistoryExcludes401And403FromPassThrough(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, meter := testHandler(t, be, "s3cret")
+	for _, c := range []struct {
+		path        string
+		errContains string
+	}{
+		{"/v2/magic/history/unauthorized.json", "401"},
+		{"/v2/magic/history/forbidden.json", "403"},
+	} {
+		rec, body := do(h, "GET", c.path, historyKey)
+		if rec.Code != 502 || !strings.Contains(bodyString(body, "error"), c.errContains) {
+			t.Errorf("%s: status %d body %v", c.path, rec.Code, body)
+		}
+	}
+	if len(meter.rows) != 2 || meter.rows[0].Status != 502 || meter.rows[1].Status != 502 {
+		t.Errorf("meter %+v", meter.rows)
 	}
 }
 
