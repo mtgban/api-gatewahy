@@ -377,3 +377,19 @@ func TestAdminUsageRejectsSinceAfterUntil(t *testing.T) {
 		t.Errorf("store was called despite the bad range: %d calls", n)
 	}
 }
+
+// grant add names newspaper in its help, and a newspaper grant still needs -stores.
+func TestAdminGrantNewspaper(t *testing.T) {
+	s := apiaccesstest.New()
+	admin(t, s, "account", "add", "-email", "news@example.com")
+	if code, _, errb := admin(t, s, "grant", "add", "-h"); code != 2 || !strings.Contains(errb, "retail,buylist,sealed,newspaper, or history alone") {
+		t.Errorf("help: %d %q", code, errb)
+	}
+	code, out, errb := admin(t, s, "grant", "add", "-email", "news@example.com", "-games", "magic", "-stores", "CK", "-modes", "newspaper,retail")
+	if code != 0 || !strings.Contains(out, "modes retail,newspaper") {
+		t.Fatalf("add: %d %q %q", code, out, errb)
+	}
+	if code, _, errb := admin(t, s, "grant", "add", "-email", "news@example.com", "-games", "magic", "-modes", "newspaper"); code != 2 || !strings.Contains(errb, "is required") {
+		t.Errorf("newspaper without stores: %d %q", code, errb)
+	}
+}
