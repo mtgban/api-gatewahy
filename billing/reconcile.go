@@ -234,7 +234,7 @@ func (r *Reconciler) apply(ctx context.Context, sub *stripe.Subscription, pass b
 		}
 		r.alertf("subscription %s: %v", sub.ID, err)
 		// An ended row grants nothing, so the keys stand in for the scope and access still ends.
-		resolved = ResolvedPlan{Plan: plan, Scope: strings.Join(plan.Stores, ","), Modes: pkg.Modes}
+		resolved = ResolvedPlan{Plan: plan, Scope: strings.Join(plan.Stores, ","), Modes: planModes(r.Catalog, pkg, plan.ModeAddons)}
 	}
 	e := apiaccess.Entitlement{
 		AccountID:    account.ID,

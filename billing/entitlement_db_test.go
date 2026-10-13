@@ -85,6 +85,12 @@ func TestCatalogEntitlementRoundtrip(t *testing.T) {
 		if pkg.StoreScope == apiproductlist.StoreScopeExplicit {
 			plan.Stores = []string{"cardkingdom", "starcitygames"}
 		}
+		// Every mode add-on the package takes, so apiaccess sees each granted mode.
+		for _, a := range testCatalog.Addons {
+			if a.GrantsMode != "" && a.Applies(pkg.Key) {
+				plan.ModeAddons = append(plan.ModeAddons, a.Key)
+			}
+		}
 		plan, err := plan.Normalize(testCatalog)
 		if err != nil {
 			t.Fatalf("%s: normalize: %v", pkg.Key, err)
@@ -123,6 +129,11 @@ func TestCatalogEntitlementRoundtrip(t *testing.T) {
 		}
 		if !slices.Equal(got.Modes, modes) {
 			t.Errorf("%s: modes %v want %v", pkg.Key, got.Modes, modes)
+		}
+		for _, k := range plan.ModeAddons {
+			if a, _ := testCatalog.Addon(k); !slices.Contains(got.Modes, a.GrantsMode) {
+				t.Errorf("%s: modes %v lack %s from %s", pkg.Key, got.Modes, a.GrantsMode, k)
+			}
 		}
 	}
 }
