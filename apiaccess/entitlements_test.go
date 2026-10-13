@@ -353,3 +353,14 @@ func TestHistoryEntitlementRoundTrip(t *testing.T) {
 		t.Error("history beside retail was stored")
 	}
 }
+
+// Newspaper sits between sealed and history in the canonical order.
+func TestValidateModesNewspaper(t *testing.T) {
+	if !slices.Equal(ValidModes, []string{"retail", "buylist", "sealed", "newspaper", "history"}) {
+		t.Errorf("ValidModes %v", ValidModes)
+	}
+	got, err := ValidateModes([]string{"Newspaper", "sealed", "retail"})
+	if err != nil || !slices.Equal(got, []string{"retail", "sealed", "newspaper"}) {
+		t.Errorf("got %v err %v", got, err)
+	}
+}

@@ -83,6 +83,7 @@ var contractScenarios = []struct {
 	{"entitlements round trip", contractEntitlements},
 	{"history row stands alone", contractHistoryEntitlement},
 	{"history upsert follows the lookback", contractHistoryUpsert},
+	{"newspaper rides a scoped row", contractNewspaperEntitlement},
 	{"invites round trip", contractInvites},
 	{"magic links round trip", contractMagicLinks},
 	{"stripe events round trip", contractStripeEvents},
@@ -679,6 +680,36 @@ func contractHistoryUpsert(t *testing.T, s store) {
 	}
 	if ents, err := s.ListEntitlements(ctx, a.ID); err != nil || len(ents) != 1 || ents[0].LookbackDays != 60 {
 		t.Errorf("rows %+v %v", ents, err)
+	}
+}
+
+// contractNewspaperEntitlement proves newspaper rides a scoped row, through
+// both writes, and that a row naming it without a scope is refused.
+func contractNewspaperEntitlement(t *testing.T, s store) {
+	a := mustAccount(t, s, "newspaper@example.com")
+	want := []string{"retail", "buylist", "newspaper"}
+	e, err := s.AddEntitlement(ctx, grant(a.ID, apiaccess.SourceManual, "CK", "newspaper", "buylist", "retail"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.StoreScope != "CK" || !slices.Equal(e.Modes, want) || e.LookbackDays != 0 {
+		t.Errorf("added %+v", e)
+	}
+	up := grant(a.ID, apiaccess.SourceStripe, "ALL_ACCESS", "retail", "buylist", "sealed", "newspaper")
+	up.ExternalRef, up.Addons = "sub_news", []string{"newspaper:1"}
+	if _, err := s.UpsertStripeEntitlement(ctx, up); err != nil {
+		t.Fatal(err)
+	}
+	ents, err := s.ListEntitlements(ctx, a.ID)
+	if err != nil || len(ents) != 2 || ents[0].StoreScope != "CK" || !slices.Equal(ents[0].Modes, want) ||
+		!slices.Equal(ents[1].Modes, []string{"retail", "buylist", "sealed", "newspaper"}) || !slices.Equal(ents[1].Addons, []string{"newspaper:1"}) {
+		t.Errorf("list %+v %v", ents, err)
+	}
+	if _, err := s.AddEntitlement(ctx, grant(a.ID, apiaccess.SourceManual, "", "newspaper")); err == nil {
+		t.Error("a newspaper row without a scope was stored")
+	}
+	if ents, _ := s.ListEntitlements(ctx, a.ID); len(ents) != 2 {
+		t.Errorf("the refused row left %d rows", len(ents))
 	}
 }
 
