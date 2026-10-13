@@ -149,11 +149,11 @@ func (s *Server) trial(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/account?notice=trial", http.StatusFound)
 }
 
-// trialModes is every mode but history, which is a plan of its own.
+// trialModes is every mode but history, a plan of its own, and newspaper, an add-on.
 func trialModes() []string {
 	var out []string
 	for _, m := range apiaccess.ValidModes {
-		if m != apiaccess.ModeHistory {
+		if m != apiaccess.ModeHistory && m != apiaccess.ModeNewspaper {
 			out = append(out, m)
 		}
 	}
