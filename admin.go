@@ -286,7 +286,7 @@ func grantAdd(ctx context.Context, d adminDeps, args []string, stdout, stderr io
 	email := fs.String("email", "", "account email")
 	games := fs.String("games", "", "comma-separated game names")
 	stores := fs.String("stores", "", "ALL_ACCESS, BASE_ACCESS, or comma-separated backend shorthands, typed exactly")
-	modes := fs.String("modes", "", "comma-separated subset of retail,buylist,sealed, or history alone")
+	modes := fs.String("modes", "", "comma-separated subset of retail,buylist,sealed,newspaper, or history alone")
 	lookback := fs.Int("lookback", 0, "history grants only: how many days back the key reads")
 	until := fs.String("until", "", "end date YYYY-MM-DD, exclusive")
 	note := fs.String("note", "", "free-text note")
