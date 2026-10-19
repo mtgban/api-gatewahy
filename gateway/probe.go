@@ -100,7 +100,7 @@ func (p *Prober) probeVersion(ctx context.Context, version, game string, up Upst
 	if err != nil {
 		return err
 	}
-	sig := mintSig(up, p.link, p.email, "BASE_ACCESS", []string{"retail"}, p.now().Add(p.ttl))
+	sig := mintSig(up, p.link, p.email, "BASE_ACCESS", []string{"retail"}, 0, p.now().Add(p.ttl))
 	target := *up.URL
 	target.Path = route.BackendPath()
 	target.RawQuery = url.Values{"sig": {sig}}.Encode()

@@ -63,12 +63,65 @@ func fakeBackend(t *testing.T, secret string) *httptest.Server {
 			_, _ = w.Write([]byte(`{"meta": {"date": "2026-09-22"}, "retail": {"error": "invalid card", "regular": 1.5}}`))
 			return
 		}
+		if r.URL.Path == "/api/v2/history/cached.json" {
+			w.Header().Set("Cache-Control", "public, max-age=3600")
+			w.Header().Set("ETag", `"hist1"`)
+		}
+		if r.URL.Path == "/api/v2/history/notmodified.json" {
+			w.Header().Set("Cache-Control", "public, max-age=3600")
+			w.Header().Set("ETag", `"hist1"`)
+			w.WriteHeader(304)
+			return
+		}
+		if r.URL.Path == "/api/v2/history/twolines.json" {
+			w.Header().Set("Cache-Control", "max-age=3600")
+			w.Header().Add("Cache-Control", "no-store")
+		}
+		if r.URL.Path == "/api/v2/retail/cached.json" {
+			w.Header().Set("Cache-Control", "public, max-age=60")
+		}
+		if r.URL.Path == "/api/v2/history/bad.json" {
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(400)
+			_, _ = w.Write([]byte(`{"error":"range must be a positive number of days"}`))
+			return
+		}
+		if r.URL.Path == "/api/v2/history/gone.json" {
+			w.WriteHeader(404)
+			_, _ = w.Write([]byte(`{"error":"Not found"}`))
+			return
+		}
+		if r.URL.Path == "/api/v2/history/busy.json" {
+			w.Header().Set("Retry-After", "5")
+			w.WriteHeader(503)
+			_, _ = w.Write([]byte(`{"error":"price history is busy"}`))
+			return
+		}
+		if r.URL.Path == "/api/v2/history/unauthorized.json" {
+			w.WriteHeader(401)
+			_, _ = w.Write([]byte(`{"error": "invalid or expired signature"}`))
+			return
+		}
+		if r.URL.Path == "/api/v2/history/forbidden.json" {
+			w.WriteHeader(403)
+			_, _ = w.Write([]byte(`{"error": "plan does not include mode history"}`))
+			return
+		}
+		if r.URL.Path == "/api/v2/retail/boom.json" {
+			w.WriteHeader(500)
+			return
+		}
+		if code, ok := v2PriceFailures[r.URL.Path]; ok {
+			w.WriteHeader(code)
+			_, _ = w.Write([]byte(`{"error":"from the backend"}`))
+			return
+		}
 		v, err := apisig.Decode(r.URL.Query().Get("sig"))
 		if err != nil {
 			_, _ = w.Write([]byte(`{"error": "invalid signature"}`))
 			return
 		}
-		if err := apisig.Verify([]byte(secret), "GET", apisig.DefaultLink, v, []string{"APImode", "UserEmail"}, time.Now()); err != nil {
+		if err := apisig.Verify([]byte(secret), "GET", apisig.DefaultLink, v, []string{"APImode", "UserEmail", "APIlookback"}, time.Now()); err != nil {
 			_, _ = w.Write([]byte(`{"error": "invalid or expired signature"}`))
 			return
 		}
@@ -77,6 +130,7 @@ func fakeBackend(t *testing.T, secret string) *httptest.Server {
 			"xff": r.Header.Get("X-Forwarded-For"), "cookie": r.Header.Get("Cookie"), "auth": r.Header.Get("Authorization"),
 			"clientheader": r.Header.Get(testClientIPHeader),
 			"query":        r.URL.Query().Get("id"), "key": r.URL.Query().Get("key"), "host": r.Host,
+			"lookback": v.Get("APIlookback"),
 		})
 	}))
 }
@@ -85,15 +139,19 @@ func fakeBackend(t *testing.T, secret string) *httptest.Server {
 const testClientIPHeader = "DO-Connecting-IP"
 
 const (
-	goodKey    = "mtgban_live_abcdefghijklmnopqrstuvwxyz012345"
-	goodKey2   = "mtgban_live_zyxwvutsrqponmlkjihgfedcba098765"
-	revokedKey = "mtgban_live_revokedrevokedrevokedrevoked1234"
-	suspKey    = "mtgban_live_suspendedsuspendedsuspended12345"
-	unknownKey = "mtgban_live_00000000000000000000000000000000"
-	devKey     = "mtgban_live_devdevdevdevdevdevdevdevdevdev12"
+	goodKey         = "mtgban_live_abcdefghijklmnopqrstuvwxyz012345"
+	goodKey2        = "mtgban_live_zyxwvutsrqponmlkjihgfedcba098765"
+	revokedKey      = "mtgban_live_revokedrevokedrevokedrevoked1234"
+	suspKey         = "mtgban_live_suspendedsuspendedsuspended12345"
+	unknownKey      = "mtgban_live_00000000000000000000000000000000"
+	devKey          = "mtgban_live_devdevdevdevdevdevdevdevdevdev12"
+	historyKey      = "mtgban_live_historyhistoryhistoryhistory1234"
+	bothKey         = "mtgban_live_bothbothbothbothbothbothboth1234"
+	devHistKey      = "mtgban_live_devhistdevhistdevhistdevhist1234"
+	zeroLookbackKey = "mtgban_live_zerolookbackzerolookbackzerolo12"
 )
 
-// mustNew fills any zero of the six validated fields with config's defaults,
+// mustNew fills any zero of the eight validated fields with config's defaults,
 // so existing tests keep their old shorthand, and fails on an unexpected error.
 func mustNew(t *testing.T, opts Options, res *Resolver, meter Meter) *Handler {
 	t.Helper()
@@ -108,6 +166,12 @@ func mustNew(t *testing.T, opts Options, res *Resolver, meter Meter) *Handler {
 	}
 	if opts.PerIPBurst == 0 {
 		opts.PerIPBurst = 100
+	}
+	if opts.PerKeyHistoryRate == 0 {
+		opts.PerKeyHistoryRate = 1
+	}
+	if opts.PerKeyHistoryBurst == 0 {
+		opts.PerKeyHistoryBurst = 5
 	}
 	if opts.UpstreamTimeout == 0 {
 		opts.UpstreamTimeout = 300 * time.Second
@@ -155,20 +219,52 @@ func testHandler(t *testing.T, backend *httptest.Server, secret string) (*Handle
 			Account:      apiaccess.Account{ID: 5, Status: apiaccess.AccountActive},
 			Entitlements: []apiaccess.Entitlement{ent([]string{"magic"}, "DEV_ACCESS", "retail")},
 		},
+		apiaccess.HashKey(historyKey): {
+			Key:          apiaccess.Key{ID: 12},
+			Account:      apiaccess.Account{ID: 6, Status: apiaccess.AccountActive},
+			Entitlements: []apiaccess.Entitlement{hist([]string{"magic"}, 365)},
+		},
+		apiaccess.HashKey(bothKey): {
+			Key:     apiaccess.Key{ID: 13},
+			Account: apiaccess.Account{ID: 7, Status: apiaccess.AccountActive},
+			Entitlements: []apiaccess.Entitlement{
+				ent([]string{"magic"}, "BASE_ACCESS", "retail", "buylist"),
+				hist([]string{"magic"}, 90),
+			},
+		},
+		apiaccess.HashKey(devHistKey): {
+			Key:     apiaccess.Key{ID: 14},
+			Account: apiaccess.Account{ID: 8, Status: apiaccess.AccountActive},
+			Entitlements: []apiaccess.Entitlement{
+				ent([]string{"magic"}, "DEV_ACCESS", "retail"),
+				hist([]string{"magic"}, 365),
+			},
+		},
+		// A history row with no lookback: apiaccess would refuse writing one,
+		// so this guards the signature path against a stale or hand-edited row.
+		apiaccess.HashKey(zeroLookbackKey): {
+			Key:     apiaccess.Key{ID: 15},
+			Account: apiaccess.Account{ID: 9, Status: apiaccess.AccountActive},
+			Entitlements: []apiaccess.Entitlement{
+				{Status: apiaccess.EntitlementActive, ValidFrom: past, Games: []string{"magic"}, Modes: []string{"history"}, LookbackDays: 0},
+			},
+		},
 	}}
 	meter := &recordingMeter{}
 	h := mustNew(t, Options{
-		Games:           map[string]Upstream{"magic": {URL: u, Secret: []byte(secret)}, "pokemon": {URL: u, Secret: []byte(secret)}},
-		GatewayEmail:    "gateway@mtgban.com",
-		Link:            apisig.DefaultLink,
-		ClientIPHeader:  testClientIPHeader,
-		PerKeyRate:      1000,
-		PerKeyBurst:     1000,
-		PerIPRate:       100000,
-		PerIPBurst:      100000,
-		UpstreamTimeout: 100 * time.Millisecond,
-		SigTTL:          5 * time.Minute,
-		Now:             time.Now,
+		Games:              map[string]Upstream{"magic": {URL: u, Secret: []byte(secret)}, "pokemon": {URL: u, Secret: []byte(secret)}},
+		GatewayEmail:       "gateway@mtgban.com",
+		Link:               apisig.DefaultLink,
+		ClientIPHeader:     testClientIPHeader,
+		PerKeyRate:         1000,
+		PerKeyBurst:        1000,
+		PerKeyHistoryRate:  1000,
+		PerKeyHistoryBurst: 1000,
+		PerIPRate:          100000,
+		PerIPBurst:         100000,
+		UpstreamTimeout:    100 * time.Millisecond,
+		SigTTL:             5 * time.Minute,
+		Now:                time.Now,
 	}, NewResolver(src, time.Minute, nil), meter)
 	return h, meter
 }
@@ -364,6 +460,36 @@ func TestHandlerDevAccessScope(t *testing.T) {
 	}
 	if len(meter.rows) != 0 {
 		t.Errorf("dev access was metered: %+v", meter.rows)
+	}
+}
+
+// TestHandlerDevAccessScopeOnHistory proves the DEV_ACCESS refusal still
+// applies on a history route even though a history route needs no scope.
+func TestHandlerDevAccessScopeOnHistory(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, meter := testHandler(t, be, "s3cret")
+	rec, body := do(h, "GET", "/v2/magic/history/abc.json", devHistKey)
+	if rec.Code != 403 || body["error"] != "plan has no store scope" || body["game"] != "magic" {
+		t.Errorf("status %d body %v", rec.Code, body)
+	}
+	if len(meter.rows) != 0 {
+		t.Errorf("dev access on history was metered: %+v", meter.rows)
+	}
+}
+
+// TestHandlerHistoryZeroLookbackRefused guards the signature path against a
+// stale or hand-edited history row that carries no lookback.
+func TestHandlerHistoryZeroLookbackRefused(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, meter := testHandler(t, be, "s3cret")
+	rec, body := do(h, "GET", "/v2/magic/history/abc.json", zeroLookbackKey)
+	if rec.Code != 403 || body["error"] != "plan has no history lookback" || body["game"] != "magic" {
+		t.Errorf("status %d body %v", rec.Code, body)
+	}
+	if len(meter.rows) != 0 {
+		t.Errorf("zero lookback was metered: %+v", meter.rows)
 	}
 }
 
@@ -824,5 +950,261 @@ func TestNewRejectsZeroPerKeyBurst(t *testing.T) {
 	}
 	if h, err := New(opts, NewResolver(&fakeSource{}, time.Minute, nil), &recordingMeter{}); err == nil {
 		t.Fatalf("zero PerKeyBurst accepted a handler that would 429 every request: %+v", h)
+	}
+}
+
+func TestNewRejectsZeroPerKeyHistoryRate(t *testing.T) {
+	up := Upstream{URL: &url.URL{Scheme: "https", Host: "example.invalid"}, Secret: []byte("s")}
+	opts := Options{
+		Games:              map[string]Upstream{"magic": up},
+		GatewayEmail:       "g@x",
+		Link:               apisig.DefaultLink,
+		PerKeyRate:         10,
+		PerKeyBurst:        5,
+		PerKeyHistoryBurst: 5,
+		PerIPRate:          50,
+		PerIPBurst:         100,
+		UpstreamTimeout:    time.Second,
+		SigTTL:             time.Minute,
+	}
+	h, err := New(opts, NewResolver(&fakeSource{}, time.Minute, nil), &recordingMeter{})
+	if err == nil {
+		t.Fatalf("zero PerKeyHistoryRate accepted a handler that would never serve history: %+v", h)
+	}
+	if !strings.Contains(err.Error(), "per_key_history_requests_per_sec") {
+		t.Errorf("error %q does not name per_key_history_requests_per_sec", err)
+	}
+}
+
+func TestNewRejectsZeroPerKeyHistoryBurst(t *testing.T) {
+	up := Upstream{URL: &url.URL{Scheme: "https", Host: "example.invalid"}, Secret: []byte("s")}
+	opts := Options{
+		Games:             map[string]Upstream{"magic": up},
+		GatewayEmail:      "g@x",
+		Link:              apisig.DefaultLink,
+		PerKeyRate:        10,
+		PerKeyBurst:       5,
+		PerKeyHistoryRate: 1,
+		PerIPRate:         50,
+		PerIPBurst:        100,
+		UpstreamTimeout:   time.Second,
+		SigTTL:            time.Minute,
+	}
+	h, err := New(opts, NewResolver(&fakeSource{}, time.Minute, nil), &recordingMeter{})
+	if err == nil {
+		t.Fatalf("zero PerKeyHistoryBurst accepted a handler that would 429 every history request: %+v", h)
+	}
+	if !strings.Contains(err.Error(), "per_key_history_burst") {
+		t.Errorf("error %q does not name per_key_history_burst", err)
+	}
+}
+
+func TestHandlerHistoryHappyPath(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, meter := testHandler(t, be, "s3cret")
+	rec, body := do(h, "GET", "/v2/magic/history/abc.json?range=30", historyKey)
+	if rec.Code != 200 {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	if body["path"] != "/api/v2/history/abc.json" || body["api"] != "" || body["mode"] != "history" || body["lookback"] != "365" || body["query"] != "" {
+		t.Errorf("backend saw %v", body)
+	}
+	if rec.Header().Get("RateLimit-Limit") != "1000" {
+		t.Errorf("RateLimit-Limit %q", rec.Header().Get("RateLimit-Limit"))
+	}
+	if len(meter.rows) != 1 || meter.rows[0].Path != "/api/v2/history/abc.json" || meter.rows[0].Status != 200 {
+		t.Errorf("meter %+v", meter.rows)
+	}
+}
+
+// TestHandlerHistoryIsPrivate proves a history answer leaves as one key's
+// own read: the site's public Cache-Control turns private with max-age and
+// the validators kept, on a 304 and a passed-through error too, while a
+// price route keeps the header as sent.
+func TestHandlerHistoryIsPrivate(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, _ := testHandler(t, be, "s3cret")
+	rec, _ := do(h, "GET", "/v2/magic/history/cached.json", historyKey)
+	if rec.Code != 200 || rec.Header().Get("Cache-Control") != "private, max-age=3600" || rec.Header().Get("ETag") != `"hist1"` {
+		t.Errorf("200: %d %v", rec.Code, rec.Header())
+	}
+	rec, _ = do(h, "GET", "/v2/magic/history/notmodified.json", historyKey)
+	if rec.Code != 304 || rec.Header().Get("Cache-Control") != "private, max-age=3600" || rec.Header().Get("ETag") != `"hist1"` {
+		t.Errorf("304: %d %v", rec.Code, rec.Header())
+	}
+	// Every Cache-Control line counts, not only the first.
+	rec, _ = do(h, "GET", "/v2/magic/history/twolines.json", historyKey)
+	if got := rec.Header().Values("Cache-Control"); rec.Code != 200 || len(got) != 1 || got[0] != "private, max-age=3600, no-store" {
+		t.Errorf("two lines: %d %q", rec.Code, got)
+	}
+	rec, _ = do(h, "GET", "/v2/magic/history/bad.json", historyKey)
+	if rec.Code != 400 || rec.Header().Get("Cache-Control") != "private, no-store" {
+		t.Errorf("400: %d %q", rec.Code, rec.Header().Get("Cache-Control"))
+	}
+	// A price route keeps the backend's header as sent.
+	rec, _ = do(h, "GET", "/v2/magic/retail/cached.json", goodKey)
+	if rec.Code != 200 || rec.Header().Get("Cache-Control") != "public, max-age=60" {
+		t.Errorf("price: %d %q", rec.Code, rec.Header().Get("Cache-Control"))
+	}
+}
+
+func TestPrivateCacheControl(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                                 "private",
+		"public, max-age=60":               "private, max-age=60",
+		"PUBLIC,max-age=5":                 "private, max-age=5",
+		"public, s-maxage=300, max-age=60": "private, max-age=60",
+		"no-store":                         "private, no-store",
+		"private, max-age=10":              "private, max-age=10",
+	} {
+		if got := privateCacheControl(in); got != want {
+			t.Errorf("%q: got %q want %q", in, got, want)
+		}
+	}
+}
+
+func TestHandlerV2PricesKeepTheirBytes(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, _ := testHandler(t, be, "s3cret")
+	rec, body := do(h, "GET", "/v2/magic/retail/NEO.json", goodKey)
+	if rec.Code != 200 || body["path"] != "/api/v2/retail/NEO.json" || body["api"] != "BASE_ACCESS" || body["mode"] != "retail,buylist" || body["lookback"] != "" {
+		t.Errorf("status %d backend saw %v", rec.Code, body)
+	}
+}
+
+func TestHandlerHistoryRefusals(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, _ := testHandler(t, be, "s3cret")
+	cases := []struct {
+		name, target, key string
+		status            int
+		errContains       string
+	}{
+		{"price key lacks history", "/v2/magic/history/abc.json", goodKey, 403, "plan does not include mode history"},
+		{"history key lacks prices", "/v2/magic/retail.json", historyKey, 403, "plan has no store scope"},
+		{"history key lacks v1 prices", "/v1/magic/retail.json", historyKey, 403, "plan has no store scope"},
+		{"history key reads meta", "/v2/magic/stores.json", historyKey, 403, "plan has no store scope"},
+		{"both key reads both", "/v2/magic/history/a.json", bothKey, 200, ""},
+	}
+	for _, c := range cases {
+		rec, body := do(h, "GET", c.target, c.key)
+		if rec.Code != c.status || (c.errContains != "" && !strings.Contains(bodyString(body, "error"), c.errContains)) {
+			t.Errorf("%s: status %d body %v", c.name, rec.Code, body)
+		}
+	}
+	rec, body := do(h, "GET", "/v2/magic/retail.json", bothKey)
+	if rec.Code != 200 || body["lookback"] != "90" || body["mode"] != "retail,buylist,history" {
+		t.Errorf("both key on prices: %d %v", rec.Code, body)
+	}
+}
+
+func TestHandlerHistoryPassesUpstreamStatuses(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, meter := testHandler(t, be, "s3cret")
+	for _, c := range []struct {
+		path   string
+		status int
+		header string
+	}{
+		{"/v2/magic/history/bad.json", 400, "Cache-Control"},
+		{"/v2/magic/history/gone.json", 404, ""},
+		{"/v2/magic/history/busy.json", 503, "Retry-After"},
+	} {
+		rec, body := do(h, "GET", c.path, historyKey)
+		if rec.Code != c.status || body["error"] == nil {
+			t.Errorf("%s: status %d body %s", c.path, rec.Code, rec.Body.String())
+		}
+		if c.header != "" && rec.Header().Get(c.header) == "" {
+			t.Errorf("%s: %s header dropped", c.path, c.header)
+		}
+	}
+	if len(meter.rows) != 3 || meter.rows[0].Status != 400 || meter.rows[2].Status != 503 {
+		t.Errorf("meter %+v", meter.rows)
+	}
+	// A v2 price route keeps the 502 translation.
+	rec, body := do(h, "GET", "/v2/magic/retail/boom.json", goodKey)
+	if rec.Code != 502 || !strings.Contains(bodyString(body, "error"), "500") {
+		t.Errorf("v2 price 500: status %d body %v", rec.Code, body)
+	}
+}
+
+// TestHandlerHistoryExcludes401And403FromPassThrough proves a refused
+// signature or a missing mode on a history route never reaches the client
+// as the backend's own 401 or 403: both take the upstream-error path and
+// surface as a logged 502 instead.
+func TestHandlerHistoryExcludes401And403FromPassThrough(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, meter := testHandler(t, be, "s3cret")
+	for _, c := range []struct {
+		path        string
+		errContains string
+	}{
+		{"/v2/magic/history/unauthorized.json", "401"},
+		{"/v2/magic/history/forbidden.json", "403"},
+	} {
+		rec, body := do(h, "GET", c.path, historyKey)
+		if rec.Code != 502 || !strings.Contains(bodyString(body, "error"), c.errContains) {
+			t.Errorf("%s: status %d body %v", c.path, rec.Code, body)
+		}
+	}
+	if len(meter.rows) != 2 || meter.rows[0].Status != 502 || meter.rows[1].Status != 502 {
+		t.Errorf("meter %+v", meter.rows)
+	}
+}
+
+// v2PriceFailures are the statuses a history route passes through, here
+// answered on a v2 price route, where they stay a 502.
+var v2PriceFailures = map[string]int{
+	"/api/v2/retail/bad.json":  400,
+	"/api/v2/retail/gone.json": 404,
+	"/api/v2/retail/busy.json": 503,
+}
+
+func TestHandlerV2PriceUpstreamFailures(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, meter := testHandler(t, be, "s3cret")
+	for _, c := range []struct {
+		path   string
+		status string
+	}{
+		{"/v2/magic/retail/bad.json", "400"},
+		{"/v2/magic/retail/gone.json", "404"},
+		{"/v2/magic/retail/busy.json", "503"},
+	} {
+		rec, body := do(h, "GET", c.path, goodKey)
+		if rec.Code != 502 || !strings.Contains(bodyString(body, "error"), c.status) {
+			t.Errorf("%s: status %d body %v", c.path, rec.Code, body)
+		}
+	}
+	if len(meter.rows) != 3 || meter.rows[0].Status != 502 || meter.rows[2].Status != 502 {
+		t.Errorf("meter %+v", meter.rows)
+	}
+}
+
+func TestHandlerHistoryLimiterIsSeparate(t *testing.T) {
+	be := fakeBackend(t, "s3cret")
+	defer be.Close()
+	h, _ := testHandler(t, be, "s3cret")
+	h.historyLimiter = newLimiter(0.01, 1)
+	rec, _ := do(h, "GET", "/v2/magic/history/abc.json", bothKey)
+	// The header advertises the ceiling of a fractional rate.
+	if rec.Code != 200 || rec.Header().Get("RateLimit-Limit") != "1" {
+		t.Fatalf("first history request: %d %q", rec.Code, rec.Header().Get("RateLimit-Limit"))
+	}
+	rec, _ = do(h, "GET", "/v2/magic/history/abc.json", bothKey)
+	if rec.Code != 429 {
+		t.Errorf("second history request: %d", rec.Code)
+	}
+	// Prices on the same account still flow: they spend the other limiter.
+	rec, _ = do(h, "GET", "/v2/magic/retail.json", bothKey)
+	if rec.Code != 200 || rec.Header().Get("RateLimit-Limit") != "1000" {
+		t.Errorf("price request after history 429: %d %q", rec.Code, rec.Header().Get("RateLimit-Limit"))
 	}
 }

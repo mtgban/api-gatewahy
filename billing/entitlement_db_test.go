@@ -95,23 +95,31 @@ func TestCatalogEntitlementRoundtrip(t *testing.T) {
 		}
 		scope, modes := resolved.Scope, resolved.Modes
 		e := apiaccess.Entitlement{
-			AccountID:   acct.ID,
-			Source:      apiaccess.SourceStripe,
-			Games:       plan.Games,
-			StoreScope:  scope,
-			Modes:       modes,
-			ExternalRef: "sub_catalog_" + pkg.Key,
+			AccountID:    acct.ID,
+			Source:       apiaccess.SourceStripe,
+			Games:        plan.Games,
+			StoreScope:   scope,
+			Modes:        modes,
+			LookbackDays: pkg.LookbackDays,
+			ExternalRef:  "sub_catalog_" + pkg.Key,
 		}
 		got, err := client.UpsertStripeEntitlement(ctx, e)
 		if err != nil {
 			t.Fatalf("%s: upsert: %v", pkg.Key, err)
 		}
-		want, err := apiaccess.ValidateStoreScope(scope)
-		if err != nil {
-			t.Fatalf("%s: validate scope: %v", pkg.Key, err)
-		}
-		if got.StoreScope != want {
-			t.Errorf("%s: store_scope %q want %q", pkg.Key, got.StoreScope, want)
+		if pkg.IsHistory() {
+			// A history row stands alone, scope-less; ValidateStoreScope rejects an empty scope.
+			if got.StoreScope != "" {
+				t.Errorf("%s: store_scope %q want empty", pkg.Key, got.StoreScope)
+			}
+		} else {
+			want, err := apiaccess.ValidateStoreScope(scope)
+			if err != nil {
+				t.Fatalf("%s: validate scope: %v", pkg.Key, err)
+			}
+			if got.StoreScope != want {
+				t.Errorf("%s: store_scope %q want %q", pkg.Key, got.StoreScope, want)
+			}
 		}
 		if !slices.Equal(got.Modes, modes) {
 			t.Errorf("%s: modes %v want %v", pkg.Key, got.Modes, modes)

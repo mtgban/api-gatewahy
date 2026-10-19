@@ -118,7 +118,7 @@ func (s *Server) trial(w http.ResponseWriter, r *http.Request) {
 	}
 	until := now.AddDate(0, 0, s.trialDays())
 	e := apiaccess.Entitlement{AccountID: a.ID, Source: apiaccess.SourceTrial, Games: slices.Clone(s.Games), StoreScope: apiaccess.ScopeAll,
-		Modes: slices.Clone(apiaccess.ValidModes), Note: "patreon trial"}
+		Modes: trialModes(), Note: "patreon trial"}
 	_, err = s.Store.CreateTrial(ctx, claims.Email, until, now.Add(-trialCooldown), e)
 	if errors.Is(err, apiaccess.ErrTrialTooSoon) {
 		next := "later"
@@ -147,6 +147,17 @@ func (s *Server) trial(w http.ResponseWriter, r *http.Request) {
 		s.mergePendingReturnTo(w, r, returnTo)
 	}
 	http.Redirect(w, r, "/account?notice=trial", http.StatusFound)
+}
+
+// trialModes is every mode but history, which is a plan of its own.
+func trialModes() []string {
+	var out []string
+	for _, m := range apiaccess.ValidModes {
+		if m != apiaccess.ModeHistory {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // mergePendingReturnTo sets return_to on the pending cookie without dropping a pending plan.

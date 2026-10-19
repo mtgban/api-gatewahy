@@ -17,6 +17,19 @@ type migration struct {
 var migrations = []migration{
 	{1, "initial schema", initialSchema},
 	{2, "check statuses, sources, key kinds and email form", checkConstraints},
+	{3, "lookback_days for history rows", lookbackColumn},
+}
+
+// lookbackColumn adds the history lookback and pins it: a history row holds
+// 1 to 3650 days (MaxLookbackDays), every other row 0, so every existing row
+// is a price row at 0. The DROP lets the check rerun.
+var lookbackColumn = []string{
+	`ALTER TABLE entitlements ADD COLUMN IF NOT EXISTS lookback_days integer NOT NULL DEFAULT 0`,
+	`ALTER TABLE entitlements
+    DROP CONSTRAINT IF EXISTS entitlements_lookback_check,
+    ADD CONSTRAINT entitlements_lookback_check CHECK (
+        (modes = ARRAY['history'] AND lookback_days BETWEEN 1 AND 3650)
+        OR (NOT 'history' = ANY(modes) AND lookback_days = 0))`,
 }
 
 // migrationLockKey is the advisory lock that serializes concurrent boots.

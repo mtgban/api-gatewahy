@@ -451,12 +451,8 @@ func (m *MemStore) prepare(e apiaccess.Entitlement) (apiaccess.Entitlement, erro
 
 // canonical canonicalizes and validates e as the client does before any SQL runs.
 func (m *MemStore) canonical(e apiaccess.Entitlement) (apiaccess.Entitlement, error) {
-	scope, err := apiaccess.ValidateStoreScope(e.StoreScope)
+	e, err := apiaccess.CanonicalEntitlement(e)
 	if err != nil {
-		return apiaccess.Entitlement{}, err
-	}
-	e.StoreScope = scope
-	if e.Modes, err = apiaccess.ValidateModes(e.Modes); err != nil {
 		return apiaccess.Entitlement{}, err
 	}
 	if e.Status == "" {
@@ -545,6 +541,7 @@ func (m *MemStore) UpsertStripeEntitlement(_ context.Context, e apiaccess.Entitl
 	have.AccountID, have.Source, have.Games = e.AccountID, e.Source, e.Games
 	have.StoreScope, have.Modes, have.Addons = e.StoreScope, e.Modes, e.Addons
 	have.Status, have.ValidUntil, have.Note = e.Status, e.ValidUntil, e.Note
+	have.LookbackDays = e.LookbackDays
 	return copyEntitlement(have), nil
 }
 

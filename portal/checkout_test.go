@@ -347,6 +347,33 @@ func TestCheckoutChangeConfirm(t *testing.T) {
 	}
 }
 
+// Switching between a price plan and history says what stops.
+func TestCheckoutChangeConfirmNamesTheSwitch(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, _ := ts.signIn(t, "ann@example.com")
+	f := ts.withStripe()
+	a, _ := ts.store.GetAccountByEmail(context.Background(), "ann@example.com")
+	_, _ = ts.store.AddEntitlement(context.Background(), entitlementFor(a.ID, apiaccess.SourceStripe, "BASE_ACCESS"))
+	f.AddSub(t, "sub_1", "cus_test", stripe.SubscriptionStatusActive,
+		billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID), ts.now.AddDate(0, 1, 0))
+	const changeQuery = "/checkout?change=1&package=history&games=magic&return_to=https%3A%2F%2Fmtgban.com%2Fapi-plans"
+	rec := ts.do("GET", changeQuery, "", ck)
+	body := rec.Body.String()
+	if rec.Code != 200 || !strings.Contains(body, "History replaces your price plan") {
+		t.Errorf("history change confirm lacks the switch note: %d\n%s", rec.Code, body)
+	}
+
+	// and the reverse, an account on history asking for all_stores
+	f.AddSub(t, "sub_1", "cus_test", stripe.SubscriptionStatusActive,
+		billing.Plan{Package: "history", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID), ts.now.AddDate(0, 1, 0))
+	const reverseQuery = "/checkout?change=1&package=all_stores&games=magic&return_to=https%3A%2F%2Fmtgban.com%2Fapi-plans"
+	rec = ts.do("GET", reverseQuery, "", ck)
+	body = rec.Body.String()
+	if rec.Code != 200 || !strings.Contains(body, "Your price plan replaces history") {
+		t.Errorf("price change confirm lacks the switch note: %d\n%s", rec.Code, body)
+	}
+}
+
 // startInviteCheckout signs in, creates a quarterly invite, and posts a checkout with it.
 func startInviteCheckout(t *testing.T, ts *testServer) (token string, ck, pending *http.Cookie) {
 	t.Helper()

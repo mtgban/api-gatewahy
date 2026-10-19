@@ -195,6 +195,31 @@ func TestReconcileWritesTheRow(t *testing.T) {
 	}
 }
 
+// TestReconcileWritesHistoryLookback checks a history subscription writes a
+// scope-less row carrying the package's lookback.
+func TestReconcileWritesHistoryLookback(t *testing.T) {
+	f := seededFake(t)
+	s := newStore(t)
+	var alerts []string
+	r := newTestReconciler(f, s, &alerts)
+	plan, err := billing.Plan{Package: "history", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.AddSub(t, "sub_h", "cus_x", stripe.SubscriptionStatusActive, plan.Metadata(testAccount.ID), periodEnd,
+		billingtest.Item{Key: "history_monthly", Qty: 1})
+	if err := r.Subscription(context.Background(), "sub_h"); err != nil {
+		t.Fatal(err)
+	}
+	e, ok := rows(t, s)["sub_h"]
+	if !ok {
+		t.Fatal("no row written")
+	}
+	if e.StoreScope != "" || !slices.Equal(e.Modes, []string{"history"}) || e.LookbackDays != 365 || len(alerts) != 0 {
+		t.Errorf("row %+v alerts %v", e, alerts)
+	}
+}
+
 func TestReconcileStatusesAndGrace(t *testing.T) {
 	f := seededFake(t)
 	s := newStore(t)
