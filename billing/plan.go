@@ -25,6 +25,8 @@ type Plan struct {
 	Interval string
 	Games    []string
 	Stores   []string
+	// ModeAddons are the keys of the add-ons bought once, each granting a mode.
+	ModeAddons []string
 }
 
 // LineItem is one Stripe price and quantity a plan bills.
@@ -57,8 +59,10 @@ func invalid(format string, args ...any) error {
 
 // Normalize canonicalizes the plan against the catalog: package and interval
 // exist, at least one game is named, games are lowercase and sorted, stores
-// are lowercase family keys, sorted, and only on an explicit package, and
-// every implied add-on applies to the package. Resolve checks the keys exist.
+// are lowercase family keys, sorted, and only on an explicit package, mode
+// add-ons are lowercase, sorted, and each one a catalog add-on granting a
+// mode the gateway serves, and every add-on applies to the package. Resolve
+// checks the keys exist.
 func (p Plan) Normalize(cat *apiproductlist.ProductList) (Plan, error) {
 	pkg, ok := cat.Package(p.Package)
 	if !ok {
@@ -74,13 +78,28 @@ func (p Plan) Normalize(cat *apiproductlist.ProductList) (Plan, error) {
 	slices.Sort(games)
 	stores := dedupe(p.Stores, strings.ToLower)
 	slices.Sort(stores)
-	out := Plan{Package: pkg.Key, Interval: p.Interval, Games: games, Stores: stores}
+	modeAddons := dedupe(p.ModeAddons, strings.ToLower)
+	slices.Sort(modeAddons)
+	out := Plan{Package: pkg.Key, Interval: p.Interval, Games: games, Stores: stores, ModeAddons: modeAddons}
 	if pkg.StoreScope == apiproductlist.StoreScopeExplicit {
 		if len(stores) == 0 {
 			return Plan{}, invalid("pick at least one store")
 		}
 	} else if len(stores) > 0 {
 		return Plan{}, invalid("package %s does not take a store list", pkg.Key)
+	}
+	for _, k := range modeAddons {
+		addon, ok := cat.Addon(k)
+		switch {
+		case !ok:
+			return Plan{}, invalid("unknown add-on %q", k)
+		case addon.GrantsMode == "":
+			return Plan{}, invalid("add-on %s cannot be picked on its own", k)
+		case !slices.Contains(apiaccess.ValidModes, addon.GrantsMode):
+			return Plan{}, invalid("add-on %s grants mode %s, which the gateway does not serve", k, addon.GrantsMode)
+		case !addon.Applies(pkg.Key):
+			return Plan{}, invalid("package %s cannot add %s", pkg.Key, k)
+		}
 	}
 	for _, li := range out.LineItems(cat) {
 		if li.Key == pkg.Key {
@@ -112,7 +131,8 @@ func (p Plan) Validate(cat *apiproductlist.ProductList, knownGames []string, hav
 }
 
 // LineItems derives what a normalized plan bills: the package, extra stores
-// past the included count, and games past the included count.
+// past the included count, games past the included count, and each mode
+// add-on once.
 func (p Plan) LineItems(cat *apiproductlist.ProductList) []LineItem {
 	pkg, _ := cat.Package(p.Package)
 	items := []LineItem{{Key: pkg.Key, LookupKey: apiproductlist.LookupKey(pkg.Key, p.Interval), Quantity: 1, Monthly: pkg.Monthly}}
@@ -123,6 +143,9 @@ func (p Plan) LineItems(cat *apiproductlist.ProductList) []LineItem {
 	}
 	if n := int64(len(p.Games) - cat.IncludedGames); n > 0 {
 		items = append(items, p.addonItem(cat, AddonExtraGame, n))
+	}
+	for _, k := range p.ModeAddons {
+		items = append(items, p.addonItem(cat, k, 1))
 	}
 	return items
 }
@@ -153,6 +176,7 @@ func (p Plan) Metadata(accountID int64) map[string]string {
 		"interval":   p.Interval,
 		"games":      strings.Join(p.Games, ","),
 		"stores":     strings.Join(p.Stores, ","),
+		"addons":     strings.Join(p.ModeAddons, ","),
 		"account_id": strconv.FormatInt(accountID, 10),
 	}
 }
@@ -161,22 +185,42 @@ func (p Plan) Metadata(accountID int64) map[string]string {
 var ErrNoPlan = errors.New("billing: subscription metadata carries no plan")
 
 // PlanFromMetadata reads back what Metadata wrote. It does not normalize.
+// Metadata without addons, written before mode add-ons, reads as none.
 func PlanFromMetadata(m map[string]string) (Plan, int64, error) {
 	if m["package"] == "" || m["interval"] == "" {
 		return Plan{}, 0, ErrNoPlan
 	}
 	accountID, _ := strconv.ParseInt(m["account_id"], 10, 64)
 	return Plan{
-		Package:  m["package"],
-		Interval: m["interval"],
-		Games:    apiaccess.SplitList(m["games"]),
-		Stores:   apiaccess.SplitList(m["stores"]),
+		Package:    m["package"],
+		Interval:   m["interval"],
+		Games:      apiaccess.SplitList(m["games"]),
+		Stores:     apiaccess.SplitList(m["stores"]),
+		ModeAddons: apiaccess.SplitList(m["addons"]),
 	}, accountID, nil
 }
 
-// equal reports whether p and q name the same package, interval, games, and stores.
+// equal reports whether p and q name the same package, interval, games, stores, and mode add-ons.
 func (p Plan) equal(q Plan) bool {
-	return p.Package == q.Package && p.Interval == q.Interval && slices.Equal(p.Games, q.Games) && slices.Equal(p.Stores, q.Stores)
+	return p.Package == q.Package && p.Interval == q.Interval && slices.Equal(p.Games, q.Games) && slices.Equal(p.Stores, q.Stores) &&
+		slices.Equal(p.ModeAddons, q.ModeAddons)
+}
+
+// planModes is the package's modes plus each mode add-on's, in apiaccess.ValidModes order.
+func planModes(cat *apiproductlist.ProductList, pkg apiproductlist.Package, modeAddons []string) []string {
+	granted := slices.Clone(pkg.Modes)
+	for _, k := range modeAddons {
+		if addon, ok := cat.Addon(k); ok && addon.GrantsMode != "" {
+			granted = append(granted, addon.GrantsMode)
+		}
+	}
+	var out []string
+	for _, m := range apiaccess.ValidModes {
+		if slices.Contains(granted, m) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // Addons lists the add-ons with quantities for the entitlement's addons column.
@@ -197,6 +241,11 @@ func (p Plan) Describe(cat *apiproductlist.ProductList) string {
 	fmt.Fprintf(&b, "%s, games %s", pkg.Name, strings.Join(p.Games, ","))
 	if pkg.StoreScope == apiproductlist.StoreScopeExplicit {
 		fmt.Fprintf(&b, ", stores %s", strings.Join(p.Stores, ","))
+	}
+	for _, k := range p.ModeAddons {
+		if addon, ok := cat.Addon(k); ok {
+			fmt.Fprintf(&b, ", with %s", strings.ToLower(addon.Name))
+		}
 	}
 	fmt.Fprintf(&b, ", %s", p.Interval)
 	if total, err := p.Total(cat); err == nil {

@@ -797,3 +797,36 @@ func TestReconcileAllAlertsWhenTheDuplicateCheckFails(t *testing.T) {
 		t.Errorf("result %+v", res)
 	}
 }
+
+// TestReconcileWritesNewspaperMode checks a subscription with the newspaper
+// add-on writes the mode and the add-on into its row, and that a missing
+// item alerts while the metadata still wins.
+func TestReconcileWritesNewspaperMode(t *testing.T) {
+	f := seededFake(t)
+	s := newStore(t)
+	var alerts []string
+	r := newTestReconciler(f, s, &alerts)
+	plan, err := billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}, ModeAddons: []string{"newspaper"}}.Normalize(testCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.AddSub(t, "sub_n", "cus_x", stripe.SubscriptionStatusActive, plan.Metadata(testAccount.ID), periodEnd,
+		billingtest.Item{Key: "all_data_monthly", Qty: 1}, billingtest.Item{Key: "newspaper_monthly", Qty: 1})
+	if err := r.Subscription(context.Background(), "sub_n"); err != nil {
+		t.Fatal(err)
+	}
+	e := rows(t, s)["sub_n"]
+	if e.StoreScope != "ALL_ACCESS" || !slices.Equal(e.Modes, []string{"retail", "buylist", "sealed", "newspaper"}) ||
+		!slices.Equal(e.Addons, []string{"newspaper:1"}) || !strings.Contains(e.Note, "with newspaper reports") || len(alerts) != 0 {
+		t.Errorf("row %+v alerts %v", e, alerts)
+	}
+
+	f.AddSub(t, "sub_m", "cus_x", stripe.SubscriptionStatusActive, plan.Metadata(testAccount.ID), periodEnd,
+		billingtest.Item{Key: "all_data_monthly", Qty: 1})
+	if err := r.Subscription(context.Background(), "sub_m"); err != nil {
+		t.Fatal(err)
+	}
+	if e := rows(t, s)["sub_m"]; !slices.Contains(e.Modes, "newspaper") || len(alerts) != 1 || !strings.Contains(alerts[0], "newspaper_monthly") {
+		t.Errorf("missing item: row %+v alerts %v", e, alerts)
+	}
+}

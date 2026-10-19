@@ -322,3 +322,29 @@ func TestPortalLink(t *testing.T) {
 		t.Errorf("portal sessions %+v, want public_url then -return", api.Portals)
 	}
 }
+
+// TestPlanChangeCarriesModeAddons: plan change keeps a bought add-on from the
+// metadata, and drops it onto a package it does not apply to.
+func TestPlanChangeCarriesModeAddons(t *testing.T) {
+	for _, c := range []struct{ name, pkg, want string }{
+		{"kept onto a price package", "all_data", "newspaper"},
+		{"dropped onto history", "history", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			api, store, account := billingFixture(t, "")
+			api.AddSub(t, "sub_1", "cus_1", stripe.SubscriptionStatusActive, map[string]string{
+				"package": "all_stores", "interval": "monthly", "games": "magic", "stores": "", "addons": "newspaper", "account_id": "1",
+			}, monthAhead(), billingtest.Item{Key: apiproductlist.LookupKey("all_stores", "monthly"), Qty: 1},
+				billingtest.Item{Key: apiproductlist.LookupKey("newspaper", "monthly"), Qty: 1})
+			stripeRow(t, store, account.ID, "sub_1")
+			code, _, errb := billingCmd(t, billingTestDeps(api, store), "plan", "change", "-email", "x@example.com", "-package", c.pkg)
+			if code != 0 {
+				t.Fatalf("exit %d, stderr %q", code, errb)
+			}
+			ups := api.Updates["sub_1"]
+			if got := ups[len(ups)-1].Metadata["addons"]; got != c.want {
+				t.Errorf("addons metadata = %q, want %q", got, c.want)
+			}
+		})
+	}
+}

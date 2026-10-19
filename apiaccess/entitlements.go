@@ -22,11 +22,14 @@ const (
 // ModeHistory is the price-history mode; a row granting it grants nothing else.
 const ModeHistory = "history"
 
+// ModeNewspaper is the newspaper reports mode, granted beside a price row's modes.
+const ModeNewspaper = "newspaper"
+
 // MaxLookbackDays caps a history lookback at ten years, the archive's depth.
 const MaxLookbackDays = 3650
 
 // ValidModes in canonical order.
-var ValidModes = []string{"retail", "buylist", "sealed", ModeHistory}
+var ValidModes = []string{"retail", "buylist", "sealed", ModeNewspaper, ModeHistory}
 
 // EntitlementStatus says whether a row can still grant access.
 type EntitlementStatus string

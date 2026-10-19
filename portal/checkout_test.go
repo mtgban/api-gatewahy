@@ -374,6 +374,64 @@ func TestCheckoutChangeConfirmNamesTheSwitch(t *testing.T) {
 	}
 }
 
+// Moving to a package that cannot take a held add-on says the add-on ends.
+func TestCheckoutChangeConfirmNamesTheEndingAddon(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, _ := ts.signIn(t, "ann@example.com")
+	f := ts.withStripe()
+	a, _ := ts.store.GetAccountByEmail(context.Background(), "ann@example.com")
+	e := entitlementFor(a.ID, apiaccess.SourceStripe, "ALL_ACCESS")
+	e.Addons = []string{"newspaper:1"}
+	_, _ = ts.store.AddEntitlement(context.Background(), e)
+	const historyQuery = "/checkout?change=1&package=history&games=magic&return_to=https%3A%2F%2Fmtgban.com%2Fapi-plans"
+	addon, _ := ts.Catalog.Addon("newspaper")
+	ending := "Your " + addon.Name + " add-on ends with the change."
+	for _, c := range []struct {
+		name   string
+		addons []string
+		want   bool
+	}{
+		{"holds newspaper", []string{"newspaper"}, true},
+		{"holds none", nil, false},
+	} {
+		f.AddSub(t, "sub_1", "cus_test", stripe.SubscriptionStatusActive,
+			billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}, ModeAddons: c.addons}.Metadata(a.ID), ts.now.AddDate(0, 1, 0))
+		rec := ts.do("GET", historyQuery, "", ck)
+		body := rec.Body.String()
+		if rec.Code != 200 || !strings.Contains(body, "History replaces your price plan") || strings.Contains(body, ending) != c.want {
+			t.Errorf("%s: %d, want the add-on named %v\n%s", c.name, rec.Code, c.want, body)
+		}
+	}
+}
+
+// A change whose URL leaves out a held add-on the package could keep names
+// it too, so a bookmarked or unforwarded link drops nothing in silence; the
+// URL that carries it shows the row and no note.
+func TestCheckoutChangeConfirmNamesTheLeftOutAddon(t *testing.T) {
+	ts := newTestServer(t)
+	_, ck, _ := ts.signIn(t, "ann@example.com")
+	f := ts.withStripe()
+	a, _ := ts.store.GetAccountByEmail(context.Background(), "ann@example.com")
+	e := entitlementFor(a.ID, apiaccess.SourceStripe, "ALL_ACCESS")
+	e.Addons = []string{"newspaper:1"}
+	_, _ = ts.store.AddEntitlement(context.Background(), e)
+	f.AddSub(t, "sub_1", "cus_test", stripe.SubscriptionStatusActive,
+		billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}, ModeAddons: []string{"newspaper"}}.Metadata(a.ID), ts.now.AddDate(0, 1, 0))
+	addon, _ := ts.Catalog.Addon("newspaper")
+	leftOut := "Your " + addon.Name + " add-on is left out of this selection and ends with the change."
+	const changeQuery = "/checkout?change=1&package=all_stores&games=magic&return_to=https%3A%2F%2Fmtgban.com%2Fapi-plans"
+	rec := ts.do("GET", changeQuery, "", ck)
+	body := rec.Body.String()
+	if rec.Code != 200 || !strings.Contains(body, leftOut) || strings.Contains(body, "<th>Add-ons</th>") {
+		t.Errorf("without addons: %d, want the note and no row\n%s", rec.Code, body)
+	}
+	rec = ts.do("GET", changeQuery+"&addons=newspaper", "", ck)
+	body = rec.Body.String()
+	if rec.Code != 200 || strings.Contains(body, "add-on") || !strings.Contains(body, "<th>Add-ons</th>") {
+		t.Errorf("with addons: %d, want the row and no note\n%s", rec.Code, body)
+	}
+}
+
 // startInviteCheckout signs in, creates a quarterly invite, and posts a checkout with it.
 func startInviteCheckout(t *testing.T, ts *testServer) (token string, ck, pending *http.Cookie) {
 	t.Helper()
@@ -462,5 +520,71 @@ func TestCheckoutWithTheSiteDownAsksToTryAgain(t *testing.T) {
 	got, _ := ts.store.GetAccountByEmail(context.Background(), "ann@example.com")
 	if len(f.Sessions) != 0 || len(ents) != 0 || got.StripeCustomerID != "" {
 		t.Errorf("checkouts %d entitlements %d customer %q", len(f.Sessions), len(ents), got.StripeCustomerID)
+	}
+}
+
+// newspaperQuery is the configurator's all_data plan with the newspaper add-on.
+const newspaperQuery = "/checkout?package=all_data&interval=monthly&games=magic&addons=newspaper&return_to=https%3A%2F%2Fmtgban.com%2Fapi-plans"
+
+// newspaperTotal is what newspaperQuery's plan bills a month, as the confirm page writes it.
+func newspaperTotal(t *testing.T, ts *testServer) string {
+	t.Helper()
+	pkg, _ := ts.Catalog.Package("all_data")
+	addon, ok := ts.Catalog.Addon("newspaper")
+	if !ok {
+		t.Fatal("no newspaper add-on in the catalog")
+	}
+	return billing.Dollars(pkg.Monthly + addon.Monthly)
+}
+
+func TestCheckoutConfirmShowsTheModeAddon(t *testing.T) {
+	ts := newTestServer(t)
+	ts.withStripe()
+	_, ck, _ := ts.signIn(t, "ann@example.com")
+	rec := ts.do("GET", newspaperQuery, "", ck)
+	body := rec.Body.String()
+	addon, _ := ts.Catalog.Addon("newspaper")
+	row := "<tr><th>Add-ons</th><td>Newspaper reports (" + billing.Dollars(addon.Monthly) + "/month)</td></tr>"
+	if rec.Code != 200 || !strings.Contains(body, row) || !strings.Contains(body, newspaperTotal(t, ts)+" every month") ||
+		!strings.Contains(body, `name="addons" value="newspaper"`) {
+		t.Fatalf("confirm: %d %s", rec.Code, body)
+	}
+	pv, err := ts.Sessions.Open(cookieNamed(rec, session.PendingName).Value, session.PurposePending)
+	if err != nil || pv.Get("addons") != "newspaper" {
+		t.Errorf("pending %v %v", pv, err)
+	}
+	// A plan without the add-on shows no row.
+	if body := ts.do("GET", "/checkout?package=all_data&interval=monthly&games=magic", "", ck).Body.String(); strings.Contains(body, "Add-ons") {
+		t.Errorf("row without the add-on: %s", body)
+	}
+	// An add-on the package cannot carry is refused in words.
+	rec = ts.do("GET", "/checkout?package=all_data&interval=monthly&games=magic&addons=extra_game", "", ck)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "cannot be picked on its own") {
+		t.Errorf("counted add-on: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// The add-on survives sign-in in the pending cookie and reaches Stripe.
+func TestCheckoutCarriesTheModeAddonThroughSignIn(t *testing.T) {
+	ts := newTestServer(t)
+	f := ts.withStripe()
+	rec := ts.do("GET", newspaperQuery, "")
+	pending := cookieNamed(rec, session.PendingName)
+	if rec.Code != 200 || pending == nil {
+		t.Fatalf("signed out: %d", rec.Code)
+	}
+	_, ck, csrf := ts.signIn(t, "ann@example.com")
+	rec = ts.do("GET", "/checkout", "", ck, pending)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "Newspaper reports") || !strings.Contains(rec.Body.String(), newspaperTotal(t, ts)) {
+		t.Fatalf("after sign-in: %d %s", rec.Code, rec.Body.String())
+	}
+	form := url.Values{"csrf": {csrf}, "package": {"all_data"}, "interval": {"monthly"}, "games": {"magic"}, "stores": {""}, "addons": {"newspaper"}, "return_to": {"https://mtgban.com/api-plans"}}
+	rec = ts.do("POST", "/checkout", form.Encode(), ck)
+	if rec.Code != 303 || len(f.Sessions) != 1 || f.Sessions[0].SubscriptionData.Metadata["addons"] != "newspaper" || len(f.Sessions[0].LineItems) != 2 {
+		t.Fatalf("post: %d sessions %d", rec.Code, len(f.Sessions))
+	}
+	pv, err := ts.Sessions.Open(cookieNamed(rec, session.PendingName).Value, session.PurposePending)
+	if err != nil || pv.Get("addons") != "newspaper" {
+		t.Errorf("pending after post %v %v", pv, err)
 	}
 }

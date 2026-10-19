@@ -469,3 +469,32 @@ func TestPlanChangeThatStripeTookButReconcileMissed(t *testing.T) {
 		t.Errorf("account page: %s", body)
 	}
 }
+
+// A subscriber with the newspaper add-on gets a change link that keeps it.
+func TestChangeLinkKeepsTheModeAddon(t *testing.T) {
+	ts := newTestServer(t)
+	ts.withStripe()
+	a, ck, _ := ts.signIn(t, "news@example.com")
+	ctx := context.Background()
+	_, _ = ts.store.SetStripeCustomerID(ctx, a.ID, "cus_news")
+	if _, err := ts.store.AddEntitlement(ctx, apiaccess.Entitlement{AccountID: a.ID, Source: apiaccess.SourceStripe, Games: []string{"magic", "pokemon"}, StoreScope: "ALL_ACCESS",
+		Modes: []string{"retail", "buylist", "sealed", "newspaper"}, Addons: []string{"extra_game:1", "newspaper:1"}, Status: apiaccess.EntitlementActive, ExternalRef: "sub_news"}); err != nil {
+		t.Fatal(err)
+	}
+	body := ts.do("GET", "/account", "", ck).Body.String()
+	changeURL := regexp.MustCompile(`href="([^"]+)">Change plan</a>`).FindStringSubmatch(body)
+	if changeURL == nil {
+		t.Fatalf("no change link in %s", body)
+	}
+	u, _ := url.Parse(strings.ReplaceAll(changeURL[1], "&amp;", "&"))
+	if u.Query().Get("package") != "all_data" || u.Query().Get("addons") != "newspaper" || u.Query().Get("games") != "magic,pokemon" {
+		t.Errorf("change link %q", changeURL[1])
+	}
+	if !strings.Contains(body, "retail, buylist, sealed, newspaper") {
+		t.Error("the Modes column does not show newspaper")
+	}
+	// A plan without a mode add-on leaves addons out of the link.
+	if q := ts.prefillQuery(ts.newSiteLookup(ctx), apiaccess.Entitlement{Games: []string{"magic"}, StoreScope: "ALL_ACCESS", Addons: []string{"extra_game:1"}}); q.Has("addons") {
+		t.Errorf("prefill without a mode add-on %v", q)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -25,6 +26,7 @@ type confirmData struct {
 	Package    string
 	Games      string
 	Stores     string
+	Addons     string
 	Interval   string
 	Total      string
 	Change     bool
@@ -111,17 +113,17 @@ func (s *Server) checkoutGet(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	var currentPackage string
+	var current billing.Plan
 	if change {
 		var status int
 		var msg string
-		resolved.Plan, currentPackage, status, msg = s.currentIntervalFor(r, sess, plan)
+		resolved.Plan, current, status, msg = s.currentIntervalFor(r, sess, plan)
 		if msg != "" {
 			s.fail(w, r, status, msg)
 			return
 		}
 	}
-	s.renderConfirm(w, r, sess, confirmOptions{Status: http.StatusOK, Resolved: resolved, Invite: invite, ReturnTo: returnTo, Change: change, HasPlan: hasPlan, CurrentPackage: currentPackage})
+	s.renderConfirm(w, r, sess, confirmOptions{Status: http.StatusOK, Resolved: resolved, Invite: invite, ReturnTo: returnTo, Change: change, HasPlan: hasPlan, Current: current})
 }
 
 // hasActiveStripePlan reports whether the account holds a live Stripe plan, past_due included.
@@ -152,34 +154,34 @@ func (s *Server) subscriptionFor(ctx context.Context, accountID int64, email str
 }
 
 // currentIntervalFor pins a plan change to the subscription's own interval,
-// returning the current plan's package, and the status and message to show
-// on failure.
-func (s *Server) currentIntervalFor(r *http.Request, sess session.Session, plan billing.Plan) (billing.Plan, string, int, string) {
+// returning the subscription's current plan, and the status and message to
+// show on failure.
+func (s *Server) currentIntervalFor(r *http.Request, sess session.Session, plan billing.Plan) (billing.Plan, billing.Plan, int, string) {
 	if s.Stripe == nil {
-		return plan, "", http.StatusServiceUnavailable, billingOffMsg
+		return plan, billing.Plan{}, http.StatusServiceUnavailable, billingOffMsg
 	}
 	subID, status, msg := s.subscriptionFor(r.Context(), sess.AccountID, sess.Email)
 	if msg != "" {
-		return plan, "", status, msg
+		return plan, billing.Plan{}, status, msg
 	}
 	sub, err := s.Stripe.GetSubscription(r.Context(), subID)
 	if err != nil {
 		s.logf("current interval %s: stripe: %v", sess.Email, err)
-		return plan, "", http.StatusBadGateway, tryAgainMsg
+		return plan, billing.Plan{}, http.StatusBadGateway, tryAgainMsg
 	}
 	current, _, err := billing.PlanFromMetadata(sub.Metadata)
 	if err != nil {
 		// Metadata we wrote ourselves at checkout being unreadable is our bug, not Stripe's.
 		s.logf("current interval %s: metadata: %v", sess.Email, err)
-		return plan, "", http.StatusInternalServerError, tryAgainMsg
+		return plan, billing.Plan{}, http.StatusInternalServerError, tryAgainMsg
 	}
 	plan.Interval = current.Interval
 	// The interval was authorized when the subscription began, so an invite is not needed again.
 	plan, err = plan.Validate(s.Catalog, s.Games, true)
 	if err != nil {
-		return plan, current.Package, http.StatusBadRequest, checkoutError(err)
+		return plan, current, http.StatusBadRequest, checkoutError(err)
 	}
-	return plan, current.Package, 0, ""
+	return plan, current, 0, ""
 }
 
 // confirmOptions is renderConfirm's payload, beside the request and session.
@@ -191,8 +193,8 @@ type confirmOptions struct {
 	Change   bool
 	ErrMsg   string
 	HasPlan  bool
-	// CurrentPackage is the subscription's package before the change, when known.
-	CurrentPackage string
+	// Current is the subscription's plan before the change, when known.
+	Current billing.Plan
 }
 
 // renderConfirm draws the plan in words with the POST button.
@@ -213,6 +215,13 @@ func (s *Server) renderConfirm(w http.ResponseWriter, r *http.Request, sess sess
 			d.Stores = strings.Join(opt.Resolved.StoreNames(), ", ")
 		}
 	}
+	var addons []string
+	for _, k := range plan.ModeAddons {
+		if addon, ok := s.Catalog.Addon(k); ok {
+			addons = append(addons, addon.Name+" ("+billing.Dollars(addon.Monthly)+"/month)")
+		}
+	}
+	d.Addons = strings.Join(addons, ", ")
 	if iv.Count == 1 {
 		d.Interval = "every month"
 	} else {
@@ -221,13 +230,25 @@ func (s *Server) renderConfirm(w http.ResponseWriter, r *http.Request, sess sess
 	if opt.Change {
 		d.Action = "/account/plan"
 	}
-	if opt.Change && opt.CurrentPackage != "" {
-		cur, _ := s.Catalog.Package(opt.CurrentPackage)
+	if opt.Change && opt.Current.Package != "" {
+		cur, _ := s.Catalog.Package(opt.Current.Package)
 		switch {
 		case pkg.IsHistory() && !cur.IsHistory():
 			d.Switch = "History replaces your price plan: retail, buylist and sealed stop at the change."
 		case !pkg.IsHistory() && cur.IsHistory():
 			d.Switch = "Your price plan replaces history, which stops at the change."
+		}
+		// A held add-on the plan leaves out ends with the change, whether the package cannot take it or the selection left it out.
+		for _, k := range opt.Current.ModeAddons {
+			addon, ok := s.Catalog.Addon(k)
+			if !ok || addon.GrantsMode == "" || slices.Contains(plan.ModeAddons, k) {
+				continue
+			}
+			note := " Your " + addon.Name + " add-on ends with the change."
+			if addon.Applies(pkg.Key) {
+				note = " Your " + addon.Name + " add-on is left out of this selection and ends with the change."
+			}
+			d.Switch = strings.TrimSpace(d.Switch + note)
 		}
 	}
 	d.Fields = planValues(plan)

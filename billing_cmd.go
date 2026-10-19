@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
@@ -276,6 +277,11 @@ func planChange(ctx context.Context, d billingDeps, args []string, stdout, stder
 		// The old plan's stores only carry over onto a package that still picks stores.
 		want.Stores = nil
 	}
+	// A bought add-on only carries over onto a package it applies to.
+	want.ModeAddons = slices.DeleteFunc(want.ModeAddons, func(k string) bool {
+		addon, ok := d.cat.Addon(k)
+		return !ok || !addon.Applies(*pkg)
+	})
 	rec := newReconciler(d.store, d.api, d.cfg, d.cat, d.stores, stderrAlert(stderr))
 	newPlan, err := billing.ChangePlan(ctx, d.api, d.cat, d.stores, d.cfg.GameNames(), a, subID, want, rec.Subscription)
 	if err != nil {

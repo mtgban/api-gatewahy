@@ -252,3 +252,48 @@ func TestCanonicalEntitlementHistory(t *testing.T) {
 		}
 	}
 }
+
+// A newspaper row is an ordinary price row: it keeps a scope and takes no lookback.
+func TestCanonicalEntitlementNewspaper(t *testing.T) {
+	base := Entitlement{AccountID: 1, Source: SourceManual, Games: []string{"magic"}}
+	n := base
+	n.Modes = []string{"newspaper", "retail"}
+	n.StoreScope = "TCG, CK"
+	got, err := CanonicalEntitlement(n)
+	if err != nil || got.StoreScope != "CK,TCG" || !slices.Equal(got.Modes, []string{"retail", "newspaper"}) || got.IsHistory() {
+		t.Errorf("newspaper row: %+v %v", got, err)
+	}
+	for _, c := range []struct {
+		name string
+		e    func() Entitlement
+		want string
+	}{
+		{"newspaper without scope", func() Entitlement { x := base; x.Modes = []string{"newspaper"}; return x }, "store scope is empty"},
+		{"newspaper with lookback", func() Entitlement { x := n; x.LookbackDays = 30; return x }, "lookback_days applies to a history row only"},
+		{"newspaper beside history", func() Entitlement {
+			x := base
+			x.Modes = []string{"newspaper", "history"}
+			x.LookbackDays = 30
+			return x
+		}, "history is a mode of its own"},
+	} {
+		if _, err := CanonicalEntitlement(c.e()); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err %v, want containing %q", c.name, err, c.want)
+		}
+	}
+}
+
+// A manual newspaper grant needs stores like any price grant.
+func TestManualGrantNewspaper(t *testing.T) {
+	games := []string{"magic"}
+	now := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	e, err := ManualGrant(ManualGrantInput{AccountID: 1, Games: games, Stores: "CK", Modes: []string{"newspaper", "retail"}}, games, now)
+	if err != nil || e.StoreScope != "CK" || !slices.Equal(e.Modes, []string{"retail", "newspaper"}) || e.LookbackDays != 0 {
+		t.Errorf("newspaper grant: %+v %v", e, err)
+	}
+	_, err = ManualGrant(ManualGrantInput{AccountID: 1, Games: games, Modes: []string{"newspaper"}}, games, now)
+	var ge *GrantError
+	if !errors.As(err, &ge) || ge.Field != "stores" || !strings.Contains(ge.Msg, "store scope is empty") {
+		t.Errorf("newspaper without stores: %v", err)
+	}
+}
