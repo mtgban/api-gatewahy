@@ -488,8 +488,8 @@ gofmt -s -l .                                # must print nothing
 go test ./...                                # DB and Stripe tests skip
 APIACCESS_TEST_DSN='postgres://u:p@localhost:5432/scratch?sslmode=disable' \
   go test -race -p 1 ./...                   # what CI runs
-go run github.com/mgechev/revive@v1.13.0 -set_exit_status -config .revive.toml ./...
-go run honnef.co/go/tools/cmd/staticcheck@2026.2.1 ./...
+go run github.com/mgechev/revive@v1.17.1 -set_exit_status -config .revive.toml ./...
+go run honnef.co/go/tools/cmd/staticcheck@2026.2.2 ./...
 go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 ```
 
@@ -520,7 +520,7 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 ### 9.3 CI and deploy
 
 - `.github/workflows/ci.yml` on every PR and push to master: `build`
-  (gofmt -s, vet, revive v1.13.0 with `.revive.toml`, staticcheck 2026.2.1,
+  (gofmt -s, vet, revive v1.17.1 with `.revive.toml`, staticcheck 2026.2.2,
   govulncheck, build, `go test -race -p 1` against `postgres:16`).
 - `.github/dependabot.yml`: weekly gomod, GitHub Actions and Docker.
 - Deploy: a `v*` tag (or a manual run) of `.github/workflows/deploy.yml`

@@ -237,14 +237,12 @@ func TestRecordDuringCloseCountsEveryCall(t *testing.T) {
 	total := goroutines * perGoroutine
 
 	var wg sync.WaitGroup
-	wg.Add(goroutines)
 	for g := 0; g < goroutines; g++ {
-		go func(id int) {
-			defer wg.Done()
+		wg.Go(func() {
 			for i := 0; i < perGoroutine; i++ {
-				m.Record(apiaccess.Usage{KeyID: int64(id), Ts: now})
+				m.Record(apiaccess.Usage{KeyID: int64(g), Ts: now})
 			}
-		}(g)
+		})
 	}
 
 	closeDone := make(chan struct{})
