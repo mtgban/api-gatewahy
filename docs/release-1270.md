@@ -21,13 +21,17 @@ re-pin in step 3 waits for the site's second PR.
    archived flat add-on Price would be judged by the stepped amounts, not
    what it bills. Migrate those subscriptions, or change
    `prorationBehavior` to read the items' own Prices, first.
-3. Merge the one-line PR re-pinning the gateway to that site commit and
-   build it. From that build, run `api-gatewahy catalog seed` in test mode,
-   then in live mode; only then deploy the gateway. Between the seed and
-   the deploy the running gateway quotes the old, higher amounts against
-   the new Prices, which only over-quotes. Deploying first would
-   under-quote the confirm page, and a plan change in that window would
-   add items at flat Prices the seed then archives for good. Expected
+3. Merge the PR re-pinning the gateway to that site commit, which moves
+   the pin and the tests that hold the old amounts, and build it. From
+   that build, run `api-gatewahy catalog seed` in test mode, then in live
+   mode; only then deploy the gateway. Between the seed and the deploy the
+   running gateway quotes the old amounts against the new Prices: packages
+   and extra stores read higher than the bill, but one or two extra games
+   read lower (a flat $150 each against $250 then $100 billed), so deploy
+   right after the seed. Deploying first would misquote the confirm page
+   (packages and extra stores lower, extra games higher) and let a plan
+   change in the window add items at flat Prices the seed then archives
+   for good. Expected
    seed results:
    - ten replacement Prices and ten archived (three packages and two
      counted add-ons at two intervals);
@@ -42,5 +46,9 @@ re-pin in step 3 waits for the site's second PR.
 4. Tag the site deploy, then set `api_gateway.newspaper_on_sale` on the
    sites.
 
-Between steps 3 and 4 the page quotes the old, higher amounts while Stripe
-bills the new ones, which only over-quotes, never the reverse.
+Between steps 3 and 4 the page quotes the old amounts while Stripe bills
+the new ones. Packages and extra stores read higher on the page than the
+bill, but one or two extra games read lower: a flat $150 each on the page
+against $250 for the first and $100 for the second billed. So the seed
+and the site tag happen in one sitting, minutes apart, and the gateway's
+confirm page, which quotes the bill, is what the buyer agrees to.
