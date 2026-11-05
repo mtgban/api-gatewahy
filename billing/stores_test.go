@@ -79,10 +79,20 @@ func TestResolveSiteDownIsNotValidation(t *testing.T) {
 func TestResolvePresetSkipsTheSites(t *testing.T) {
 	lister := billingtest.NewFakeStores()
 	lister.Fail = errors.New("not called")
+	p, _ := billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
+	r, err := p.Resolve(context.Background(), testCatalog, lister)
+	if err != nil || r.Scope != "BASE_ACCESS" || len(r.Modes) != 2 || lister.TotalCalls() != 0 || len(r.StoreNames()) != 0 {
+		t.Errorf("preset %+v %v calls %d", r, err, lister.TotalCalls())
+	}
+}
+
+func TestResolveAllDataGrantsEveryMode(t *testing.T) {
+	lister := billingtest.NewFakeStores()
+	lister.Fail = errors.New("not called")
 	p, _ := billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
 	r, err := p.Resolve(context.Background(), testCatalog, lister)
-	if err != nil || r.Scope != "ALL_ACCESS" || len(r.Modes) != 3 || lister.TotalCalls() != 0 || len(r.StoreNames()) != 0 {
-		t.Errorf("preset %+v %v calls %d", r, err, lister.TotalCalls())
+	if err != nil || r.Scope != "ALL_ACCESS" || !slices.Equal(r.Modes, []string{"retail", "buylist", "sealed", "newspaper"}) {
+		t.Errorf("all_data %+v %v", r, err)
 	}
 }
 
