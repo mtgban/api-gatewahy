@@ -6,7 +6,7 @@ toolchain go1.26.10
 
 require (
 	github.com/lib/pq v1.12.3
-	github.com/mtgban/mtgban-website v0.0.0-20261105175937-8d306ae02b3b
+	github.com/mtgban/mtgban-website v0.0.0-20261105192424-7a34e35dc0c5
 	github.com/mtgban/simplecloud v0.1.1
 	github.com/stripe/stripe-go/v84 v84.4.1
 	golang.org/x/sync v0.24.0
