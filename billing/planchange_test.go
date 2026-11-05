@@ -134,6 +134,32 @@ func TestChangePlanKeepsReplacedPrice(t *testing.T) {
 	}
 }
 
+// TestChangePlanKeepsAnArchivedFlatAddon covers an extra store bought flat
+// before the add-on became stepped: the item keeps its price.
+func TestChangePlanKeepsAnArchivedFlatAddon(t *testing.T) {
+	f := seededFake(t)
+	ctx := context.Background()
+	current, _ := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom", "starcitygames"}}.Normalize(testCatalog)
+	f.AddSub(t, "sub_1", "cus_7", stripe.SubscriptionStatusActive, current.Metadata(testAccount.ID), periodEnd, billingtest.Item{Key: "starter_monthly", Qty: 1}, billingtest.Item{Key: "extra_store_monthly", Qty: 1})
+	flat := f.PriceByKey("extra_store_monthly")
+	if _, err := billing.Seed(ctx, f, steppedCatalog); err != nil {
+		t.Fatal(err)
+	}
+	if flat.Active || flat.LookupKey != "" {
+		t.Fatalf("flat price not archived: %+v", flat)
+	}
+
+	rc := &recorder{}
+	if _, err := billing.ChangePlan(ctx, f, steppedCatalog, billingtest.NewFakeStores(), testGames, testAccount, "sub_1",
+		billing.Plan{Package: "starter", Games: []string{"magic"}, Stores: []string{"cardkingdom", "starcitygames", "coolstuffinc"}}, rc.reconcile); err != nil {
+		t.Fatal(err)
+	}
+	want := []itemChange{{id: "si_sub_1_1", qty: 2}}
+	if got := changes(f.Updates["sub_1"][0]); !slices.Equal(got, want) {
+		t.Errorf("items %+v want %+v", got, want)
+	}
+}
+
 func TestChangePlanInvoicesUpgradeImmediately(t *testing.T) {
 	f := seededFake(t)
 	ctx := context.Background()

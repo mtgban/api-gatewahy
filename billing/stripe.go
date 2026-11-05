@@ -129,6 +129,7 @@ func listPrices(ctx context.Context, list func(*stripe.PriceListParams) stripe.S
 	for _, active := range []bool{true, false} {
 		params := &stripe.PriceListParams{Active: stripe.Bool(active)}
 		params.Limit = stripe.Int64(listLimit)
+		params.AddExpand("data.tiers")
 		for p, err := range list(params) {
 			if err != nil {
 				return nil, err

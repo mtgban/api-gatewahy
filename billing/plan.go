@@ -34,7 +34,8 @@ type LineItem struct {
 	Key       string
 	LookupKey string
 	Quantity  int64
-	Monthly   int64
+	// Monthly is the repeat amount, for display; Total bills through Addon.Amount.
+	Monthly int64
 }
 
 // ErrInviteRequired means the plan names an interval only an invite unlocks.
@@ -159,12 +160,20 @@ func (p Plan) addonItem(cat *apiproductlist.ProductList, key string, qty int64) 
 func (p Plan) Total(cat *apiproductlist.ProductList) (int64, error) {
 	iv, _ := cat.Interval(p.Interval)
 	var total int64
+	pkg, _ := cat.Package(p.Package)
 	for _, li := range p.LineItems(cat) {
-		amount, err := iv.Amount(li.Monthly)
+		var amount int64
+		var err error
+		if li.Key == pkg.Key {
+			amount, err = iv.Amount(pkg.Monthly)
+		} else {
+			addon, _ := cat.Addon(li.Key)
+			amount, err = addon.Amount(iv, li.Quantity)
+		}
 		if err != nil {
 			return 0, err
 		}
-		total += amount * li.Quantity
+		total += amount
 	}
 	return total, nil
 }

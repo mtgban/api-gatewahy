@@ -294,6 +294,14 @@ func (f *FakeAPI) CreatePrice(_ context.Context, p *stripe.PriceCreateParams) (*
 		UnitAmount: stripe.Int64Value(p.UnitAmount), Currency: stripe.Currency(stripe.StringValue(p.Currency)),
 		Product: &stripe.Product{ID: stripe.StringValue(p.Product)},
 	}
+	if stripe.StringValue(p.BillingScheme) == string(stripe.PriceBillingSchemeTiered) {
+		price.BillingScheme = stripe.PriceBillingSchemeTiered
+		price.TiersMode = stripe.PriceTiersMode(stripe.StringValue(p.TiersMode))
+		for _, t := range p.Tiers {
+			// The open tier reads back with UpTo 0, as Stripe's null does.
+			price.Tiers = append(price.Tiers, &stripe.PriceTier{UpTo: stripe.Int64Value(t.UpTo), UnitAmount: stripe.Int64Value(t.UnitAmount)})
+		}
+	}
 	if p.Recurring != nil {
 		price.Recurring = &stripe.PriceRecurring{
 			Interval:      stripe.PriceRecurringInterval(stripe.StringValue(p.Recurring.Interval)),

@@ -75,41 +75,78 @@ func TestLineItemsAndTotal(t *testing.T) {
 		plan  billing.Plan
 		items []billing.LineItem
 		total int64
+		cat   *apiproductlist.ProductList
 	}{
 		{
 			"starter one store",
 			billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}},
 			[]billing.LineItem{{"starter", "starter_monthly", 1, 20000}},
 			20000,
+			nil,
 		},
 		{
 			"starter three stores two games",
 			billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom", "starcitygames", "coolstuffinc"}},
 			[]billing.LineItem{{"starter", "starter_monthly", 1, 20000}, {"extra_store", "extra_store_monthly", 2, 15000}, {"extra_game", "extra_game_monthly", 1, 15000}},
 			65000,
+			nil,
 		},
 		{
 			"all stores",
 			billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}},
 			[]billing.LineItem{{"all_stores", "all_stores_monthly", 1, 50000}},
 			50000,
+			nil,
 		},
 		{
 			"all data quarterly two extra games",
 			billing.Plan{Package: "all_data", Interval: "quarterly", Games: []string{"magic", "pokemon", "lorcana"}},
 			[]billing.LineItem{{"all_data", "all_data_quarterly", 1, 80000}, {"extra_game", "extra_game_quarterly", 2, 15000}},
 			330000,
+			nil,
+		},
+		{
+			"stepped starter one extra store",
+			billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom", "starcitygames"}},
+			[]billing.LineItem{{"starter", "starter_monthly", 1, packageMonthly("starter")}, {"extra_store", "extra_store_monthly", 1, 5000}},
+			packageMonthly("starter") + 15000,
+			steppedCatalog,
+		},
+		{
+			"stepped starter three extra stores",
+			billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom", "starcitygames", "coolstuffinc", "trollandtoad"}},
+			[]billing.LineItem{{"starter", "starter_monthly", 1, packageMonthly("starter")}, {"extra_store", "extra_store_monthly", 3, 5000}},
+			packageMonthly("starter") + 15000 + 2*5000,
+			steppedCatalog,
+		},
+		{
+			"stepped all data quarterly two extra games",
+			billing.Plan{Package: "all_data", Interval: "quarterly", Games: []string{"magic", "pokemon", "lorcana"}},
+			[]billing.LineItem{{"all_data", "all_data_quarterly", 1, packageMonthly("all_data")}, {"extra_game", "extra_game_quarterly", 2, 10000}},
+			3*packageMonthly("all_data") + 3*25000 + 3*10000,
+			steppedCatalog,
+		},
+		{
+			"stepped starter one store one game",
+			billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}},
+			[]billing.LineItem{{"starter", "starter_monthly", 1, packageMonthly("starter")}},
+			packageMonthly("starter"),
+			steppedCatalog,
 		},
 	}
 	for _, c := range cases {
-		p, err := c.plan.Normalize(testCatalog)
+		cat := c.cat
+		if cat == nil {
+			cat = testCatalog
+		}
+		p, err := c.plan.Normalize(cat)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
-		if got := p.LineItems(testCatalog); !slices.Equal(got, c.items) {
+		if got := p.LineItems(cat); !slices.Equal(got, c.items) {
 			t.Errorf("%s: items %+v want %+v", c.name, got, c.items)
 		}
-		if got, err := p.Total(testCatalog); err != nil || got != c.total {
+		if got, err := p.Total(cat); err != nil || got != c.total {
 			t.Errorf("%s: total %d %v want %d", c.name, got, err, c.total)
 		}
 	}
@@ -180,6 +217,10 @@ func TestDescribeAndDollars(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("describe %q lacks %q", got, want)
 		}
+	}
+	s, _ := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom", "starcitygames", "coolstuffinc"}}.Normalize(steppedCatalog)
+	if got, want := s.Describe(steppedCatalog), ", monthly, "+billing.Dollars(packageMonthly("starter")+15000+5000)+" per period"; !strings.HasSuffix(got, want) {
+		t.Errorf("stepped describe %q lacks %q", got, want)
 	}
 	if billing.Dollars(5) != "$0.05" || billing.Dollars(123456) != "$1,234.56" || billing.Dollars(20000) != "$200" {
 		t.Errorf("dollars %q %q %q", billing.Dollars(5), billing.Dollars(123456), billing.Dollars(20000))

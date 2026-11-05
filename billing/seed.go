@@ -29,6 +29,7 @@ type priceSpec struct {
 	lookupKey string
 	productID string
 	amount    int64
+	first     int64 // the first unit's amount on a stepped add-on, 0 when flat
 	interval  apiproductlist.Interval
 	metadata  map[string]string
 }
@@ -64,8 +65,14 @@ func priceSpecs(cat *apiproductlist.ProductList) ([]priceSpec, error) {
 			if err != nil {
 				return nil, err
 			}
+			var first int64
+			if a.Stepped() {
+				if first, err = iv.Amount(a.FirstMonthly); err != nil {
+					return nil, err
+				}
+			}
 			out = append(out, priceSpec{
-				lookupKey: apiproductlist.LookupKey(a.Key, iv.Key), productID: ProductID(a.Key), amount: amount, interval: iv,
+				lookupKey: apiproductlist.LookupKey(a.Key, iv.Key), productID: ProductID(a.Key), amount: amount, first: first, interval: iv,
 				metadata: map[string]string{"kind": "addon", "addon": a.Key, "applies_to": strings.Join(a.AppliesTo, ","), "interval_key": iv.Key},
 			})
 		}
@@ -75,9 +82,19 @@ func priceSpecs(cat *apiproductlist.ProductList) ([]priceSpec, error) {
 
 // matches reports whether p already is this spec, amount and shape included.
 func (s priceSpec) matches(p *stripe.Price, currency string) bool {
-	return p.UnitAmount == s.amount && string(p.Currency) == currency && p.Recurring != nil &&
+	return s.amountMatches(p) && string(p.Currency) == currency && p.Recurring != nil &&
 		string(p.Recurring.Interval) == s.interval.Interval && p.Recurring.IntervalCount == s.interval.Count &&
 		p.Product != nil && p.Product.ID == s.productID
+}
+
+// amountMatches compares the unit amount of a flat spec, or the two graduated tiers of a stepped one.
+func (s priceSpec) amountMatches(p *stripe.Price) bool {
+	if s.first == 0 {
+		return p.BillingScheme != stripe.PriceBillingSchemeTiered && p.UnitAmount == s.amount
+	}
+	// Stripe returns the open tier's up_to as null, which decodes to 0.
+	return p.BillingScheme == stripe.PriceBillingSchemeTiered && p.TiersMode == stripe.PriceTiersModeGraduated && len(p.Tiers) == 2 &&
+		p.Tiers[0].UpTo == 1 && p.Tiers[0].UnitAmount == s.first && p.Tiers[1].UpTo == 0 && p.Tiers[1].UnitAmount == s.amount
 }
 
 // metadataMatches reports whether have carries every key in want with the
@@ -94,16 +111,25 @@ func metadataMatches(have, want map[string]string) bool {
 
 func (s priceSpec) createParams(currency string, transfer bool) *stripe.PriceCreateParams {
 	params := &stripe.PriceCreateParams{
-		Currency:   stripe.String(currency),
-		UnitAmount: stripe.Int64(s.amount),
-		Product:    stripe.String(s.productID),
-		LookupKey:  stripe.String(s.lookupKey),
-		Nickname:   stripe.String(s.lookupKey),
-		Metadata:   s.metadata,
+		Currency:  stripe.String(currency),
+		Product:   stripe.String(s.productID),
+		LookupKey: stripe.String(s.lookupKey),
+		Nickname:  stripe.String(s.lookupKey),
+		Metadata:  s.metadata,
 		Recurring: &stripe.PriceCreateRecurringParams{
 			Interval:      stripe.String(s.interval.Interval),
 			IntervalCount: stripe.Int64(s.interval.Count),
 		},
+	}
+	if s.first == 0 {
+		params.UnitAmount = stripe.Int64(s.amount)
+	} else {
+		params.BillingScheme = stripe.String(string(stripe.PriceBillingSchemeTiered))
+		params.TiersMode = stripe.String(string(stripe.PriceTiersModeGraduated))
+		params.Tiers = []*stripe.PriceCreateTierParams{
+			{UpTo: stripe.Int64(1), UnitAmount: stripe.Int64(s.first)},
+			{UpToInf: stripe.Bool(true), UnitAmount: stripe.Int64(s.amount)},
+		}
 	}
 	if transfer {
 		params.TransferLookupKey = stripe.Bool(true)
