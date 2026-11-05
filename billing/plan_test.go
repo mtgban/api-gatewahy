@@ -80,29 +80,29 @@ func TestLineItemsAndTotal(t *testing.T) {
 		{
 			"starter one store",
 			billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}},
-			[]billing.LineItem{{"starter", "starter_monthly", 1, 20000}},
-			20000,
+			[]billing.LineItem{{"starter", "starter_monthly", 1, 19900}},
+			19900,
 			nil,
 		},
 		{
 			"starter three stores two games",
 			billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom", "starcitygames", "coolstuffinc"}},
-			[]billing.LineItem{{"starter", "starter_monthly", 1, 20000}, {"extra_store", "extra_store_monthly", 2, 15000}, {"extra_game", "extra_game_monthly", 1, 15000}},
-			65000,
+			[]billing.LineItem{{"starter", "starter_monthly", 1, 19900}, {"extra_store", "extra_store_monthly", 2, 5000}, {"extra_game", "extra_game_monthly", 1, 10000}},
+			19900 + 15000 + 5000 + 25000,
 			nil,
 		},
 		{
 			"all stores",
 			billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}},
-			[]billing.LineItem{{"all_stores", "all_stores_monthly", 1, 50000}},
-			50000,
+			[]billing.LineItem{{"all_stores", "all_stores_monthly", 1, 49900}},
+			49900,
 			nil,
 		},
 		{
 			"all data quarterly two extra games",
 			billing.Plan{Package: "all_data", Interval: "quarterly", Games: []string{"magic", "pokemon", "lorcana"}},
-			[]billing.LineItem{{"all_data", "all_data_quarterly", 1, 80000}, {"extra_game", "extra_game_quarterly", 2, 15000}},
-			330000,
+			[]billing.LineItem{{"all_data", "all_data_quarterly", 1, 79900}, {"extra_game", "extra_game_quarterly", 2, 10000}},
+			3 * (79900 + 25000 + 10000),
 			nil,
 		},
 		{
@@ -213,7 +213,7 @@ func TestNormalizeErrorsAreValidationErrors(t *testing.T) {
 func TestDescribeAndDollars(t *testing.T) {
 	p, _ := billing.Plan{Package: "starter", Interval: "quarterly", Games: []string{"magic", "pokemon"}, Stores: []string{"cardkingdom"}}.Normalize(testCatalog)
 	got := p.Describe(testCatalog)
-	for _, want := range []string{"À la carte", "magic,pokemon", "stores cardkingdom", "quarterly", "$1,050"} {
+	for _, want := range []string{"À la carte", "magic,pokemon", "stores cardkingdom", "quarterly", "$1,347"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("describe %q lacks %q", got, want)
 		}
@@ -315,11 +315,14 @@ func TestLineItemsWithModeAddon(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = []billing.LineItem{{"starter", "starter_quarterly", 1, 20000}, {"extra_store", "extra_store_quarterly", 1, 15000}, {"extra_game", "extra_game_quarterly", 1, 15000}, {"newspaper", "newspaper_quarterly", 1, news}}
+	store, _ := testCatalog.Addon("extra_store")
+	game, _ := testCatalog.Addon("extra_game")
+	want = []billing.LineItem{{"starter", "starter_quarterly", 1, starter.Monthly}, {"extra_store", "extra_store_quarterly", 1, store.Monthly}, {"extra_game", "extra_game_quarterly", 1, game.Monthly}, {"newspaper", "newspaper_quarterly", 1, news}}
 	if got := p.LineItems(testCatalog); !slices.Equal(got, want) {
 		t.Errorf("starter items %+v want %+v", got, want)
 	}
-	if got, err := p.Total(testCatalog); err != nil || got != (50000+news)*3 {
+	// One of each counted add-on bills its first-unit amount.
+	if got, err := p.Total(testCatalog); err != nil || got != (starter.Monthly+store.FirstMonthly+game.FirstMonthly+news)*3 {
 		t.Errorf("starter total %d %v", got, err)
 	}
 	if got := p.Addons(testCatalog); !slices.Equal(got, []string{"extra_store:1", "extra_game:1", "newspaper:1"}) {

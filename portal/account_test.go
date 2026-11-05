@@ -116,7 +116,7 @@ func TestPortalAndPlanChange(t *testing.T) {
 	}
 
 	rec = ts.do("GET", "/checkout?change=1&package=starter&games=magic&stores=cardkingdom,starcitygames&return_to=https%3A%2F%2Fmtgban.com%2Fapi-plans", "", ck)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `action="/account/plan"`) || !strings.Contains(rec.Body.String(), "$350") {
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `action="/account/plan"`) || !strings.Contains(rec.Body.String(), "$349") {
 		t.Fatalf("change confirm: %d %s", rec.Code, rec.Body.String())
 	}
 	reconciled := ""

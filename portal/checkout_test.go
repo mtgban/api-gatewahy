@@ -55,7 +55,7 @@ func TestCheckoutConfirmAndPost(t *testing.T) {
 	_, ck, csrf := ts.signIn(t, "ann@example.com")
 	rec := ts.do("GET", starterQuery, "", ck)
 	body := rec.Body.String()
-	if rec.Code != 200 || !strings.Contains(body, "$500") || !strings.Contains(body, "Card Kingdom") || !strings.Contains(body, "pokemon") || !strings.Contains(body, `name="csrf" value="`+csrf+`"`) {
+	if rec.Code != 200 || !strings.Contains(body, "$599") || !strings.Contains(body, "Card Kingdom") || !strings.Contains(body, "pokemon") || !strings.Contains(body, `name="csrf" value="`+csrf+`"`) {
 		t.Fatalf("confirm: %d %s", rec.Code, body)
 	}
 	form := url.Values{"csrf": {csrf}, "package": {"starter"}, "interval": {"monthly"}, "games": {"magic,pokemon"}, "stores": {"cardkingdom,starcitygames"}, "return_to": {"https://pokemon.mtgban.com/api-plans"}}
@@ -77,7 +77,7 @@ func TestCheckoutConfirmAndPost(t *testing.T) {
 	}
 	f.Fail["CreateCheckoutSession"] = errors.New("stripe down")
 	rec = ts.do("POST", "/checkout", form.Encode(), ck)
-	if rec.Code != 502 || !strings.Contains(rec.Body.String(), "Could not start checkout") || !strings.Contains(rec.Body.String(), "$500") {
+	if rec.Code != 502 || !strings.Contains(rec.Body.String(), "Could not start checkout") || !strings.Contains(rec.Body.String(), "$599") {
 		t.Errorf("failure: %d %s", rec.Code, rec.Body.String())
 	}
 }
@@ -342,7 +342,7 @@ func TestCheckoutChangeConfirm(t *testing.T) {
 		billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}}.Metadata(a.ID), ts.now.AddDate(0, 1, 0))
 	rec := ts.do("GET", changeQuery, "", ck)
 	body := rec.Body.String()
-	if rec.Code != 200 || !strings.Contains(body, `action="/account/plan"`) || !strings.Contains(body, "(unchanged)") || !strings.Contains(body, "$800") {
+	if rec.Code != 200 || !strings.Contains(body, `action="/account/plan"`) || !strings.Contains(body, "(unchanged)") || !strings.Contains(body, "$799") {
 		t.Fatalf("change confirm: %d %s", rec.Code, body)
 	}
 }

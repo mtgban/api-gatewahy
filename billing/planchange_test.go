@@ -137,9 +137,9 @@ func TestChangePlanKeepsReplacedPrice(t *testing.T) {
 // TestChangePlanKeepsAnArchivedFlatAddon covers an extra store bought flat
 // before the add-on became stepped: the item keeps its price.
 func TestChangePlanKeepsAnArchivedFlatAddon(t *testing.T) {
-	f := seededFake(t)
+	f := billingtest.SeededFakeAPI(t, flatCatalog)
 	ctx := context.Background()
-	current, _ := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom", "starcitygames"}}.Normalize(testCatalog)
+	current, _ := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom", "starcitygames"}}.Normalize(flatCatalog)
 	f.AddSub(t, "sub_1", "cus_7", stripe.SubscriptionStatusActive, current.Metadata(testAccount.ID), periodEnd, billingtest.Item{Key: "starter_monthly", Qty: 1}, billingtest.Item{Key: "extra_store_monthly", Qty: 1})
 	flat := f.PriceByKey("extra_store_monthly")
 	if _, err := billing.Seed(ctx, f, steppedCatalog); err != nil {
@@ -229,14 +229,15 @@ func TestChangePlanFailsUpgradeWithoutReconciling(t *testing.T) {
 }
 
 // TestChangePlanProratesEqualTotal covers a switch between packages that
-// bill the same amount: starter plus two extra stores costs what all_stores
-// costs outright, so this is neither an upgrade nor a downgrade.
+// bill the same amount: starter with an extra store, an extra game and the
+// newspaper costs what all_data costs outright, so this is neither an
+// upgrade nor a downgrade.
 func TestChangePlanProratesEqualTotal(t *testing.T) {
 	f := seededFake(t)
 	ctx := context.Background()
-	current, _ := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"},
-		Stores: []string{"cardkingdom", "coolstuffinc", "starcitygames"}}.Normalize(testCatalog)
-	next, _ := billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
+	current, _ := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic", "pokemon"},
+		Stores: []string{"cardkingdom", "starcitygames"}, ModeAddons: []string{"newspaper"}}.Normalize(testCatalog)
+	next, _ := billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
 	currentTotal, err := current.Total(testCatalog)
 	if err != nil {
 		t.Fatal(err)
@@ -250,7 +251,8 @@ func TestChangePlanProratesEqualTotal(t *testing.T) {
 		t.Fatalf("fixture totals differ: current %d, next %d", currentTotal, nextTotal)
 	}
 	f.AddSub(t, "sub_1", "cus_7", stripe.SubscriptionStatusActive, current.Metadata(testAccount.ID), periodEnd,
-		billingtest.Item{Key: "starter_monthly", Qty: 1}, billingtest.Item{Key: "extra_store_monthly", Qty: 2})
+		billingtest.Item{Key: "starter_monthly", Qty: 1}, billingtest.Item{Key: "extra_store_monthly", Qty: 1},
+		billingtest.Item{Key: "extra_game_monthly", Qty: 1}, billingtest.Item{Key: "newspaper_monthly", Qty: 1})
 	rc := &recorder{}
 
 	if _, err := billing.ChangePlan(ctx, f, testCatalog, billingtest.NewFakeStores(), testGames, testAccount, "sub_1",
