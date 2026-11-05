@@ -415,7 +415,13 @@ failure injection and call counters. Tests that hit real Stripe need
   `create_prorations`, reconcile.
 - **Seed** (`Seed`): fixed product ids `mtgban_api_<key>`; prices matched by
   lookup key; a changed amount creates a replacement price, transfers the
-  lookup key and archives the old one. Idempotent.
+  lookup key and archives the old one. An add-on with a catalog
+  `first_monthly` is stepped: one graduated tiered price per interval, tier
+  one `up_to` 1 at the first amount for the period, tier two open at the
+  repeat amount. Prices are listed with `data.tiers` expanded, and `matches`
+  treats a changed step, or a flat price under a stepped spec or the reverse,
+  as drift, replaced and archived like a changed amount. `Plan.Total`
+  charges each add-on through the catalog's `Addon.Amount`. Idempotent.
 
 ### 6.5 Who calls what
 

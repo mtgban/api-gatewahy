@@ -179,13 +179,18 @@ These need `STRIPE_SECRET_KEY` in the environment.
 add-on and one Price per item and interval, looked up by `lookup_key`
 (`starter_monthly`, `extra_game_quarterly`, ...). Rerunning is a no-op unless
 the catalog changed; a changed amount creates a replacement Price and archives
-the old one. Run it in test mode and again in live mode. Run it with a
-catalog that lists the `history` package only after this version is
-deployed: a history subscription's webhook cannot reconcile before the
-gateway accepts scope-less history rows. The same holds for a catalog that
-lists the `newspaper` add-on: seed it only once the gateway that knows the
-`newspaper` mode is deployed, or a bought add-on reconciles into a mode the
-gateway refuses.
+the old one. An add-on whose catalog `first_monthly` is set is stepped: it is
+seeded as one graduated tiered Price per interval, tier one `up_to` 1 at the
+first amount for the period and tier two open at the repeat amount. The seed
+reads the price list with `data.tiers` expanded so it can see the tiers, and a
+changed step, or a flat Price under a stepped spec or the reverse, is drift
+like a changed amount: replaced and archived. Run it in test mode and again in
+live mode. Run it with a catalog that lists the `history` package only after
+this version is deployed: a history subscription's webhook cannot reconcile
+before the gateway accepts scope-less history rows. The same holds for a
+catalog that lists the `newspaper` add-on: seed it only once the gateway that
+knows the `newspaper` mode is deployed, or a bought add-on reconciles into a
+mode the gateway refuses.
 
 `checkout link -email -package [-games] [-stores] [-interval] [-invite]`:
 prints a hosted Checkout URL for the account. `-games` defaults to `magic`
@@ -488,7 +493,9 @@ event's ledger row, and Stripe retries.
 
 Dashboard setup, once per mode (test, then live):
 
-1. `api-gatewahy catalog seed` to create the products and prices.
+1. `api-gatewahy catalog seed` to create the products and prices. For the
+   order of this release's pin, seed and site deploy, see
+   [docs/release-1270.md](docs/release-1270.md).
 2. Developers, Webhooks: add an endpoint for
    `https://api.mtgban.com/stripe/webhook` subscribed to
    `checkout.session.completed`, `customer.subscription.created`,
