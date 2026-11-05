@@ -28,7 +28,7 @@ func TestSeedCreatesEverythingOnce(t *testing.T) {
 		t.Errorf("fake holds %d products %d prices", len(f.Products), len(f.Prices))
 	}
 	p := f.PriceByKey("starter_quarterly")
-	if p == nil || p.UnitAmount != 60000 || p.Product.ID != billing.ProductID("starter") || p.Recurring.Interval != "month" || p.Recurring.IntervalCount != 3 ||
+	if p == nil || p.UnitAmount != 59700 || p.Product.ID != billing.ProductID("starter") || p.Recurring.Interval != "month" || p.Recurring.IntervalCount != 3 ||
 		p.Currency != "usd" || p.Metadata["package"] != "starter" || p.Metadata["store_scope"] != "explicit" || p.Metadata["modes"] != "retail,buylist" || p.Metadata["interval_key"] != "quarterly" {
 		t.Errorf("starter_quarterly %+v", p)
 	}
@@ -37,7 +37,7 @@ func TestSeedCreatesEverythingOnce(t *testing.T) {
 	if !ok {
 		t.Fatal("no extra_game addon in testCatalog")
 	}
-	if a == nil || a.UnitAmount != 15000 || a.Metadata["kind"] != "addon" || a.Metadata["addon"] != "extra_game" || a.Metadata["applies_to"] != strings.Join(addon.AppliesTo, ",") {
+	if a == nil || a.BillingScheme != stripe.PriceBillingSchemeTiered || a.UnitAmount != 0 || !slices.Equal(tiersOf(a), []tier{{1, 25000}, {0, 10000}}) || a.Metadata["kind"] != "addon" || a.Metadata["addon"] != "extra_game" || a.Metadata["applies_to"] != strings.Join(addon.AppliesTo, ",") {
 		t.Errorf("extra_game_monthly %+v", a)
 	}
 	if prod := f.Products[billing.ProductID("all_data")]; prod == nil || prod.Name != "All Access" || prod.Metadata["kind"] != "package" {
@@ -193,7 +193,7 @@ func TestSeedLeavesAMatchingTieredPriceAlone(t *testing.T) {
 func TestSeedReplacesAFlatPriceWhenTheAddonBecomesStepped(t *testing.T) {
 	f := billingtest.NewFakeAPI()
 	ctx := context.Background()
-	if _, err := billing.Seed(ctx, f, testCatalog); err != nil {
+	if _, err := billing.Seed(ctx, f, flatCatalog); err != nil {
 		t.Fatal(err)
 	}
 	old := f.PriceByKey("extra_store_monthly")
@@ -215,7 +215,7 @@ func TestSeedReplacesAFlatPriceWhenTheAddonBecomesStepped(t *testing.T) {
 	}
 
 	// And back: a flat spec does not accept the tiered price.
-	res, err = billing.Seed(ctx, f, testCatalog)
+	res, err = billing.Seed(ctx, f, flatCatalog)
 	if err != nil {
 		t.Fatal(err)
 	}
