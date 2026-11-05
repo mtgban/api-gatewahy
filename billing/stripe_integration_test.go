@@ -52,6 +52,30 @@ func TestSeedIsIdempotentAgainstStripe(t *testing.T) {
 			t.Errorf("no active price for %s", key)
 		}
 	}
+
+	if _, err := billing.Seed(ctx, api, steppedCatalog); err != nil {
+		t.Fatal(err)
+	}
+	prices, err := api.ListPrices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stepped int
+	for _, p := range prices {
+		if p.LookupKey != "extra_store_monthly" || !p.Active {
+			continue
+		}
+		stepped++
+		if p.TiersMode != stripe.PriceTiersModeGraduated || len(p.Tiers) != 2 {
+			t.Errorf("extra_store_monthly tiers %+v", p.Tiers)
+		}
+	}
+	if stepped != 1 {
+		t.Errorf("%d active extra_store_monthly prices, want 1", stepped)
+	}
+	if again, err := billing.Seed(ctx, api, steppedCatalog); err != nil || len(again.Created)+len(again.Updated)+len(again.Archived) != 0 {
+		t.Errorf("stepped reseed changed things: %+v %v", again, err)
+	}
 }
 
 func TestCheckoutSessionPerPackageAgainstStripe(t *testing.T) {
@@ -89,5 +113,28 @@ func TestCheckoutSessionPerPackageAgainstStripe(t *testing.T) {
 		if !strings.HasPrefix(sess.URL, "https://checkout.stripe.com/") {
 			t.Errorf("%s: sess.URL %q", pkg.Key, sess.URL)
 		}
+	}
+
+	if _, err := billing.Seed(ctx, api, steppedCatalog); err != nil {
+		t.Fatal(err)
+	}
+	co.Catalog = steppedCatalog
+	plan := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom", "starcitygames", "coolstuffinc"}}
+	sess, err := co.Create(ctx, billing.Request{Account: account, Plan: plan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := stripe.NewClient(os.Getenv("STRIPE_TEST_KEY"))
+	var qty int64
+	for li, err := range sc.V1CheckoutSessions.ListLineItems(ctx, &stripe.CheckoutSessionListLineItemsParams{Session: stripe.String(sess.ID)}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if li.Price != nil && li.Price.LookupKey == "extra_store_monthly" {
+			qty = li.Quantity
+		}
+	}
+	if qty != 2 {
+		t.Errorf("extra_store_monthly quantity %d, want 2", qty)
 	}
 }

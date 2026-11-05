@@ -144,3 +144,101 @@ func TestSeedStopsOnStripeError(t *testing.T) {
 		t.Error("error swallowed")
 	}
 }
+
+type tier struct{ upTo, unit int64 }
+
+func tiersOf(p *stripe.Price) []tier {
+	var out []tier
+	for _, t := range p.Tiers {
+		out = append(out, tier{t.UpTo, t.UnitAmount})
+	}
+	return out
+}
+
+func TestSeedCreatesTieredPricesForSteppedAddons(t *testing.T) {
+	f := billingtest.NewFakeAPI()
+	if _, err := billing.Seed(context.Background(), f, steppedCatalog); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string][]tier{
+		"extra_store_monthly":   {{1, 15000}, {0, 5000}},
+		"extra_store_quarterly": {{1, 45000}, {0, 15000}},
+		"extra_game_monthly":    {{1, 25000}, {0, 10000}},
+	} {
+		p := f.PriceByKey(key)
+		if p == nil || p.BillingScheme != stripe.PriceBillingSchemeTiered || p.TiersMode != stripe.PriceTiersModeGraduated || p.UnitAmount != 0 || !slices.Equal(tiersOf(p), want) {
+			t.Errorf("%s: %+v tiers %v", key, p, tiersOf(p))
+		}
+	}
+	if p := f.PriceByKey("starter_monthly"); p == nil || p.BillingScheme == stripe.PriceBillingSchemeTiered || len(p.Tiers) != 0 || p.UnitAmount != packageMonthly("starter") {
+		t.Errorf("starter_monthly %+v", p)
+	}
+}
+
+func TestSeedLeavesAMatchingTieredPriceAlone(t *testing.T) {
+	f := billingtest.NewFakeAPI()
+	ctx := context.Background()
+	if _, err := billing.Seed(ctx, f, steppedCatalog); err != nil {
+		t.Fatal(err)
+	}
+	res, err := billing.Seed(ctx, f, steppedCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Created)+len(res.Updated)+len(res.Archived) != 0 {
+		t.Errorf("second seed changed things: %+v", res)
+	}
+}
+
+func TestSeedReplacesAFlatPriceWhenTheAddonBecomesStepped(t *testing.T) {
+	f := billingtest.NewFakeAPI()
+	ctx := context.Background()
+	if _, err := billing.Seed(ctx, f, testCatalog); err != nil {
+		t.Fatal(err)
+	}
+	old := f.PriceByKey("extra_store_monthly")
+	res, err := billing.Seed(ctx, f, steppedCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"extra_store_monthly", "extra_store_quarterly", "extra_game_monthly", "extra_game_quarterly"}
+	if !slices.Equal(res.Created, want) || len(res.Archived) != 4 || len(res.Updated) != 0 {
+		t.Errorf("replace: %+v", res)
+	}
+	for _, id := range res.Archived {
+		if p := f.Prices[id]; p.Active || p.LookupKey != "" {
+			t.Errorf("archived price still live: %+v", p)
+		}
+	}
+	if now := f.PriceByKey("extra_store_monthly"); now == nil || now.ID == old.ID || now.BillingScheme != stripe.PriceBillingSchemeTiered {
+		t.Errorf("replacement %+v", now)
+	}
+
+	// And back: a flat spec does not accept the tiered price.
+	res, err = billing.Seed(ctx, f, testCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(res.Created, want) || len(res.Archived) != 4 {
+		t.Errorf("back to flat: %+v", res)
+	}
+}
+
+func TestSeedReplacesATieredPriceWhoseStepChanged(t *testing.T) {
+	f := billingtest.NewFakeAPI()
+	ctx := context.Background()
+	if _, err := billing.Seed(ctx, f, steppedCatalog); err != nil {
+		t.Fatal(err)
+	}
+	changed := stepped(steppedCatalog, map[string][2]int64{"extra_store": {16000, 5000}})
+	res, err := billing.Seed(ctx, f, changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(res.Created, []string{"extra_store_monthly", "extra_store_quarterly"}) || len(res.Archived) != 2 || len(res.Updated) != 0 {
+		t.Errorf("replace: %+v", res)
+	}
+	if p := f.PriceByKey("extra_store_monthly"); p == nil || !slices.Equal(tiersOf(p), []tier{{1, 16000}, {0, 5000}}) {
+		t.Errorf("replacement tiers %v", tiersOf(p))
+	}
+}

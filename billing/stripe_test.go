@@ -3,6 +3,7 @@ package billing_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/mtgban/api-gatewahy/billing"
@@ -59,6 +60,24 @@ func TestListPricesQueriesActiveThenArchived(t *testing.T) {
 	}
 	if len(prices) != 2 || prices[0].ID != "active" || prices[1].ID != "archived" {
 		t.Errorf("prices %v", prices)
+	}
+}
+
+func TestListPricesExpandsTiers(t *testing.T) {
+	var expands [][]string
+	list := func(p *stripe.PriceListParams) stripe.Seq2[*stripe.Price, error] {
+		var e []string
+		for _, s := range p.Expand {
+			e = append(e, stripe.StringValue(s))
+		}
+		expands = append(expands, e)
+		return func(func(*stripe.Price, error) bool) {}
+	}
+	if _, err := billing.ListPricesFrom(context.Background(), list); err != nil {
+		t.Fatal(err)
+	}
+	if len(expands) != 2 || !slices.Contains(expands[0], "data.tiers") || !slices.Contains(expands[1], "data.tiers") {
+		t.Errorf("expands %v, want data.tiers on both passes", expands)
 	}
 }
 

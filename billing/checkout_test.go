@@ -540,3 +540,21 @@ func TestCheckoutBillsTheModeAddon(t *testing.T) {
 		t.Errorf("metadata %v", md)
 	}
 }
+
+func TestCheckoutSendsOneSteppedLine(t *testing.T) {
+	f := billingtest.SeededFakeAPI(t, steppedCatalog)
+	co := newTestCheckout(f, newStore(t))
+	co.Catalog = steppedCatalog
+	plan := billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom", "starcitygames", "coolstuffinc"}}
+	if _, err := co.Create(context.Background(), billing.Request{Account: testAccount, Plan: plan}); err != nil {
+		t.Fatal(err)
+	}
+	var got []itemChange
+	for _, li := range f.Sessions[0].LineItems {
+		got = append(got, itemChange{price: stripe.StringValue(li.Price), qty: stripe.Int64Value(li.Quantity)})
+	}
+	want := []itemChange{{price: f.PriceByKey("starter_monthly").ID, qty: 1}, {price: f.PriceByKey("extra_store_monthly").ID, qty: 2}}
+	if !slices.Equal(got, want) {
+		t.Errorf("line items %+v want %+v", got, want)
+	}
+}
