@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/mtgban/api-gatewahy/apiaccess"
+	"github.com/mtgban/mtgban-website/observability"
 	"github.com/mtgban/mtgban-website/timeseries"
 	"github.com/mtgban/simplecloud"
 )
@@ -234,6 +235,10 @@ func (c *Config) Validate() error {
 	}
 	if c.APIAccess == nil {
 		return errors.New("apiaccess_config is required")
+	}
+	// The website files its stored-state counts under that instance name.
+	if strings.EqualFold(strings.TrimSpace(c.InstanceName), observability.SharedInstance) {
+		return fmt.Errorf("instance_name must not be %q: the website reserves it", observability.SharedInstance)
 	}
 	if u, err := url.Parse(c.PublicURL); err != nil || u.Scheme == "" || u.Host == "" {
 		return errors.New("public_url must be an absolute URL")
