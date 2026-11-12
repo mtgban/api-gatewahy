@@ -130,10 +130,76 @@ func TestMeterFlushesByBatch(t *testing.T) {
 
 	events.mu.Lock()
 	if len(events.evs) != 2 || events.evs[0].Tier != "api" || events.evs[0].Device != "api" ||
-		events.evs[0].Visitor != "5" || events.evs[0].Instance != "test" || events.evs[0].Path != "/api/mtgban/retail.json" {
+		events.evs[0].Visitor != "" || events.evs[0].Instance != "test" || events.evs[0].Path != "api.v1" {
 		t.Errorf("events %+v", events.evs)
 	}
 	events.mu.Unlock()
+}
+
+// The event says which kind of endpoint was called and nothing about who
+// called it or what they asked for; the usage row keeps both.
+func TestMeterEventHasNoAccountAndABoundedPath(t *testing.T) {
+	cases := []struct{ path, want string }{
+		{"/api/mtgban/retail.json", "api.v1"},
+		{"/api/mtgban/retail/NEO.csv", "api.v1"},
+		{"/api/mtgban/sealed/abc.json", "api.v1"},
+		{"/api/mtgban/search/black lotus.json", "api.v1.search"},
+		{"/api/mtgban/search/t:goblin cmc<=2 s:neo.csv", "api.v1.search"},
+		{"/api/v2/search/Lightning%20Bolt.json", "api.v2.search"},
+		{"/api/v2/history/2c0c8e2e-3f5a-5a0c-9d0e-1f2b3c4d5e6f,abc.json", "api.v2.history"},
+		{"/api/v2/history/sealed/NEO.csv", "api.v2.history"},
+		{"/api/v2/newspaper/sell_index.json", "api.v2.newspaper"},
+		{"/api/v2/all/SV1.json", "api.v2"},
+		{"/api/v2/finishes.json", "api.v2"},
+		{"/retail/ZEN.json", "other"},
+		{"", "other"},
+	}
+	allowed := map[string]bool{"other": true}
+	for _, f := range observability.APIFamilies() {
+		allowed[f] = true
+	}
+
+	sink := &fakeSink{}
+	events := &fakeEvents{}
+	m := NewUsageMeter(sink, events, "test", time.Hour, 1000)
+	for i, c := range cases {
+		m.Record(apiaccess.Usage{KeyID: 1, AccountID: int64(1000 + i), Path: c.path, Ts: now})
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	events.mu.Lock()
+	defer events.mu.Unlock()
+	if len(events.evs) != len(cases) {
+		t.Fatalf("%d events for %d calls", len(events.evs), len(cases))
+	}
+	for i, ev := range events.evs {
+		if ev.Visitor != "" {
+			t.Errorf("%q: Visitor = %q, want empty", cases[i].path, ev.Visitor)
+		}
+		if ev.Path != cases[i].want || !allowed[ev.Path] {
+			t.Errorf("%q: Path = %q, want %q", cases[i].path, ev.Path, cases[i].want)
+		}
+		if ev.Tier != "api" || ev.Device != "api" || ev.Instance != "test" || ev.IsBot {
+			t.Errorf("%q: event %+v", cases[i].path, ev)
+		}
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	var rows []apiaccess.Usage
+	for _, b := range sink.batches {
+		rows = append(rows, b...)
+	}
+	if len(rows) != len(cases) {
+		t.Fatalf("%d usage rows for %d calls", len(rows), len(cases))
+	}
+	for i, u := range rows {
+		if u.Path != cases[i].path || u.AccountID != int64(1000+i) {
+			t.Errorf("usage row %d = %+v: the raw path and the account stay", i, u)
+		}
+	}
 }
 
 func TestMeterFlushesByTime(t *testing.T) {

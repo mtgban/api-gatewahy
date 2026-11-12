@@ -273,7 +273,7 @@ flip or a new row does.
 | `access.go` | `Resolve(ents, game, now) (Access, bool)`: union of active rows naming the game; ALL > BASE > explicit union; `LookbackDays` is the max over history rows; empty scopes contribute nothing |
 | `resolver.go` | `Resolver`: key hash → `apiaccess.Lookup` cache with TTL, negative caching, stale-on-error, 10,000-entry bound plus 1,000 for unknown keys |
 | `handler.go` | `Handler.ServeHTTP`, one `httputil.ReverseProxy` + `http.Transport` per game, `ClientIP`, `statusWriter`, history limiter; history and newspaper routes (`passStatus`) pass the backend's 400, 404 and 503 through, never 401 or 403, and leave with a `private` Cache-Control (`privateCacheControl`); `mintSig` adds `APIlookback` for a positive lookback |
-| `meter.go` | `UsageMeter`: non-blocking `Record`, batched COPY every 5 s or 200 rows, 3 attempts, then drop and count |
+| `meter.go` | `UsageMeter`: non-blocking `Record`, batched COPY every 5 s or 200 rows, 3 attempts, then drop and count. Each call also sends one observability event: tier and device `api`, the path as the endpoint family from the website's `observability.APIFamily`, and no account or key identifier |
 | `probe.go` | `Prober`: hourly signature health check per game |
 | `errors.go` | `writeError` JSON `{"error", "game"}` |
 | `summary.go` | `SummaryText` for the daily Discord post |
