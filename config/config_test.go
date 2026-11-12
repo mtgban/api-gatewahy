@@ -94,6 +94,10 @@ func TestValidateRejects(t *testing.T) {
 		{"no db", `{"gateway_email":"g@x","games":{"magic":{"upstream":"https://x","secret":"s"}}}`, "apiaccess_config"},
 		{"uppercase game", `{"gateway_email":"g@x","apiaccess_config":{"host":"h"},"games":{"Magic":{"upstream":"https://x","secret":"s"}}}`, "games.Magic: name"},
 		{"hyphenated game", `{"gateway_email":"g@x","apiaccess_config":{"host":"h"},"games":{"magic-tcg":{"upstream":"https://x","secret":"s"}}}`, "games.magic-tcg: name"},
+		{"shared instance", `{"gateway_email":"g@x","apiaccess_config":{"host":"h"},"instance_name":"shared","games":{"magic":{"upstream":"https://x","secret":"s"}}}`, `instance_name must not be "shared"`},
+		{"Shared instance", `{"gateway_email":"g@x","apiaccess_config":{"host":"h"},"instance_name":"Shared","games":{"magic":{"upstream":"https://x","secret":"s"}}}`, `instance_name must not be "shared"`},
+		{"SHARED instance", `{"gateway_email":"g@x","apiaccess_config":{"host":"h"},"instance_name":"SHARED","games":{"magic":{"upstream":"https://x","secret":"s"}}}`, `instance_name must not be "shared"`},
+		{"padded shared instance", `{"gateway_email":"g@x","apiaccess_config":{"host":"h"},"instance_name":" shared ","games":{"magic":{"upstream":"https://x","secret":"s"}}}`, `instance_name must not be "shared"`},
 	}
 	for _, c := range cases {
 		_, err := Parse(strings.NewReader(c.json))

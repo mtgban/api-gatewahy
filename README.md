@@ -354,7 +354,9 @@ The gateway creates nothing in `observability_config`'s database: the
 website owns that schema. Its role there needs `CONNECT` on the database,
 `USAGE` on the schema and `INSERT` on `events`. A missing grant does not
 stop the gateway: it shows only as `observability: insert batch` lines in
-the log and as failed events in the daily summary.
+the log and as failed events in the daily summary. `instance_name` labels the
+gateway's rows in `events`, and must not be `shared`, which the website
+reserves.
 
 The gateway owns its schema in `apiaccess_config`'s database, eleven
 tables: `accounts`, `api_keys`, `entitlements`, `usage`, `invites`,
