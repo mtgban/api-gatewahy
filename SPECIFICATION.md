@@ -95,8 +95,9 @@ default applies to every verb (see todo/refactor.md).
 ### 2.2 `serve` (`serve.go`)
 
 1. Load config; open `apiaccess.Client` (pings, then runs pending migrations).
-2. Optional observability recorder (`observability_config`); failure to
-   open it only logs.
+2. Optional observability recorder (`observability_config`), opened with
+   `observability.SkipSchema()` because the website owns that schema;
+   failure to open it only logs.
 3. Feature switches, all read from the environment:
    - `STRIPE_SECRET_KEY` set → billing on; `STRIPE_WEBHOOK_SECRET` becomes
      required (`stripeDepsFromEnv`).

@@ -345,11 +345,16 @@ and accept the loss during one.
 `apiaccess_config` and `observability_config` are Postgres connections:
 `host`, `port`, `user`, `password`, `dbname`, `sslmode`, plus optional pool
 tuning (`readonly`, `max_open_conns`, `max_idle_conns`,
-`conn_max_lifetime_seconds`). `readonly` only has an effect on
-`observability_config`; `apiaccess_config` accepts it and ignores it,
-since the gateway always writes there. `games` maps a game name to
+`conn_max_lifetime_seconds`). `readonly` has no effect on either: both
+accept it so the key parses, and both ignore it, since the gateway only
+writes to them. `games` maps a game name to
 `{"upstream": "https://...", "secret": "..."}`; the secret must match the
 value under that game's `api_user_secrets["gateway@mtgban.com"]`.
+The gateway creates nothing in `observability_config`'s database: the
+website owns that schema. Its role there needs `CONNECT` on the database,
+`USAGE` on the schema and `INSERT` on `events`. A missing grant does not
+stop the gateway: it shows only as `observability: insert batch` lines in
+the log and as failed events in the daily summary.
 
 The gateway owns its schema in `apiaccess_config`'s database, eleven
 tables: `accounts`, `api_keys`, `entitlements`, `usage`, `invites`,
