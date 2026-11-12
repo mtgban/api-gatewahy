@@ -90,6 +90,38 @@ func portalCodec(pd *portalDeps, cfg *config.Config) (*session.Codec, error) {
 	return codec, nil
 }
 
+// openObservability is observability.NewClient's shape, so a test can stand in for it.
+type openObservability func(observability.SQLConfig, ...observability.Option) (*observability.Client, error)
+
+// eventRecorder is an event sink that counts the events it lost.
+type eventRecorder interface {
+	gateway.EventSink
+	Dropped() int64
+	Failed() int64
+}
+
+var _ eventRecorder = (*observability.Recorder)(nil)
+
+// openEvents opens the event recorder, or returns a nil sink when cfg is nil
+// or the open fails. closeFn is never nil.
+func openEvents(cfg *observability.SQLConfig, open openObservability) (sink eventRecorder, closeFn func()) {
+	if cfg == nil {
+		return nil, func() {}
+	}
+	// The website owns the schema; the gateway only inserts into events.
+	oc, err := open(*cfg, observability.SkipSchema())
+	if err != nil {
+		log.Println("observability disabled:", err)
+		return nil, func() {}
+	}
+	rec := observability.NewRecorder(oc)
+	return rec, func() {
+		// The recorder must flush before its client's pool goes away.
+		_ = rec.Close()
+		_ = oc.Close()
+	}
+}
+
 func serve(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -111,19 +143,8 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	defer func() { _ = store.Close() }()
 
-	var events gateway.EventSink
-	if cfg.Observability != nil {
-		oc, err := observability.NewClient(*cfg.Observability)
-		if err != nil {
-			log.Println("observability disabled:", err)
-		} else {
-			rec := observability.NewRecorder(oc)
-			// The recorder must flush before its client's pool goes away.
-			defer func() { _ = oc.Close() }()
-			defer func() { _ = rec.Close() }()
-			events = rec
-		}
-	}
+	events, closeEvents := openEvents(cfg.Observability, observability.NewClient)
+	defer closeEvents()
 
 	sd, err := stripeDepsFromEnv()
 	if err != nil {
@@ -193,7 +214,7 @@ func serveUntilDone(ctx context.Context, srv *http.Server, ln net.Listener, grac
 }
 
 // newServer wires the handler, listener, jobs, and mux. cleanup stops them.
-func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.EventSink, poster *discord.Poster, sd *stripeDeps, pd *portalDeps) (*http.Server, func(), error) {
+func newServer(cfg *config.Config, store *apiaccess.Client, events eventRecorder, poster *discord.Poster, sd *stripeDeps, pd *portalDeps) (*http.Server, func(), error) {
 	games := map[string]gateway.Upstream{}
 	for name, g := range cfg.Games {
 		u, err := url.Parse(g.Upstream)
@@ -251,11 +272,14 @@ func newServer(cfg *config.Config, store *apiaccess.Client, events gateway.Event
 	}()
 	go func() {
 		defer jobs.Done()
-		var lastDropped int64
+		var last losses
 		runDaily(jobsCtx, 0, 5, "daily summary", alert, func(ctx context.Context, now time.Time) {
-			dropped := meter.Dropped()
-			dailySummary(ctx, store, alert, now, cfg, dropped-lastDropped)
-			lastDropped = dropped
+			cur := losses{usageRows: meter.Dropped()}
+			if events != nil {
+				cur.eventsDropped, cur.eventsFailed = events.Dropped(), events.Failed()
+			}
+			dailySummary(ctx, store, alert, now, cfg, cur.since(last))
+			last = cur
 		})
 	}()
 
@@ -555,13 +579,13 @@ type dailyStore interface {
 }
 
 // dailySummary posts yesterday's usage, then prunes. dropped counts rows lost since the last summary.
-func dailySummary(ctx context.Context, store dailyStore, alert func(string), now time.Time, cfg *config.Config, dropped int64) {
-	postSummary(ctx, store, alert, now, dropped)
+func dailySummary(ctx context.Context, store dailyStore, alert func(string), now time.Time, cfg *config.Config, lost losses) {
+	postSummary(ctx, store, alert, now, lost)
 	pruneTables(ctx, store, now, cfg)
 }
 
 // postSummary alerts yesterday's usage, or logs why it cannot.
-func postSummary(ctx context.Context, store dailyStore, alert func(string), now time.Time, dropped int64) {
+func postSummary(ctx context.Context, store dailyStore, alert func(string), now time.Time, lost losses) {
 	day := now.UTC().Truncate(24*time.Hour).AddDate(0, 0, -1)
 	rows, err := store.SummarizeUsage(ctx, day, day.AddDate(0, 0, 1), 0)
 	if err != nil {
@@ -572,7 +596,7 @@ func postSummary(ctx context.Context, store dailyStore, alert func(string), now 
 	if err != nil {
 		log.Println("daily summary keys:", err)
 	}
-	alert(summaryText(day, rows, keys, dropped))
+	alert(summaryText(day, rows, keys, lost))
 }
 
 // humanBytes renders n with a binary unit suffix.
@@ -589,8 +613,18 @@ func humanBytes(n int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
+// losses counts usage rows and events lost, as running totals or a day's share.
+type losses struct {
+	usageRows, eventsDropped, eventsFailed int64
+}
+
+// since returns what was lost after prev.
+func (l losses) since(prev losses) losses {
+	return losses{l.usageRows - prev.usageRows, l.eventsDropped - prev.eventsDropped, l.eventsFailed - prev.eventsFailed}
+}
+
 // summaryText renders the daily Discord message.
-func summaryText(day time.Time, rows []apiaccess.UsageRow, newKeys []apiaccess.Key, dropped int64) string {
+func summaryText(day time.Time, rows []apiaccess.UsageRow, newKeys []apiaccess.Key, lost losses) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "API usage for %s\n", day.Format("2006-01-02"))
 	if len(rows) == 0 {
@@ -602,8 +636,14 @@ func summaryText(day time.Time, rows []apiaccess.UsageRow, newKeys []apiaccess.K
 	for _, k := range newKeys {
 		fmt.Fprintf(&b, "new key %s (%s) for account %d\n", k.Prefix, k.Label, k.AccountID)
 	}
-	if dropped > 0 {
-		fmt.Fprintf(&b, "%d usage rows dropped\n", dropped)
+	if lost.usageRows > 0 {
+		fmt.Fprintf(&b, "%d usage rows dropped\n", lost.usageRows)
+	}
+	if lost.eventsDropped > 0 {
+		fmt.Fprintf(&b, "%d events dropped\n", lost.eventsDropped)
+	}
+	if lost.eventsFailed > 0 {
+		fmt.Fprintf(&b, "%d events failed to insert\n", lost.eventsFailed)
 	}
 	return b.String()
 }

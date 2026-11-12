@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +12,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,6 +27,7 @@ import (
 	"github.com/mtgban/api-gatewahy/portal"
 	"github.com/mtgban/api-gatewahy/session"
 	"github.com/mtgban/mtgban-website/apiproductlist"
+	"github.com/mtgban/mtgban-website/observability"
 )
 
 func TestSummaryText(t *testing.T) {
@@ -31,14 +37,14 @@ func TestSummaryText(t *testing.T) {
 		{Email: "ck@example.com", Game: "pokemon", Requests: 3, Bytes: 1024, Errors: 0},
 	}
 	keys := []apiaccess.Key{{Prefix: "abcd1234", Label: "prod"}}
-	got := summaryText(day, rows, keys, 7)
-	for _, want := range []string{"2026-09-14", "ck@example.com", "magic", "120", "5.0 MB", "2 errors", "pokemon", "abcd1234", "prod", "7 usage rows dropped"} {
+	got := summaryText(day, rows, keys, losses{usageRows: 7, eventsDropped: 4, eventsFailed: 200})
+	for _, want := range []string{"2026-09-14", "ck@example.com", "magic", "120", "5.0 MB", "2 errors", "pokemon", "abcd1234", "prod", "7 usage rows dropped", "4 events dropped", "200 events failed to insert"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("summary missing %q:\n%s", want, got)
 		}
 	}
-	empty := summaryText(day, nil, nil, 0)
-	if !strings.Contains(empty, "no API traffic") {
+	empty := summaryText(day, nil, nil, losses{})
+	if !strings.Contains(empty, "no API traffic") || strings.Contains(empty, "dropped") || strings.Contains(empty, "failed") {
 		t.Errorf("empty summary:\n%s", empty)
 	}
 }
@@ -474,7 +480,7 @@ func TestDailySummaryPrunesEveryTable(t *testing.T) {
 
 	f := &dailyFake{cutoffs: map[string]time.Time{}}
 	alerts := 0
-	dailySummary(context.Background(), f, func(string) { alerts++ }, now, cfg, 0)
+	dailySummary(context.Background(), f, func(string) { alerts++ }, now, cfg, losses{})
 	if !maps.EqualFunc(f.cutoffs, want, time.Time.Equal) || alerts != 1 {
 		t.Errorf("cutoffs %v, alerts %d; want %v and one alert", f.cutoffs, alerts, want)
 	}
@@ -487,7 +493,7 @@ func TestDailySummaryPrunesEveryTable(t *testing.T) {
 	// One failing prune is logged and the rest still run.
 	logs.Reset()
 	f = &dailyFake{cutoffs: map[string]time.Time{}, fail: "invites"}
-	dailySummary(context.Background(), f, func(string) {}, now, cfg, 0)
+	dailySummary(context.Background(), f, func(string) {}, now, cfg, losses{})
 	if len(f.cutoffs) != 4 || !strings.Contains(logs.String(), "prune invites: down") || !strings.Contains(logs.String(), "pruned 4 admin actions") {
 		t.Errorf("after a failed invite prune: cutoffs %v, log %s", f.cutoffs, logs.String())
 	}
@@ -496,15 +502,108 @@ func TestDailySummaryPrunesEveryTable(t *testing.T) {
 	logs.Reset()
 	alerts = 0
 	f = &dailyFake{cutoffs: map[string]time.Time{}, fail: "summary"}
-	dailySummary(context.Background(), f, func(string) { alerts++ }, now, cfg, 0)
+	dailySummary(context.Background(), f, func(string) { alerts++ }, now, cfg, losses{})
 	if !maps.EqualFunc(f.cutoffs, want, time.Time.Equal) || alerts != 0 || !strings.Contains(logs.String(), "daily summary: down") {
 		t.Errorf("after a failed summary: cutoffs %v, alerts %d, log %s", f.cutoffs, alerts, logs.String())
 	}
 
 	// Zero admin_actions retention keeps the audit log forever.
 	f = &dailyFake{cutoffs: map[string]time.Time{}}
-	dailySummary(context.Background(), f, func(string) {}, now, &config.Config{UsageRetentionDays: 395}, 0)
+	dailySummary(context.Background(), f, func(string) {}, now, &config.Config{UsageRetentionDays: 395}, losses{})
 	if _, pruned := f.cutoffs["admin_actions"]; pruned || len(f.cutoffs) != 3 {
 		t.Errorf("with zero audit retention: cutoffs %v, want usage, stripe_events and invites only", f.cutoffs)
+	}
+}
+
+func TestOpenEventsWithNoConfigIsOff(t *testing.T) {
+	sink, closeFn := openEvents(nil, func(observability.SQLConfig, ...observability.Option) (*observability.Client, error) {
+		t.Fatal("nothing is opened without a config")
+		return nil, nil
+	})
+	if sink != nil {
+		t.Errorf("sink = %v, want none", sink)
+	}
+	closeFn()
+}
+
+func TestOpenEventsSkipsTheSchemaAndSurvivesAFailure(t *testing.T) {
+	var logged bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	var opts int
+	sink, closeFn := openEvents(&observability.SQLConfig{Host: "db.invalid"},
+		func(_ observability.SQLConfig, o ...observability.Option) (*observability.Client, error) {
+			opts = len(o)
+			return nil, errors.New("no route to host")
+		})
+	if opts != 1 {
+		t.Errorf("open got %d options, want the skip-schema one", opts)
+	}
+	if sink != nil {
+		t.Errorf("a failed open left a sink: %v", sink)
+	}
+	if !strings.Contains(logged.String(), "observability disabled: no route to host") {
+		t.Errorf("log = %q", logged.String())
+	}
+	closeFn()
+}
+
+// With the real client: the gateway creates no table in a database it does not own.
+func TestOpenEventsCreatesNothing(t *testing.T) {
+	dsn := os.Getenv("APIACCESS_TEST_DSN")
+	if dsn == "" {
+		t.Skip("APIACCESS_TEST_DSN not set")
+	}
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := 5432
+	if p := u.Port(); p != "" {
+		if port, err = strconv.Atoi(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	password, _ := u.User.Password()
+	cfg := observability.SQLConfig{
+		Host:     u.Hostname(),
+		Port:     port,
+		User:     u.User.Username(),
+		Password: password,
+		DBName:   strings.TrimPrefix(u.Path, "/"),
+		SSLMode:  u.Query().Get("sslmode"),
+	}
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	tables := []string{"events", "search_votes", "feature_events"}
+	exists := func(table string) bool {
+		t.Helper()
+		var ok bool
+		if err := db.QueryRow(`SELECT to_regclass($1) IS NOT NULL`, "public."+table).Scan(&ok); err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	for _, table := range tables {
+		if exists(table) {
+			t.Skipf("the scratch database already has %s, so this test proves nothing", table)
+		}
+	}
+
+	sink, closeFn := openEvents(&cfg, observability.NewClient)
+	defer closeFn()
+	if sink == nil {
+		t.Fatal("the client opens with no schema to ensure")
+	}
+	for _, table := range tables {
+		if exists(table) {
+			t.Errorf("opening the client created %s", table)
+		}
 	}
 }
