@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"log"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,7 +17,8 @@ type UsageSink interface {
 	TouchKeys(ctx context.Context, seen map[int64]time.Time) error
 }
 
-// EventSink receives one observability event per request.
+// EventSink receives one observability event per request, carrying the
+// endpoint family and no account.
 type EventSink interface {
 	Record(ev observability.Event)
 }
@@ -75,12 +75,12 @@ func NewUsageMeter(sink UsageSink, events EventSink, instance string, flushEvery
 // A row recorded after Close counts as dropped.
 func (m *UsageMeter) Record(u apiaccess.Usage) {
 	if m.events != nil {
+		// The event names the endpoint family only: no account, no path detail.
 		m.events.Record(observability.Event{
 			Ts:       u.Ts,
-			Path:     u.Path,
+			Path:     observability.APIFamily(u.Path),
 			Tier:     "api",
 			Device:   "api",
-			Visitor:  strconv.FormatInt(u.AccountID, 10),
 			Instance: m.instance,
 		})
 	}
