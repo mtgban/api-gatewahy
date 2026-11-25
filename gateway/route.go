@@ -22,8 +22,8 @@ var gameName = regexp.MustCompile(`^[a-z0-9]+$`)
 
 // ParseRoute splits /v1/{game}/... and /v2/{game}/... into their parts,
 // forwarded to the backend's /api/mtgban/ and /api/v2/. v2 serves what v1
-// does, and adds slabs, the finish list, price history and the newspaper
-// reports.
+// does, and adds singles, slabs, the finish list, price history and the
+// newspaper reports.
 func ParseRoute(path string) (Route, error) {
 	var rest string
 	var v2 bool
@@ -63,12 +63,20 @@ func ParseRoute(path string) (Route, error) {
 	case v2 && (sub == "graded.json" || strings.HasPrefix(sub, "graded/")):
 		r.Kind = "graded"
 	default:
-		for _, kind := range []string{"retail", "buylist", "all", "sealed"} {
+		kinds := []string{"retail", "buylist", "all", "sealed"}
+		if v2 {
+			kinds = append(kinds, "singles")
+		}
+		for _, kind := range kinds {
 			if sub == kind+".json" || sub == kind+".csv" || strings.HasPrefix(sub, kind+"/") {
 				r.Kind = kind
 				break
 			}
 		}
+	}
+	// all is an alias of v2's singles, and v1's name for it
+	if r.Kind == "all" {
+		r.Kind = "singles"
 	}
 	if r.Kind == "" {
 		return Route{}, ErrNoRoute
@@ -84,7 +92,7 @@ func (r Route) BackendPath() string {
 // NeedsModes lists the modes the plan must include for this route.
 func (r Route) NeedsModes() []string {
 	switch r.Kind {
-	case "all":
+	case "singles":
 		return []string{"retail", "buylist"}
 	case "retail", "buylist", "sealed", "graded", "history", "newspaper":
 		return []string{r.Kind}

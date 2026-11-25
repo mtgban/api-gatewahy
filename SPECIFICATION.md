@@ -269,7 +269,7 @@ flip or a new row does.
 
 | File | Responsibility |
 |---|---|
-| `route.go` | `ParseRoute`: only `/v1/{game}/{sub}` (to `/api/mtgban/{sub}`) and `/v2/{game}/{sub}` (to `/api/v2/{sub}`); kinds search, meta (sets/stores, and finishes in v2), retail/buylist/all/sealed, history and newspaper (v2 only); `Rest` is the backend path under `/api/` (`mtgban/...` or `v2/...`); rejects `..`; `NeedsModes` |
+| `route.go` | `ParseRoute`: only `/v1/{game}/{sub}` (to `/api/mtgban/{sub}`) and `/v2/{game}/{sub}` (to `/api/v2/{sub}`); kinds search, meta (sets/stores, and finishes in v2), retail/buylist/sealed, singles (`all` is its alias, and v1's only name for it), graded, history and newspaper (v2 only); `Rest` is the backend path under `/api/` (`mtgban/...` or `v2/...`); rejects `..`; `NeedsModes` |
 | `access.go` | `Resolve(ents, game, now) (Access, bool)`: union of active rows naming the game; ALL > BASE > explicit union; `LookbackDays` is the max over history rows; empty scopes contribute nothing |
 | `resolver.go` | `Resolver`: key hash → `apiaccess.Lookup` cache with TTL, negative caching, stale-on-error, 10,000-entry bound plus 1,000 for unknown keys |
 | `handler.go` | `Handler.ServeHTTP`, one `httputil.ReverseProxy` + `http.Transport` per game, `ClientIP`, `statusWriter`, history limiter; history and newspaper routes (`passStatus`) pass the backend's 400, 404 and 503 through, never 401 or 403, and leave with a `private` Cache-Control (`privateCacheControl`); `mintSig` adds `APIlookback` for a positive lookback |
