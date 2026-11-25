@@ -178,7 +178,7 @@ func TestReconcileWritesTheRow(t *testing.T) {
 	}
 	if e.AccountID != testAccount.ID || e.Source != apiaccess.SourceStripe || e.Status != apiaccess.EntitlementActive || e.ValidUntil != nil || e.ExternalRef != "sub_1" ||
 		!slices.Equal(e.Games, []string{"magic", "pokemon"}) || e.StoreScope != "CK,CKBLLast,SCG,TCGDirect,TCGDirectNet,TCGLow,TCGMarket,TCGPlayer" ||
-		!slices.Equal(e.Modes, []string{"retail", "buylist"}) || !slices.Equal(e.Addons, []string{"extra_store:1", "extra_game:1"}) ||
+		!slices.Equal(e.Modes, []string{"retail", "buylist", "graded"}) || !slices.Equal(e.Addons, []string{"extra_store:1", "extra_game:1"}) ||
 		!strings.Contains(e.Note, "À la carte") {
 		t.Errorf("row %+v", e)
 	}
@@ -816,7 +816,7 @@ func TestReconcileWritesNewspaperMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := rows(t, s)["sub_n"]
-	if e.StoreScope != "BASE_ACCESS" || !slices.Equal(e.Modes, []string{"retail", "buylist", "newspaper"}) ||
+	if e.StoreScope != "BASE_ACCESS" || !slices.Equal(e.Modes, []string{"retail", "buylist", "graded", "newspaper"}) ||
 		!slices.Equal(e.Addons, []string{"newspaper:1"}) || !strings.Contains(e.Note, "with newspaper reports") || len(alerts) != 0 {
 		t.Errorf("row %+v alerts %v", e, alerts)
 	}

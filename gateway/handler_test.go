@@ -377,7 +377,8 @@ func TestHandlerV2(t *testing.T) {
 }
 
 // TestHandlerV2EveryEndpoint sends every v2 endpoint through the handler:
-// each reaches its /api/v2/ path, and sealed, outside the plan, is refused.
+// each reaches its /api/v2/ path, and sealed and graded, outside the plan, are
+// refused.
 func TestHandlerV2EveryEndpoint(t *testing.T) {
 	be := fakeBackend(t, "s3cret")
 	defer be.Close()
@@ -395,7 +396,7 @@ func TestHandlerV2EveryEndpoint(t *testing.T) {
 			t.Errorf("%s: status %d, backend saw %v", sub, rec.Code, body["path"])
 		}
 	}
-	for _, sub := range []string{"sealed.json", "sealed/ROE.json"} {
+	for _, sub := range []string{"sealed.json", "sealed/ROE.json", "graded.json", "graded/ROE.json"} {
 		rec, _ := do(h, "GET", "/v2/magic/"+sub, goodKey)
 		if rec.Code != 403 {
 			t.Errorf("%s outside the plan: status %d", sub, rec.Code)

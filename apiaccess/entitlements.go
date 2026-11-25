@@ -29,7 +29,7 @@ const ModeNewspaper = "newspaper"
 const MaxLookbackDays = 3650
 
 // ValidModes in canonical order.
-var ValidModes = []string{"retail", "buylist", "sealed", ModeNewspaper, ModeHistory}
+var ValidModes = []string{"retail", "buylist", "sealed", "graded", ModeNewspaper, ModeHistory}
 
 // EntitlementStatus says whether a row can still grant access.
 type EntitlementStatus string

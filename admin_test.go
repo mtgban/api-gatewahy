@@ -382,7 +382,7 @@ func TestAdminUsageRejectsSinceAfterUntil(t *testing.T) {
 func TestAdminGrantNewspaper(t *testing.T) {
 	s := apiaccesstest.New()
 	admin(t, s, "account", "add", "-email", "news@example.com")
-	if code, _, errb := admin(t, s, "grant", "add", "-h"); code != 2 || !strings.Contains(errb, "retail,buylist,sealed,newspaper, or history alone") {
+	if code, _, errb := admin(t, s, "grant", "add", "-h"); code != 2 || !strings.Contains(errb, "retail,buylist,sealed,graded,newspaper, or history alone") {
 		t.Errorf("help: %d %q", code, errb)
 	}
 	code, out, errb := admin(t, s, "grant", "add", "-email", "news@example.com", "-games", "magic", "-stores", "CK", "-modes", "newspaper,retail")

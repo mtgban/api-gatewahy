@@ -354,9 +354,9 @@ func TestHistoryEntitlementRoundTrip(t *testing.T) {
 	}
 }
 
-// Newspaper sits between sealed and history in the canonical order.
+// Graded and newspaper sit between sealed and history in the canonical order.
 func TestValidateModesNewspaper(t *testing.T) {
-	if !slices.Equal(ValidModes, []string{"retail", "buylist", "sealed", "newspaper", "history"}) {
+	if !slices.Equal(ValidModes, []string{"retail", "buylist", "sealed", "graded", "newspaper", "history"}) {
 		t.Errorf("ValidModes %v", ValidModes)
 	}
 	got, err := ValidateModes([]string{"Newspaper", "sealed", "retail"})

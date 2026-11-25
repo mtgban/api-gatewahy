@@ -241,7 +241,7 @@ status active and `valid_from ≤ now < valid_until`). Store scope is
 typed exactly as the backend spells them; `DEV_ACCESS` is refused.
 `canonicalStoreScope` checks syntax only, not existence: a typo grants
 nothing rather than failing. Modes are a subset of `retail, buylist,
-sealed, newspaper, history` in that order (`ValidModes`, the website
+sealed, graded, newspaper, history` in that order (`ValidModes`, the website
 catalog's order); a row with `history` carries it alone, an
 empty store scope and `lookback_days` from 1 to `MaxLookbackDays` (3650);
 every other row, `newspaper` included, has a store scope and

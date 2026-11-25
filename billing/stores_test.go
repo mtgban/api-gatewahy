@@ -31,7 +31,7 @@ func TestResolveUnionsImpliedAndSelected(t *testing.T) {
 	if r.Scope != "CK,CKBLLast,SCG,TCGDirect,TCGDirectNet,TCGLow,TCGMarket,TCGPlayer" {
 		t.Errorf("scope %q", r.Scope)
 	}
-	if !slices.Equal(r.Modes, []string{"retail", "buylist"}) {
+	if !slices.Equal(r.Modes, []string{"retail", "buylist", "graded"}) {
 		t.Errorf("modes %v", r.Modes)
 	}
 	if got := r.StoreNames(); !slices.Equal(got, []string{"TCGplayer", "Card Kingdom", "Star City Games"}) {
@@ -81,7 +81,7 @@ func TestResolvePresetSkipsTheSites(t *testing.T) {
 	lister.Fail = errors.New("not called")
 	p, _ := billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
 	r, err := p.Resolve(context.Background(), testCatalog, lister)
-	if err != nil || r.Scope != "BASE_ACCESS" || len(r.Modes) != 2 || lister.TotalCalls() != 0 || len(r.StoreNames()) != 0 {
+	if err != nil || r.Scope != "BASE_ACCESS" || len(r.Modes) != 3 || lister.TotalCalls() != 0 || len(r.StoreNames()) != 0 {
 		t.Errorf("preset %+v %v calls %d", r, err, lister.TotalCalls())
 	}
 }
@@ -91,7 +91,7 @@ func TestResolveAllDataGrantsEveryMode(t *testing.T) {
 	lister.Fail = errors.New("not called")
 	p, _ := billing.Plan{Package: "all_data", Interval: "monthly", Games: []string{"magic"}}.Normalize(testCatalog)
 	r, err := p.Resolve(context.Background(), testCatalog, lister)
-	if err != nil || r.Scope != "ALL_ACCESS" || !slices.Equal(r.Modes, []string{"retail", "buylist", "sealed", "newspaper"}) {
+	if err != nil || r.Scope != "ALL_ACCESS" || !slices.Equal(r.Modes, []string{"retail", "buylist", "sealed", "graded", "newspaper"}) {
 		t.Errorf("all_data %+v %v", r, err)
 	}
 }
@@ -313,15 +313,15 @@ func TestResolveGrantsModeAddons(t *testing.T) {
 	ctx := context.Background()
 	p, _ := billing.Plan{Package: "all_stores", Interval: "monthly", Games: []string{"magic"}, ModeAddons: []string{"newspaper"}}.Normalize(testCatalog)
 	r, err := p.Resolve(ctx, testCatalog, billingtest.NewFakeStores())
-	if err != nil || r.Scope != "BASE_ACCESS" || !slices.Equal(r.Modes, []string{"retail", "buylist", "newspaper"}) {
+	if err != nil || r.Scope != "BASE_ACCESS" || !slices.Equal(r.Modes, []string{"retail", "buylist", "graded", "newspaper"}) {
 		t.Errorf("all_stores %+v %v", r, err)
 	}
 	p, _ = billing.Plan{Package: "starter", Interval: "monthly", Games: []string{"magic"}, Stores: []string{"cardkingdom"}, ModeAddons: []string{"newspaper"}}.Normalize(testCatalog)
 	r, err = p.Resolve(ctx, testCatalog, billingtest.NewFakeStores())
-	if err != nil || r.Scope == "" || !slices.Equal(r.Modes, []string{"retail", "buylist", "newspaper"}) {
+	if err != nil || r.Scope == "" || !slices.Equal(r.Modes, []string{"retail", "buylist", "graded", "newspaper"}) {
 		t.Errorf("starter %+v %v", r, err)
 	}
-	if pkg, _ := testCatalog.Package("starter"); !slices.Equal(pkg.Modes, []string{"retail", "buylist"}) {
+	if pkg, _ := testCatalog.Package("starter"); !slices.Equal(pkg.Modes, []string{"retail", "buylist", "graded"}) {
 		t.Errorf("Resolve wrote into the catalog: %v", pkg.Modes)
 	}
 }
