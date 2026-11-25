@@ -22,7 +22,8 @@ Base URL: `https://api.mtgban.com/v1/{game}/`, forwarding to that game's
 `/api/mtgban/...` paths (retail, buylist, all, sealed, sets, stores,
 search). `https://api.mtgban.com/v2/{game}/` forwards the same paths to
 the game's `/api/v2/...`, the price API keyed by finish and condition,
-plus `finishes.json`, the finish list, price history at `history...`,
+plus `graded.json` and `graded/...`, slabs, which need the `graded` mode,
+`finishes.json`, the finish list, price history at `history...`,
 which needs the `history` mode, and the newspaper's reports at
 `newspaper/reports.json` and `newspaper/{report}.json` or `.csv`, which
 need the `newspaper` mode beside a store scope. A history or newspaper
@@ -150,7 +151,7 @@ may appear anywhere in the command line, before or after the verb:
   comma-separated game list, each name one of the games in the config,
   `-stores` is `ALL_ACCESS`, `BASE_ACCESS`, or a comma-separated list of
   backend store shorthands, `-modes` is a comma-separated subset of
-  `retail,buylist,sealed,newspaper` (`newspaper` needs `-stores` like any
+  `retail,buylist,sealed,graded,newspaper` (`newspaper` needs `-stores` like any
   price mode), or `history` alone, which takes no `-stores`
   and needs `-lookback <days>` (1 to 3650), `-until` is `YYYY-MM-DD`
   (open-ended if omitted) and must be in the future. Operators type

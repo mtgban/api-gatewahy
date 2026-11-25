@@ -25,7 +25,7 @@ func (ts *testServer) handoff(purpose, email string) string {
 
 // The trial grants every mode but history.
 func TestTrialModes(t *testing.T) {
-	want := []string{"retail", "buylist", "sealed", "newspaper"}
+	want := []string{"retail", "buylist", "sealed", "graded", "newspaper"}
 	if got := trialModes(); !slices.Equal(got, want) {
 		t.Errorf("trialModes = %v, want %v", got, want)
 	}
@@ -57,7 +57,7 @@ func TestTrialGrantsOnceAndSignsIn(t *testing.T) {
 		t.Fatal("no account")
 	}
 	ents, _ := ts.store.ListEntitlements(ctx, a.ID)
-	if len(ents) != 1 || ents[0].Source != apiaccess.SourceTrial || ents[0].StoreScope != apiaccess.ScopeAll || !slices.Equal(ents[0].Modes, []string{"retail", "buylist", "sealed", "newspaper"}) || strings.Join(ents[0].Games, ",") != "magic,pokemon" || ents[0].ValidUntil == nil {
+	if len(ents) != 1 || ents[0].Source != apiaccess.SourceTrial || ents[0].StoreScope != apiaccess.ScopeAll || !slices.Equal(ents[0].Modes, []string{"retail", "buylist", "sealed", "graded", "newspaper"}) || strings.Join(ents[0].Games, ",") != "magic,pokemon" || ents[0].ValidUntil == nil {
 		t.Fatalf("entitlement %+v", ents)
 	}
 	if got := ents[0].ValidUntil.Sub(ts.now); got != 15*24*time.Hour {

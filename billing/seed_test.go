@@ -29,7 +29,7 @@ func TestSeedCreatesEverythingOnce(t *testing.T) {
 	}
 	p := f.PriceByKey("starter_quarterly")
 	if p == nil || p.UnitAmount != 59700 || p.Product.ID != billing.ProductID("starter") || p.Recurring.Interval != "month" || p.Recurring.IntervalCount != 3 ||
-		p.Currency != "usd" || p.Metadata["package"] != "starter" || p.Metadata["store_scope"] != "explicit" || p.Metadata["modes"] != "retail,buylist" || p.Metadata["interval_key"] != "quarterly" {
+		p.Currency != "usd" || p.Metadata["package"] != "starter" || p.Metadata["store_scope"] != "explicit" || p.Metadata["modes"] != "retail,buylist,graded" || p.Metadata["interval_key"] != "quarterly" {
 		t.Errorf("starter_quarterly %+v", p)
 	}
 	a := f.PriceByKey("extra_game_monthly")

@@ -308,7 +308,7 @@ func TestChangePlanCarriesTheModeAddon(t *testing.T) {
 	next.Package, next.Stores = "all_stores", nil
 	rc := &recorder{}
 	got, err := billing.ChangePlan(ctx, f, testCatalog, billingtest.NewFakeStores(), testGames, testAccount, "sub_1", next, rc.reconcile)
-	if err != nil || !slices.Equal(got.ModeAddons, []string{"newspaper"}) || !slices.Equal(got.Modes, []string{"retail", "buylist", "newspaper"}) {
+	if err != nil || !slices.Equal(got.ModeAddons, []string{"newspaper"}) || !slices.Equal(got.Modes, []string{"retail", "buylist", "graded", "newspaper"}) {
 		t.Fatalf("change %+v %v", got, err)
 	}
 	up := f.Updates["sub_1"][0]
