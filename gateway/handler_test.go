@@ -387,7 +387,7 @@ func TestHandlerV2EveryEndpoint(t *testing.T) {
 	for _, sub := range []string{
 		"retail.json", "retail/NEO.json", "retail/NEO.csv", "retail/7da23b15-dfb8-4267-9b33-d7a4c035c434.json",
 		"buylist.json", "buylist/NEO.json", "buylist/NEO.csv",
-		"all.json", "all/NEO.json",
+		"all.json", "all/NEO.json", "singles.json", "singles/NEO.json",
 		"sets.json", "sets.csv", "stores.json", "stores.csv", "finishes.json", "finishes.csv",
 		"search/retail/x.json", "search/buylist/sealed/x.json",
 	} {

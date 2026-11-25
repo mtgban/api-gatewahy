@@ -22,7 +22,8 @@ Base URL: `https://api.mtgban.com/v1/{game}/`, forwarding to that game's
 `/api/mtgban/...` paths (retail, buylist, all, sealed, sets, stores,
 search). `https://api.mtgban.com/v2/{game}/` forwards the same paths to
 the game's `/api/v2/...`, the price API keyed by finish and condition,
-plus `graded.json` and `graded/...`, slabs, which need the `graded` mode,
+plus `singles.json` and `singles/...`, of which `all` is an alias,
+`graded.json` and `graded/...`, slabs, which need the `graded` mode,
 `finishes.json`, the finish list, price history at `history...`,
 which needs the `history` mode, and the newspaper's reports at
 `newspaper/reports.json` and `newspaper/{report}.json` or `.csv`, which
